@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Test Automation</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1b2130;--mut:#6a7286;--line:#e2e5eb;--acc:#3856d6;--acc-fg:#fff;--ok:#1a7f4b;--bad:#c62f3c;--warn:#a26a00;--code:#f0f2f5}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#181c25;--fg:#e5e8ee;--mut:#98a1b3;--line:#2a2f3b;--acc:#7891ff;--acc-fg:#0f1218;--ok:#3ccf87;--bad:#ff6b78;--warn:#f0b43c;--code:#11141b}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+header.top{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:5}
+header.top h1{font-size:16px;margin:0}
+.pill{font-size:12px;padding:2px 10px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.wrap{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;padding:16px 20px;max-width:1500px;margin:0 auto}
+@media (max-width:980px){.wrap{grid-template-columns:1fr;padding:16px}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+h2{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+label{font-size:12px;color:var(--mut);display:block;margin:10px 0 4px}
+textarea,input,select{width:100%;font:13px ui-monospace,Menlo,Consolas,monospace;background:var(--code);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px}
+textarea{resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1;min-width:130px}
+.checks{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px}.checks label{display:flex;gap:6px;align-items:center;margin:0;color:var(--fg)}
+.checks input{width:auto}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:7px 14px;border-radius:6px;cursor:pointer}
+button.primary{background:var(--acc);color:var(--acc-fg);border-color:var(--acc);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:500;font-size:12px}
+td code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:12px;word-break:break-all}
+.st{font-weight:700;font-size:11px;text-transform:uppercase}
+.passed{color:var(--ok)}.failed{color:var(--bad)}.running,.queued,.dispatched{color:var(--warn)}.skipped{color:var(--mut)}
+#live{max-height:320px;overflow:auto;font:12px ui-monospace,Menlo,monospace}
+#live div{padding:2px 0;border-bottom:1px dashed var(--line)}
+.runs a{color:var(--acc);text-decoration:none;margin-right:10px;white-space:nowrap;display:inline-block}
+.runs td:last-child{min-width:180px}
+.muted{color:var(--mut);font-size:12px}
+.err{color:var(--bad);font-size:12px;white-space:pre-wrap}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>AI Test Automation</h1>
+  <span class="pill" id="llm">LLM: …</span>
+  <span class="pill" id="agentsPill">agents: 0</span>
+</header>
+
+<div class="wrap">
+<div>
+  <section class="card">
+    <h2>1 · Describe the test in plain English</h2>
+    <textarea id="text" rows="10" placeholder="Open https://example.com&#10;Type &quot;${user.email}&quot; into the email field&#10;Enter ${user.password} in password&#10;Click on Sign in button&#10;Verify page contains &quot;Welcome&quot;"></textarea>
+    <label>Test data (JSON, inline). Reference values as ${path.to.value}. Use {"rows":[{…},{…}]} for data-driven runs.</label>
+    <textarea id="data" rows="5" placeholder='{"user": {"email": "alice@example.com", "password": "secret"}}'></textarea>
+    <div class="row" style="margin-top:6px"><div><label>…or load a JSON file</label><input type="file" id="dataFile" accept=".json,application/json"></div></div>
+
+    <div class="row">
+      <div><label>Engine</label><select id="engine"><option value="playwright">Playwright</option><option value="selenium">Selenium</option></select></div>
+      <div><label>Browser</label><select id="browser"><option value="chromium">Chromium / Chrome</option><option value="firefox">Firefox</option><option value="webkit">WebKit (Playwright)</option><option value="edge">Edge (Selenium)</option></select></div>
+      <div><label>Run on</label><select id="agent"><option value="local">This server</option><option value="any">Any agent</option></select></div>
+      <div><label>Step timeout (ms)</label><input id="timeout" type="number" value="10000"></div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="headless" checked> Headless</label>
+      <label><input type="checkbox" id="video" checked> Record video</label>
+      <label><input type="checkbox" id="useLlm" checked> Use AI (Claude)</label>
+    </div>
+    <div class="actions">
+      <button id="parseBtn">Preview steps</button>
+      <button id="runBtn" class="primary">Run</button>
+    </div>
+    <div id="msg" class="err"></div>
+  </section>
+
+  <section class="card" id="stepsCard" hidden>
+    <h2>2 · Steps (intent · target · value) <span class="muted" id="parser"></span></h2>
+    <div class="scroll"><table><thead><tr><th>#</th><th>Action</th><th>Target</th><th>Value</th></tr></thead><tbody id="steps"></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <h2>3 · Live execution</h2>
+    <div id="live"><span class="muted">Run a test to see each step here as it happens.</span></div>
+  </section>
+</div>
+
+<div>
+  <section class="card runs">
+    <h2>Runs & artifacts <button id="refresh" style="margin-left:auto;padding:3px 10px">Refresh</button></h2>
+    <div class="scroll"><table><thead><tr><th>Test</th><th>Status</th><th>Where</th><th>Artifacts</th></tr></thead><tbody id="runs"></tbody></table></div>
+  </section>
+  <section class="card">
+    <h2>Connected agents</h2>
+    <div id="agents" class="muted">None. Start one on any machine:<br><code>python -m aiauto agent --server <span class="origin"></span> --name my-laptop</code></div>
+  </section>
+</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+document.querySelectorAll(".origin").forEach(e => e.textContent = location.origin);
+try { $("text").value = localStorage.getItem("aiauto.text") || ""; $("data").value = localStorage.getItem("aiauto.data") || ""; } catch(e) {}
+
+function cfg() {
+  return { engine: $("engine").value, browser: $("browser").value, headless: $("headless").checked,
+           record_video: $("video").checked, use_llm: $("useLlm").checked, timeout_ms: +$("timeout").value || 10000 };
+}
+function dataVal() {
+  const d = $("data").value.trim();
+  if (!d) return null;
+  try { return JSON.parse(d); } catch(e) { throw new Error("Test data is not valid JSON: " + e.message); }
+}
+function save() { try { localStorage.setItem("aiauto.text", $("text").value); localStorage.setItem("aiauto.data", $("data").value); } catch(e) {} }
+
+async function api(path, opts={}) {
+  const r = await fetch(path, { headers: {"Content-Type": "application/json"}, ...opts });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail || j));
+  return j;
+}
+
+$("dataFile").onchange = async e => { const f = e.target.files[0]; if (f) { $("data").value = await f.text(); save(); } };
+
+$("parseBtn").onclick = async () => {
+  $("msg").textContent = ""; save();
+  try {
+    const r = await api("/api/parse", { method: "POST", body: JSON.stringify({ text: $("text").value, data: dataVal(), use_llm: $("useLlm").checked }) });
+    $("stepsCard").hidden = false;
+    $("parser").textContent = "parsed by " + r.parser;
+    $("steps").innerHTML = r.test.steps.map((s, i) => `<tr><td>${i+1}</td><td><b>${esc(s.action)}</b></td><td>${esc(s.target)}</td><td><code>${esc(s.value)}</code></td></tr>`).join("")
+      + (r.unparsed.length ? `<tr><td colspan=4 class="err">Not understood: ${r.unparsed.map(esc).join(" · ")}</td></tr>` : "");
+  } catch (e) { $("msg").textContent = e.message; }
+};
+
+$("runBtn").onclick = async () => {
+  $("msg").textContent = ""; save();
+  $("runBtn").disabled = true;
+  try {
+    const r = await api("/api/runs", { method: "POST", body: JSON.stringify({ text: $("text").value, data: dataVal(), config: cfg(), agent: $("agent").value }) });
+    $("live").innerHTML = "";
+    log(`queued ${r.run_ids.length} run(s): ${r.run_ids.join(", ")}`);
+    loadRuns();
+  } catch (e) { $("msg").textContent = e.message; }
+  finally { $("runBtn").disabled = false; }
+};
+
+function log(html) { const d = document.createElement("div"); d.innerHTML = html; $("live").appendChild(d); $("live").scrollTop = 1e9; }
+
+async function replay(runId) {
+  const d = prompt("Replay the generated script.\nOptional data override (JSON) — leave empty to reuse the original data:", "");
+  let data = null;
+  if (d && d.trim()) { try { data = JSON.parse(d); } catch (e) { alert("Invalid JSON"); return; } }
+  try {
+    const r = await api("/api/runs", { method: "POST", body: JSON.stringify({ replay_run_id: runId, data, config: cfg(), agent: $("agent").value }) });
+    $("live").innerHTML = ""; log(`replay queued: ${r.run_ids.join(", ")}`); loadRuns();
+  } catch (e) { alert(e.message); }
+}
+window.replay = replay;
+
+async function loadRuns() {
+  const runs = await api("/api/runs");
+  $("runs").innerHTML = runs.map(r => {
+    const a = r.artifacts || {}, base = `/artifacts/${encodeURIComponent(r.run_id)}/`;
+    const links = r.artifacts ? [
+      `<a href="${base}report.html" target="_blank">Report</a>`,
+      r.video ? `<a href="${base}${esc(r.video)}" target="_blank">Video</a>` : "",
+      `<a href="${base}test_playwright.py" target="_blank">Playwright.py</a>`,
+      `<a href="${base}test_selenium.py" target="_blank">Selenium.py</a>`,
+      `<a href="${base}script.json" target="_blank">script.json</a>`,
+      `<a href="/api/runs/${encodeURIComponent(r.run_id)}/download">Zip</a>`,
+      `<a href="#" onclick="replay('${esc(r.run_id)}');return false">Replay ▶</a>`,
+    ].join("") : `<span class="muted">${esc(r.progress || "")}</span>`;
+    return `<tr><td>${esc(r.test_name)}<div class="muted">${esc(r.started_at || "")} · ${esc(r.mode)}</div></td>
+      <td class="st ${esc(r.status)}">${esc(r.status)}</td><td>${esc(r.agent)}<div class="muted">${esc(r.engine)}</div></td><td>${links}</td></tr>`;
+  }).join("") || `<tr><td colspan=4 class="muted">No runs yet.</td></tr>`;
+}
+
+async function loadAgents() {
+  const ag = await api("/api/agents");
+  $("agentsPill").textContent = "agents: " + ag.length;
+  const sel = $("agent"), cur = sel.value;
+  sel.innerHTML = `<option value="local">This server</option><option value="any">Any agent</option>` +
+    ag.map(a => `<option value="${esc(a.name)}">Agent: ${esc(a.name)}</option>`).join("");
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : "local";
+  if (ag.length) $("agents").innerHTML = `<table><tr><th>Name</th><th>Host</th><th>Engines</th><th>State</th></tr>` +
+    ag.map(a => `<tr><td>${esc(a.name)}</td><td>${esc(a.hostname)}<div class="muted">${esc(a.platform)}</div></td><td>${esc((a.engines||[]).join(", "))}</td><td>${a.busy ? "busy" : "idle"}</td></tr>`).join("") + "</table>";
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/ui");
+  ws.onmessage = m => {
+    const e = JSON.parse(m.data);
+    if (e.type === "run_started") log(`▶ <b>${esc(e.test)}</b> (${e.total} steps) ${e.agent ? "on " + esc(e.agent) : ""}`);
+    else if (e.type === "step_started") log(`… ${e.index + 1}. ${esc(e.raw || e.action)}`);
+    else if (e.type === "healing") log(`<span class="running">↻ locator broke — re-identifying "${esc(e.target)}" with AI</span>`);
+    else if (e.type === "step_finished") log(`<span class="st ${e.status}">${e.status}</span> ${e.index + 1}. ${esc(e.raw || e.action)}${e.error ? `<div class="err">${esc(e.error)}</div>` : ""}`);
+    else if (e.type === "run_finished") { log(`■ finished: <span class="st ${e.status}">${esc(e.status)}</span>`); setTimeout(loadRuns, 300); }
+    else if (e.type === "artifacts_uploaded") loadRuns();
+    else if (e.type === "agents_changed") loadAgents();
+  };
+  ws.onclose = () => setTimeout(connect, 2000);
+}
+
+$("refresh").onclick = loadRuns;
+api("/api/health").then(h => $("llm").textContent = "LLM: " + h.llm).catch(() => {});
+loadRuns(); loadAgents(); connect();
+</script>
+</body>
+</html>

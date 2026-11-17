@@ -1,0 +1,10 @@
+Open file://EXAMPLES_DIR/demo_app.html
+Type "${user.name}" into the username field
+Enter ${user.password} in password
+Check Remember me
+Select "${country}" from country dropdown
+Click on the "Login" button
+Verify page contains "Welcome, ${user.name}"
+Hover over Products menu
+Click Laptops
+Verify page contains "Laptops page"

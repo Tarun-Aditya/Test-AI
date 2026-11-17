@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Demo Shop</title>
+<style>
+body{font-family:sans-serif;margin:0}nav{background:#223;color:#fff;padding:10px;display:flex;gap:20px}
+nav a{color:#fff}.menu{position:relative}.menu .sub{display:none;position:absolute;background:#fff;color:#000;border:1px solid #ccc;padding:8px}
+.menu:hover .sub{display:block}main{padding:20px}#dash{display:none}label{display:block;margin-top:8px}
+</style></head><body>
+<nav><a href="#">Home</a><div class="menu"><a href="#" id="products-menu">Products</a><div class="sub"><a href="#" onclick="msg('Laptops page')">Laptops</a></div></div><a href="#">Contact</a></nav>
+<main>
+<section id="login">
+<h1>Sign in</h1>
+<label for="u">Username</label><input id="u" name="username" placeholder="Enter username">
+<label for="p">Password</label><input id="p" name="password" type="password" placeholder="Enter password">
+<label><input type="checkbox" id="remember"> Remember me</label>
+<label for="country">Country</label><select id="country"><option>Select</option><option>India</option><option>USA</option></select>
+<p><button type="button" class="btn-primary" onclick="login()">Login</button> <button type="button">Cancel</button></p>
+<p id="err" style="color:red"></p>
+</section>
+<section id="dash"><h2 id="welcome"></h2><input placeholder="Search products" id="q"><button onclick="msg('Results for '+document.getElementById('q').value)">Search</button></section>
+<p id="msg"></p>
+</main>
+<script>
+function msg(t){document.getElementById('msg').innerText=t}
+function login(){const u=document.getElementById('u').value,p=document.getElementById('p').value;
+ if(p==='secret'){document.getElementById('login').style.display='none';document.getElementById('dash').style.display='block';
+  document.getElementById('welcome').innerText='Welcome, '+u+' from '+document.getElementById('country').value+(document.getElementById('remember').checked?' (remembered)':'');document.title='Dashboard';}
+ else document.getElementById('err').innerText='Invalid credentials';}
+</script></body></html>
