@@ -1,0 +1,8 @@
+{
+  "first": "Asha",
+  "last": "Rao",
+  "email": "asha@example.com",
+  "password": {"value": "S3cret!!", "sensitive": true},
+  "card": {"value": "4111111111114242", "sensitive": true},
+  "country": "India"
+}

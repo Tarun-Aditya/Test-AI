@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>DemoShop: product</title></head>
+<body style="font-family:sans-serif;margin:0"><script src="common.js"></script><script>header()</script>
+<main style="padding:20px;display:flex;gap:30px"><div style="flex:1"><h1 id="productTitle"></h1><div id="price"></div></div>
+<div style="border:1px solid #ddd;padding:12px;width:240px">
+  <label for="qty">Quantity</label> <select id="qty"><option>1</option><option>2</option><option>3</option></select>
+  <p><span class="a-button"><input type="submit" id="add-to-cart-button" aria-labelledby="atc-label" value="Add to Cart" style="width:100%">
+     <span id="atc-label" hidden>Add to Cart</span></span></p>
+  <div id="confirm" role="status"></div></div></main>
+<script>
+const p = PRODUCTS.find(p => p.id == new URLSearchParams(location.search).get('id'));
+document.getElementById('productTitle').textContent = p.title; document.getElementById('price').textContent = '₹' + p.price;
+document.getElementById('add-to-cart-button').onclick = () => {
+  const c = cart(); const qty = +document.getElementById('qty').value; const ex = c.find(i => i.id === p.id);
+  ex ? ex.qty += qty : c.push({id: p.id, qty}); saveCart(c);
+  document.getElementById('cart-count').textContent = c.reduce((a, i) => a + i.qty, 0);
+  setTimeout(() => document.getElementById('confirm').innerHTML = '<b>Added to Cart</b> <a href="cart.html">Go to Cart</a>', 400);
+};
+</script></body></html>

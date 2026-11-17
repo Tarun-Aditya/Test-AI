@@ -66,3 +66,26 @@ def test_data_substitution_and_rows():
     assert load_data("a=1; b=two") == {"a": "1", "b": "two"}
     rows = iterations({"env": "qa", "rows": [{"u": 1}, {"u": 2}]})
     assert rows == [{"env": "qa", "u": 1}, {"env": "qa", "u": 2}]
+
+
+def test_new_phrasings():
+    from aiauto.nlp.rules import parse_sentence as ps
+    s = ps('Click the first result containing "Logitech"')
+    assert (s.action, s.target, s.nth) == (Action.CLICK, "Logitech", 0)
+    assert ps("Type ${x} into Last name field").nth is None          # "Last name" is not an ordinal
+    assert ps("Click Accept cookies if shown").optional
+    s = ps("Drag Card A to Done column")
+    assert (s.action, s.target, s.value) == (Action.DRAG, "Card A", "Done column")
+    assert ps("Pause 60 seconds for manual SSO login").action == Action.PAUSE
+    assert ps("Dismiss the next alert").value == "dismiss"
+    assert ps('Verify alert says "Saved"').action == Action.ASSERT_DIALOG
+    assert ps("switch to tab 2").value == "1"
+    assert ps("Open ${base_url}/index.html").value == "${base_url}/index.html"
+
+
+def test_sensitive_normalize_and_mask():
+    from aiauto.data import MASK, Masker, masked_data, normalize
+    data, sens = normalize({"user": {"name": "a", "pwd": {"value": "S3cret", "sensitive": True}}}, ["token"])
+    assert data == {"user": {"name": "a", "pwd": "S3cret"}} and sens == ["token", "user.pwd"]
+    assert masked_data(data, sens)["user"]["pwd"] == MASK
+    assert Masker(data, sens)("typed S3cret here") == f"typed {MASK} here"

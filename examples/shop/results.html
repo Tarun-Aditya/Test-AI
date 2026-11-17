@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>DemoShop: search</title></head>
+<body style="font-family:sans-serif;margin:0"><script src="common.js"></script><script>header()</script>
+<main style="padding:20px"><div id="summary"></div><div id="list"></div></main>
+<script>
+const q = new URLSearchParams(location.search).get('q') || '';
+document.querySelector('input[name=q]').value = q;
+const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+setTimeout(() => {   // results render asynchronously, like real shops
+  const hits = PRODUCTS.filter(p => words.some(w => p.title.toLowerCase().includes(w)));
+  document.getElementById('summary').textContent = `1-${hits.length} of ${hits.length} results for "${q}"`;
+  document.getElementById('list').innerHTML = hits.map(p => `<div class="s-result-${Math.random().toString(36).slice(2,8)}" style="border-bottom:1px solid #ddd;padding:10px">
+    <a href="product.html?id=${p.id}"><h2 style="font-size:16px;margin:0"><span>${p.title}</span></h2></a><div>₹${p.price}</div></div>`).join('');
+}, 600);
+</script></body></html>

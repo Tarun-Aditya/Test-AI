@@ -1,6 +1,7 @@
 """Engine interface shared by Playwright and Selenium."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -10,6 +11,39 @@ from pathlib import Path
 
 from ..models import Locator, RunConfig
 
+# Types whose value is set via JS in both engines (consistent, locale-independent behaviour).
+JS_VALUE_TYPES = {"range", "color", "date", "time", "datetime-local", "month", "week"}
+
+SET_VALUE_JS = """(el, v) => { const proto = Object.getPrototypeOf(el);
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value'); setter ? setter.set.call(el, v) : (el.value = v);
+  el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); }"""
+
+INFO_JS = """(el) => ({tag: el.tagName.toLowerCase(), type: (el.getAttribute('type')||'').toLowerCase(),
+  editable: !!el.isContentEditable, draggable: el.getAttribute('draggable') === 'true',
+  role: el.getAttribute('role') || ''})"""
+
+MASK_JS = """(el) => { el.style.setProperty('-webkit-text-security', 'disc', 'important');
+  el.style.setProperty('text-security', 'disc', 'important'); }"""
+
+HIGHLIGHT_JS = """(el) => { if (!el) return; const prev = el.style.outline, off = el.style.outlineOffset;
+  el.style.outline = '3px solid #ff3b6b'; el.style.outlineOffset = '2px';
+  setTimeout(() => { el.style.outline = prev; el.style.outlineOffset = off; }, 900); }"""
+
+DND_JS = """(src, dst) => { const dt = new DataTransfer();
+  const fire = (el, type) => el.dispatchEvent(new DragEvent(type, {bubbles: true, cancelable: true, dataTransfer: dt}));
+  fire(src, 'dragstart'); fire(dst, 'dragenter'); fire(dst, 'dragover'); fire(dst, 'drop'); fire(src, 'dragend'); }"""
+
+
+def localstorage_init_script(state: dict | None) -> str | None:
+    """JS that seeds localStorage for each origin of a saved session (used where the engine has no
+    native storage-state support: Selenium, and Playwright persistent profiles)."""
+    origins = {o["origin"]: {i["name"]: i["value"] for i in o.get("localStorage", [])}
+               for o in (state or {}).get("origins", []) if o.get("localStorage")}
+    if not origins:
+        return None
+    return ("(() => { const data = " + json.dumps(origins) + "; const o = data[location.origin]; if (!o) return;"
+            " for (const [k, v] of Object.entries(o)) { try { if (localStorage.getItem(k) === null) localStorage.setItem(k, v); } catch (e) {} } })();")
+
 
 class Engine(ABC):
     name = "base"
@@ -17,6 +51,10 @@ class Engine(ABC):
     def __init__(self, config: RunConfig, run_dir: Path):
         self.config = config
         self.run_dir = run_dir
+        self.last_dialog: str | None = None
+        self.dialog_policy = config.dialogs
+        self.on_live = None            # callback(mime, base64) for the live view in the web UI
+        self._last_live = 0.0
 
     # lifecycle -------------------------------------------------------------
     @abstractmethod
@@ -26,7 +64,11 @@ class Engine(ABC):
     def stop(self) -> str | None:
         """Close the browser; return path to the recorded video (relative to run_dir) if any."""
 
-    # frame-based video (used by Selenium, and by Playwright when its recorder is unavailable)
+    def storage_state(self) -> dict | None:
+        """Cookies + localStorage in Playwright's storage_state format (portable across engines)."""
+        return None
+
+    # frame-based video -------------------------------------------------------
     def init_frames(self) -> None:
         self._frames: list[tuple[float, Path]] = []
         self._frame_dir = self.run_dir / "_frames"
@@ -38,8 +80,32 @@ class Engine(ABC):
         self.screenshot(path)
 
     def frame(self) -> None:
-        if not getattr(self, "_frame_mode", False):
+        self.live_tick()
+        if not getattr(self, "_frame_mode", False) or getattr(self, "_continuous", False):
             return
+        self._add_frame()
+
+    # live view -------------------------------------------------------------------
+    def live_image(self) -> tuple[str, bytes] | None:
+        """A small, fast screenshot for the live view (engine-specific)."""
+        return None
+
+    def live_tick(self, force: bool = False) -> None:
+        if not self.on_live or not self.config.live_view:
+            return
+        now = time.time()
+        if not force and now - self._last_live < 1.0 / max(0.2, self.config.live_fps):
+            return
+        self._last_live = now
+        try:
+            img = self.live_image()
+            if img:
+                import base64
+                self.on_live(img[0], base64.b64encode(img[1]).decode())
+        except Exception:
+            pass
+
+    def _add_frame(self) -> None:
         try:
             p = self._frame_dir / f"{len(self._frames):05d}.png"
             self._grab(p)
@@ -48,7 +114,8 @@ class Engine(ABC):
             pass
 
     def _render_video(self) -> str | None:
-        if len(self._frames) < 1:
+        frames = [f for f in self._frames if f[1].exists()]
+        if not frames:
             return None
         try:
             import imageio_ffmpeg
@@ -59,26 +126,24 @@ class Engine(ABC):
             return None
         lst = self._frame_dir / "frames.txt"
         lines = []
-        for i, (t, p) in enumerate(self._frames):
-            nxt = self._frames[i + 1][0] if i + 1 < len(self._frames) else t + 1.5
-            lines.append(f"file '{p.name}'\nduration {max(0.2, min(nxt - t, 5)):.2f}")
-        lines.append(f"file '{self._frames[-1][1].name}'")
+        for i, (t, p) in enumerate(frames):
+            nxt = frames[i + 1][0] if i + 1 < len(frames) else t + 1.5
+            lines.append(f"file '{p.name}'\nduration {max(0.05, min(nxt - t, 5)):.3f}")
+        lines.append(f"file '{frames[-1][1].name}'")
         lst.write_text("\n".join(lines))
         out = self.run_dir / "video.webm"
-        cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
-               "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=10", "-c:v", "libvpx-vp9", "-b:v", "1M", "-deadline", "realtime",
-               "-cpu-used", "8", str(out)]
+        vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12"
+        cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-vf", vf,
+               "-c:v", "libvpx-vp9", "-b:v", "1M", "-deadline", "realtime", "-cpu-used", "8", str(out)]
         try:
-            subprocess.run(cmd, check=True, cwd=self._frame_dir, timeout=300)
+            subprocess.run(cmd, check=True, cwd=self._frame_dir, timeout=600)
             return out.name
         except Exception:
             out = self.run_dir / "video.mp4"
-            cmd2 = cmd[:-1]
-            cmd2[cmd2.index("libvpx-vp9")] = "libx264"
-            for flag in ("-b:v", "1M", "-deadline", "realtime", "-cpu-used", "8"):
-                cmd2.remove(flag)
+            cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-vf", vf,
+                   "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)]
             try:
-                subprocess.run(cmd2 + ["-pix_fmt", "yuv420p", str(out)], check=True, cwd=self._frame_dir, timeout=300)
+                subprocess.run(cmd, check=True, cwd=self._frame_dir, timeout=600)
                 return out.name
             except Exception:
                 return None
@@ -100,10 +165,10 @@ class Engine(ABC):
     @abstractmethod
     def title(self) -> str: ...
     @abstractmethod
-    def page_text(self) -> str: ...
+    def page_text(self) -> str:
+        """Visible text of the page, including open shadow roots and same-origin iframes."""
     @abstractmethod
-    def snapshot(self) -> list[dict]:
-        """Run locators.SNAPSHOT_JS and return candidate elements."""
+    def snapshot(self) -> list[dict]: ...
     @abstractmethod
     def screenshot(self, path: Path, full_page: bool = False) -> None: ...
     @abstractmethod
@@ -112,10 +177,20 @@ class Engine(ABC):
     def scroll(self, direction: str, amount: int = 600) -> None: ...
     @abstractmethod
     def wait_for_load(self) -> None: ...
-
-    # element-level ---------------------------------------------------------
     @abstractmethod
-    def exists(self, locator: Locator, timeout_ms: int) -> bool: ...
+    def switch_tab(self, which: str) -> None: ...
+
+    def after_action(self) -> None:
+        """Hook for engines that must handle dialogs explicitly (Selenium)."""
+
+    # element-level (all take an engine-agnostic Locator, mapped to native APIs) -------------
+    @abstractmethod
+    def count(self, locator: Locator) -> int: ...
+    @abstractmethod
+    def marker(self, locator: Locator) -> str | None:
+        """The snapshot marker (__aiautoId) of the element the locator points at."""
+    @abstractmethod
+    def info(self, locator: Locator) -> dict: ...
     @abstractmethod
     def click(self, locator: Locator, button: str = "left", double: bool = False) -> None: ...
     @abstractmethod
@@ -123,7 +198,7 @@ class Engine(ABC):
     @abstractmethod
     def hover(self, locator: Locator) -> None: ...
     @abstractmethod
-    def select(self, locator: Locator, option: str) -> None: ...
+    def select(self, locator: Locator, options: list[str]) -> None: ...
     @abstractmethod
     def set_checked(self, locator: Locator, checked: bool) -> None: ...
     @abstractmethod
@@ -133,8 +208,41 @@ class Engine(ABC):
     @abstractmethod
     def upload(self, locator: Locator, path: str) -> None: ...
     @abstractmethod
+    def drag(self, src: Locator, dst: Locator) -> None: ...
+    @abstractmethod
+    def run_js_on(self, locator: Locator, fn: str, arg=None): ...
+
+    def is_visible(self, locator: Locator) -> bool:
+        try:
+            return bool(self.run_js_on(locator, "(el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }"))
+        except Exception:
+            return False
+
+    def exists(self, locator: Locator, timeout_ms: int) -> bool:
+        end = time.time() + timeout_ms / 1000
+        while True:
+            try:
+                if self.count(locator) >= 1:
+                    return True
+            except Exception:
+                pass
+            if time.time() >= end:
+                return False
+            time.sleep(0.25)
+
     def highlight(self, locator: Locator) -> None:
-        """Outline the element so it shows in the step screenshot and the video."""
+        try:
+            self.run_js_on(locator, HIGHLIGHT_JS)
+            self.frame()
+        except Exception:
+            pass
+
+    def mask(self, locator: Locator) -> None:
+        """Render the field's content as dots so secrets don't show in screenshots/video."""
+        try:
+            self.run_js_on(locator, MASK_JS)
+        except Exception:
+            pass
 
 
 def chrome_binary() -> str | None:
@@ -143,16 +251,17 @@ def chrome_binary() -> str | None:
     return p if p and os.path.exists(p) else None
 
 
-HIGHLIGHT_JS = """
-(el) => { if (!el) return; const prev = el.style.outline;
-  el.style.outline = '3px solid #ff3b6b'; el.style.outlineOffset = '2px';
-  setTimeout(() => { el.style.outline = prev; }, 900); }
-"""
-
-
 def make_engine(config: RunConfig, run_dir: Path) -> Engine:
     if config.engine == "selenium":
         from .selenium_engine import SeleniumEngine
         return SeleniumEngine(config, run_dir)
     from .playwright_engine import PlaywrightEngine
     return PlaywrightEngine(config, run_dir)
+
+
+PAGE_TEXT_JS = """() => { const parts = [];
+  const walk = (root) => { try { if (root.body) parts.push(root.body.innerText); } catch (e) {}
+    const els = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    for (const el of els) { if (el.shadowRoot) { parts.push(el.shadowRoot.textContent || ''); walk(el.shadowRoot); }
+      if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') { try { if (el.contentDocument) walk(el.contentDocument); } catch (e) {} } } };
+  walk(document); return parts.join('\\n'); }"""

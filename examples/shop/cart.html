@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>DemoShop: cart</title></head>
+<body style="font-family:sans-serif;margin:0"><script src="common.js"></script><script>header()</script>
+<main style="padding:20px"><h1>Shopping Cart</h1><div id="items"></div><h3 id="subtotal"></h3></main>
+<script>
+const c = cart();
+document.getElementById('items').innerHTML = c.map(i => { const p = PRODUCTS.find(x => x.id === i.id);
+  return `<div style="padding:8px;border-bottom:1px solid #eee">${p.title} × ${i.qty} = ₹${p.price * i.qty}</div>`; }).join('') || 'Your cart is empty';
+const total = c.reduce((a, i) => a + PRODUCTS.find(x => x.id === i.id).price * i.qty, 0);
+document.getElementById('subtotal').textContent = `Subtotal (${c.reduce((a, i) => a + i.qty, 0)} items): ₹${total}`;
+</script></body></html>

@@ -1,198 +1,203 @@
-# AI Test Automation
+# Autopilot: AI test automation
 
-Write a browser test in plain English. The AI works out the **intent** (click, type, hover, select…) and the **value**, finds the right element on the live page, and runs the step with **Playwright** or **Selenium**. Every run produces artifacts you can keep:
+Write a browser test in plain English. Autopilot works out the **intent** (click, type, hover,
+select, drag…) and the **value** of each step, finds the element on the live page and runs it with
+**Playwright or Selenium**, using each engine's *native* locators. A successful run produces a
+**generated script**: plain Playwright / Selenium code with no AI involved. From then on you **replay
+the script**, on any engine, browser or machine, with the same data or new data.
+
+```
+ plain English + test data ──► AI mode run ──► generated script ──► Script mode runs (replay) ──► …
+   (web / CLI / API)            intent → native locators            native locators, data-driven
+                                video, screenshots, report          engine self-heals if the page changed
+                                                                    and every run regenerates the script
+```
+
+## What you get from every run
 
 | Artifact | What it is |
 |---|---|
-| `report.html` | Self-contained report: pass/fail per step, a screenshot for each step (embedded), the locator used, errors, and the run video |
-| `video.webm` | Recording of the whole run |
-| `script.json` | The resolved test: steps plus the locators that worked. **Replay this on the next run**, with no AI needed |
-| `test_playwright.py` / `test_selenium.py` | Standalone, readable scripts you can commit and run anywhere |
-| `screenshots/`, `summary.json`, `data.json` | Raw per-step evidence and machine-readable results |
-
-You can run it as a **web app**, from the **CLI**, or through **agents** on any machine (your laptop, a VM, a CI box) that connect to a central hub.
-
-```
- plain English + data (JSON / inline)
-          │
-          ▼
- ┌──────────────────┐   Claude (structured output), or the built-in rule parser as a fallback
- │ Intent & value   │──▶ steps: [{action: type, target: "username field", value: "${user.name}"}, …]
- └──────────────────┘
-          │
-          ▼
- ┌──────────────────┐   DOM snapshot → score candidates by text/label/placeholder/aria/role + action fit
- │ Locator finder   │──▶ unique CSS/XPath (testid > id > name > aria > placeholder > label > text > path)
- └──────────────────┘   + fallbacks; Claude breaks ties when two elements score close
-          │
-          ▼
- ┌──────────────────┐
- │ Playwright /     │──▶ screenshot per step, element highlight, video
- │ Selenium engine  │
- └──────────────────┘
-          │
-          ▼
- report.html · video · script.json · test_playwright.py · test_selenium.py
-          │
-          └──▶ next run: replay script.json (stored locators → fallbacks → AI self-heal)
-```
+| `report.html` | Self-contained report: each step with its screenshot, native locator, fallbacks, dialogs, errors, plus the embedded video |
+| `video.webm` | Recording of the run (Playwright natively; Selenium via a frame recorder at about 4 fps) |
+| `test_playwright.py` / `test_selenium.py` | Standalone scripts with native locators (`get_by_role`, `get_by_label`, `frame_locator`… / `By.ID`, `By.LINK_TEXT`, `switch_to.frame`, `shadow_root`…). No AI, no self-healing |
+| `script.json` | The portable test spec the scripts were generated from (also embedded in each `.py`) |
+| `data.json`, `summary.json`, `screenshots/` | Data used (secrets masked), machine-readable results, per-step screenshots |
+| **Export project** | A self-runnable Python project: `run.py`, `requirements.txt`, `config.json`, every iteration's data file, `.env.example` for secrets, run scripts and a README |
 
 ## Quick start
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium          # Selenium finds or downloads its driver by itself
+python -m playwright install chromium        # Selenium finds or downloads its own driver
+export ANTHROPIC_API_KEY=sk-ant-...          # optional: Claude for intent extraction + element disambiguation
 
-# optional: turn on Claude for intent extraction and element disambiguation
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# web app (also the agent hub)
-python -m aiauto server --port 8000   # open http://localhost:8000
+python -m aiauto server --port 8000          # web app + machine hub → http://localhost:8000
 ```
 
-### CLI
+The React UI is pre-built into `aiauto/server/static/app`. To work on it:
+`cd web && npm install && npm run dev` (proxies to a hub on :8000), then `npm run build`.
 
-```bash
-# run plain English
-python -m aiauto run "Open https://example.com then click More information" --engine playwright
+## The web app
 
-# from a file, with data
-python -m aiauto run -f examples/login_test.txt --data examples/login_data.json --engine selenium --headed
+* **Dashboard**: pass rate, runs in progress (live progress bars, current step), a 14-day trend, and recent
+  runs with thumbnails. Each run shows **AI** or **Script** mode. Click a run for its details;
+  every card and row has **Replay**.
+* **Studio**: write the test (with a line-numbered editor and examples) or pick a library script. Fill in **test data**
+  as a single run, **iterations** (one row per run, each with its own **browser** dropdown) or JSON. Set options,
+  login/SSO and profile, then watch the run **live**: browser frames stream from whichever machine runs it,
+  with a timeline of steps, their native locators and screenshots.
+* **Run details** (drawer): overview with step screenshots · **Code & files** (file tree, go-to-file,
+  search in files, syntax-highlighted viewer) · video · report · data & config · **Replay** (same data
+  incl. secrets, or new data; pick machine, engine, browser, headless, self-heal) · **Export project**.
+* **Runs** (filterable table), **Library** (saved/uploaded scripts), **Machines**, **Sessions**.
+* Engine, machine and headed/headless are always in the top bar.
 
-# only look at the parsed steps
-python -m aiauto parse -f examples/login_test.txt
-
-# re-run a generated script with different data (no AI unless a locator broke)
-python -m aiauto replay artifacts/<run-id>/script.json --data '{"user":{"name":"bob","password":"pw"}}'
-
-# the generated scripts run by themselves
-python artifacts/<run-id>/test_playwright.py other_data.json
-```
-
-`examples/login_test.txt` contains the placeholder `EXAMPLES_DIR`. Replace it with the absolute path to `examples/`, or point the test at your own site.
+Everything is stored in a local **SQLite** database (`AIAUTO_DB`, default `./aiauto.db`): runs, steps, library,
+sessions, registered machines. Restarting the hub keeps all history. Runs that were in flight are marked
+*interrupted*, artifact folders without a DB row are imported, and machines show as offline until they
+reconnect. Large files stay on disk under `artifacts/`.
 
 ## Writing tests
 
-One action per line. You can also chain actions with `then`, `and then` or `;`.
-
 ```
-Open https://shop.example.com
-Type "${user.email}" into the email field
-Enter ${user.password} in password
-Click on the "Sign in" button
-Verify page contains "Welcome, ${user.name}"
-Hover over Products menu
-Click Laptops
-Select "16 GB" from memory dropdown
-Check Include accessories
+Open ${base_url}/index.html
+Click Accept cookies if shown                       ← optional step (skipped if absent)
+Type "${product}" into the search box
 Press Enter
-Scroll down
-Wait 2 seconds
+Click the first result containing "${brand}"        ← ordinal + data-driven pick
+Select "${qty}" from Quantity
+Click Add to Cart button
+Verify page contains "Added to Cart"
+Hover over Settings menu
+Drag Card A to Done column
+Dismiss the next alert / Verify alert says "Delete this item?"
+Switch to new tab
+Pause 90 seconds for SSO login                      ← headed runs: a human completes MFA / SSO
 Verify the url contains "/cart"
-Take a screenshot named cart
 ```
 
-Supported actions: navigate, click, double click, right click, type, append, press (keys and combos such as `ctrl+a`), hover, select, check, uncheck, scroll (direction or "scroll to X"), wait (seconds or for an element), upload, back, refresh, screenshot, and the checks assert text, assert visible, assert URL and assert title.
+The actions are navigate, click, double click, right click, type, append, press (with key combos), hover,
+select (native and custom dropdowns, multi-select with `A|B`), check, uncheck, drag, scroll, wait, pause,
+upload, back, refresh, switch tab, dialog accept/dismiss, screenshot, and assertions on text, visibility,
+URL, title and dialog text. Without an API key, the rule parser handles phrasings like these. With Claude you
+can write freely ("log in as ${user.email} and make sure the dashboard greets me").
 
-With Claude enabled you can write more freely, for example "log in as ${user.email} with ${user.password} and make sure the dashboard greets me". The model breaks that into the individual steps. Without a key, the rule parser handles the phrasings above and lists any sentence it didn't understand.
+### Test data and iterations
 
-### Test data
+* Single run: key/value table (dotted keys for nesting) or JSON. Reference values as `${key}`.
+* **Iterations**: a grid where each enabled row is its own run with its own data and **browser**. Shared
+  values apply to all rows. In JSON, use `{"rows": [{…, "__browser": "firefox"}, …]}`.
+* **Sensitive values** (lock icon, `{"value": "…", "sensitive": true}`, or `--sensitive key`) are masked
+  in live events, reports, videos (the field is rendered as dots), `summary.json`, `data.json`, `script.json`
+  and generated scripts. Scripts read them from `AIAUTO_SECRET_<KEY>`. The hub keeps them in its local DB
+  (file mode 600) so **Replay with the same data** works. Secrets are never stored in the browser.
 
-- **Inline in the web UI**, or upload a `.json` file.
-- **CLI:** `--data file.json`, `--data '{"k":"v"}'` or `--data "k=v;k2=v2"`.
-- Reference values as `${path.to.value}` or `{{name}}`. List indexes work too (`${users[0].email}`).
-- **Data-driven runs:** `{"env": "qa", "rows": [{"user": "a"}, {"user": "b"}]}` runs once per row, and each row gets its own report.
-- Generated scripts keep the placeholders, so the same script works with new data.
-- Values typed into password, secret or token fields are masked in live events and in the report.
+## How elements are found
 
-## Remote agents: run on your machine or any machine
+1. A DOM snapshot walks the page, **open shadow roots at any depth** and **same-origin iframes at any depth**,
+   and lists candidates with their text, ARIA role and accessible name, label, placeholder, test-id and so on.
+   Auto-generated ids and classes (`css-8f3k2`, `el-x7p1…`) are ignored.
+2. Candidates are scored against the step's words and the action (you type into inputs, select from
+   dropdowns…). Ordinals pick the nth match in document order. Claude breaks close ties.
+3. Each candidate locator is **verified natively by the engine** (it must match exactly one element, and the
+   right one). The first verified one becomes the step's locator, and up to 3 more are kept as fallbacks.
 
-The hub (`python -m aiauto server`) holds the UI, the parser and all artifacts. An agent is a small process that opens an **outbound** WebSocket to the hub, so it works behind NAT and firewalls. It runs jobs with its own local browsers, streams step results live and uploads the artifacts when each run finishes.
+Order of preference: test-id › stable id › role + name › label › placeholder › name › text › alt/title ›
+attribute CSS › structural CSS › XPath. Selenium can't evaluate role, label or text inside shadow roots,
+so it uses CSS there.
+
+### Self-healing (engine only)
+
+When a Script mode run finds that a stored locator no longer matches, the engine tries the fallbacks, then
+re-identifies the element from the step's description, marks the step *self-healed*, and the run writes a
+**new script with the repaired locators**. The generated scripts never self-heal: they are plain native code
+that either passes or fails.
+
+## Machines (run anywhere)
+
+The hub runs tests itself by default (*local*). Any other computer can register:
 
 ```bash
-# on the hub
+# hub
 AIAUTO_AGENT_TOKEN=change-me python -m aiauto server --host 0.0.0.0 --port 8000
-
-# on any machine with browsers
-pip install -r requirements.txt && playwright install chromium
-python -m aiauto agent --server http://HUB_HOST:8000 --name my-laptop --token change-me
+# any machine with browsers
+pip install -r requirements.txt && python -m playwright install chromium
+python -m aiauto agent --server http://HUB:8000 --name my-laptop --token change-me
 ```
 
-In the UI, pick the target under **Run on**: *This server*, *Any agent* (least busy) or a named agent. Over the API, pass `"agent": "my-laptop"` (or `"any"` / `"local"`). Agents can run headed (untick *Headless*), so you can watch the browser on that machine. The agent reconnects by itself if the hub restarts.
+The agent opens an **outbound** WebSocket (so it works behind NAT and firewalls), appears in the machine dropdown,
+streams live frames and step results, uploads artifacts when each run ends, and reconnects by itself.
 
-## Replay and self-healing
+## Logins, SSO and Chrome profiles
 
-Every run saves `script.json` with the locator chosen for each step, plus up to 3 fallback locators. A replay:
+* **Saved sessions** (cookies + localStorage, Playwright `storage_state` format) work in **both engines** on
+  any machine. Capture one by running headed with `Pause 90 seconds for SSO login` and *Save session after
+  run as*, or import a `storage_state.json`. Start later runs with *Start with saved session*.
+* **Chrome profile**: point at a user-data-dir (+ profile name) on the run machine to reuse saved passwords
+  and logged-in sites. Chrome must not already be open on that profile, and recent Chrome versions refuse
+  automation of the *default* profile directory, so use a dedicated automation profile.
 
-1. tries the stored locator, then each fallback in turn;
-2. if all of them fail (the page changed), re-identifies the element from the step's English description (Claude helps when the match is ambiguous), and marks the step **self-healed** in the report;
-3. writes a new `script.json` with the repaired locators.
+## Exported project
 
-Pass `--no-heal` (CLI) or `"config": {"self_heal": false}` (API) to fail strictly instead.
+**Export project** (run details) downloads a self-runnable project for the run, or for all iterations of its batch:
 
-## REST API
+```bash
+cd my-test && pip install -r requirements.txt && python -m playwright install chromium
+cp .env.example .env            # fill in masked secrets
+python run.py                   # every iteration with its recorded engine / browser
+python run.py --engine selenium --browser firefox --headed --only 2
+```
+
+## CLI
+
+```bash
+python -m aiauto run -f examples/shop_cart.txt --data examples/shop_data.json --engine selenium
+python -m aiauto run -f test.txt --sensitive user.password --headed --save-session corp-sso
+python -m aiauto replay artifacts/<run>/test_playwright.py --engine selenium --data new.json
+python -m aiauto parse "Open example.com then click More information"
+```
+
+## REST API (selection)
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/parse` `{text, data?, use_llm?}` | English → steps, without running |
-| `POST /api/runs` `{text \| steps \| replay_run_id, data?, config?, agent?}` | Start a run. Returns `run_ids` (one per data row) |
-| `GET /api/runs`, `GET /api/runs/{id}` | List runs, or get one summary |
-| `GET /api/runs/{id}/script` | The replayable `script.json` |
-| `GET /api/runs/{id}/download` | All artifacts as a zip |
-| `GET /artifacts/{id}/{file}` | One artifact (report, video, scripts…) |
-| `DELETE /api/runs/{id}` | Delete a run |
-| `GET /api/agents` | Connected agents |
-| `WS /ws/ui` | Live events: `run_started`, `step_started`, `healing`, `step_finished`, `run_finished`, `agents_changed` |
-| `WS /ws/agent` | Agent connection |
+| `POST /api/runs` | `{text \| library \| replay_run_id, name, data, sensitive, iterations:[{data, browser, engine}], config, agent, reuse_secrets}` |
+| `GET /api/runs`, `GET /api/stats` | History (from SQLite), dashboard numbers |
+| `GET /api/runs/{id}` | Details: steps, data (masked), config, batch, `has_secrets` |
+| `GET /api/runs/{id}/files` · `/export` · `/download` | File tree · runnable project zip · raw artifacts zip |
+| `POST /api/parse` | English → steps without running |
+| `GET/POST/DELETE /api/library…`, `/api/sessions…`, `GET /api/agents` | Library, sessions, machines |
+| `WS /ws/ui` | Live events: `run_started`, `step_started`, `step_finished`, `step_shot`, `live_frame`, `healing`, `paused`, `run_finished` |
 
-`config` fields: `engine` (`playwright`/`selenium`), `browser` (`chromium`, `firefox`, `webkit`, `chrome`, `edge`), `headless`, `record_video`, `screenshot_each_step`, `timeout_ms`, `viewport_width`/`viewport_height`, `use_llm`, `self_heal`.
-
-## Configuration (environment variables)
+## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | – | Turns on Claude. `ant auth login` profiles work too |
-| `AIAUTO_MODEL` | `claude-opus-5-5` | Model used for parsing and disambiguation |
-| `AIAUTO_EFFORT` | `low` | Reasoning effort for those calls |
-| `AIAUTO_DISABLE_LLM` | – | Force rules-only mode |
-| `AIAUTO_ARTIFACTS` | `artifacts` | Where the hub and CLI store runs |
-| `AIAUTO_AGENT_TOKEN` | – | Shared secret agents must present |
-| `AIAUTO_LOCAL_WORKERS` | `2` | Parallel runs on the hub itself |
-| `AIAUTO_CHROME_BINARY` | – | Use a specific Chrome/Chromium binary |
-| `AIAUTO_CHROMEDRIVER` | – | Use a specific chromedriver (Selenium) |
+| `ANTHROPIC_API_KEY` | – | Turns on Claude (`ant auth login` profiles work too) |
+| `AIAUTO_MODEL` / `AIAUTO_EFFORT` | `claude-opus-5-5` / `low` | Model and effort for parsing and disambiguation |
+| `AIAUTO_DB` | `aiauto.db` | SQLite database of the hub |
+| `AIAUTO_ARTIFACTS` | `artifacts` | Run folders |
+| `AIAUTO_AGENT_TOKEN` | – | Shared secret machines must present |
+| `AIAUTO_LOCAL_NAME` | `local` | Display name of the hub's own runner |
+| `AIAUTO_LOCAL_WORKERS` | `2` | Parallel runs on the hub |
+| `AIAUTO_CHROME_BINARY` / `AIAUTO_CHROMEDRIVER` | – | Specific browser binary / driver |
+| `AIAUTO_SECRET_<KEY>` | – | Value for a sensitive data key on the executing machine |
 
-Claude calls use structured outputs, so the step list always matches the schema. They also opt in to server-side refusal fallbacks (`fallbacks: "default"`). Any API error, refusal or missing key falls back to the rule parser and heuristic matching, so a run never depends on the model being reachable.
+## Examples and tests
 
-## Project layout
-
-```
-aiauto/
-  nlp/rules.py         rule-based English → steps
-  nlp/llm.py           Claude: intent/value extraction + element disambiguation
-  nlp/parser.py        picks LLM or rules
-  locators.py          DOM snapshot JS, candidate scoring, locator ranking
-  engines/             Playwright and Selenium behind one interface (+ frame-based video fallback)
-  runner.py            executes steps, self-heals, writes artifacts
-  scriptgen.py         Playwright / Selenium script generation
-  report.py            HTML report with embedded screenshots + video
-  server/app.py        FastAPI web app, REST API, agent hub
-  server/static/       web UI
-  agent.py             remote agent
-  cli.py               CLI entry (python -m aiauto …)
-examples/              demo page, sample test and data
-tests/                 parser, LLM (mocked), end-to-end on both engines, generated scripts, self-healing
-```
-
-## Tests
+* `examples/playground.html`: every element type (nested shadow roots, nested iframes, random ids,
+  dialogs, drag and drop, custom dropdown, date/range/color, contenteditable, multi-select, upload, hover menu, late elements).
+  `examples/playground_test.txt` exercises all of it in 52 steps.
+* `examples/shop/`: a multi-page shop (search → results → product → cart) for `examples/shop_cart.txt`.
+* `examples/amazon_cart.txt`: the same flow against amazon.in. Amazon shows an automated-traffic check to
+  cloud and data-centre browsers. Run it from your own machine (as an agent, headed, with your profile).
 
 ```bash
-pip install pytest
-pytest -q
+pip install pytest && pytest -q
 ```
 
 ## Known limits
 
-- Elements inside iframes and closed shadow roots are not identified yet.
-- Selenium video is built from frames captured after each action, not a continuous recording. Playwright records natively, and falls back to the same frame method when its ffmpeg build is missing.
-- The hub keeps queued and running jobs in memory. Finished runs live on disk.
-- The hub has no user authentication. Agents are protected by `AIAUTO_AGENT_TOKEN`, but put the hub behind your SSO or a reverse proxy before you expose it beyond a trusted network.
+* Cross-origin iframes and closed shadow roots are not traversed.
+* The hub has no user login. Protect agents with `AIAUTO_AGENT_TOKEN`, and put the hub behind your SSO or a reverse
+  proxy before exposing it. The SQLite file holds replay secrets: keep it on a trusted disk.

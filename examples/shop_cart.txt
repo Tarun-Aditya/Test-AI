@@ -1,0 +1,12 @@
+Open ${base_url}/index.html
+Click Accept cookies if shown
+Type "${product}" into the search box
+Press Enter
+Verify page contains "results for"
+Click the first result containing "${brand}"
+Select "${qty}" from Quantity
+Click Add to Cart button
+Verify page contains "Added to Cart"
+Click Go to Cart
+Verify page contains "Subtotal (${qty} items)"
+Verify page contains "${brand}"

@@ -38,6 +38,15 @@ def _engines() -> list[str]:
     return out
 
 
+def _browsers() -> list[str]:
+    import shutil
+    found = ["chromium (bundled)"]
+    for name, exe in (("chrome", "google-chrome"), ("chrome", "chrome"), ("msedge", "microsoft-edge"), ("firefox", "firefox")):
+        if shutil.which(exe) and name not in found:
+            found.append(name)
+    return found
+
+
 def _zip_dir(d: Path) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -61,6 +70,7 @@ def run_agent(server: str, name: str | None, token: str | None, out_dir: str) ->
             with connect(ws_url, open_timeout=15, ping_interval=20, ping_timeout=60, max_size=None) as ws:
                 ws.send(json.dumps({"type": "hello", "name": name, "token": token, "hostname": socket.gethostname(),
                                     "platform": f"{platform.system()} {platform.release()}", "engines": _engines(),
+                                    "browsers": _browsers(),
                                     "version": "0.1.0"}))
                 welcome = json.loads(ws.recv())
                 if welcome.get("type") == "error":
@@ -93,6 +103,7 @@ def _handle_job(ws, job: dict, server: str, token: str | None, out: Path, agent_
 
     test = TestCase.model_validate(job["test"])
     cfg = RunConfig.model_validate(job["config"])
+    cfg.session_state = job.get("session_state")
     final = {}
 
     def on_event(ev: dict) -> None:
@@ -102,9 +113,13 @@ def _handle_job(ws, job: dict, server: str, token: str | None, out: Path, agent_
             send_event(ev)
 
     summary = None
+    holder: list = []
     try:
         summary = run_test(test, cfg, out, mode=job.get("mode", "ai"), on_event=on_event,
-                           agent=agent_name, run_id=run_id)
+                           agent=agent_name, run_id=run_id, runner_out=holder)
+        if cfg.save_session and holder and holder[0].saved_session:
+            # session tokens go straight to the hub's session store, never into the artifacts zip
+            ws.send(json.dumps({"type": "session", "name": cfg.save_session, "state": holder[0].saved_session}))
     except Exception as e:
         log.exception("run failed")
         final = {"type": "run_finished", "run_id": run_id, "status": "failed", "error": str(e)}

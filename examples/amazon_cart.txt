@@ -1,0 +1,10 @@
+Open https://www.amazon.in
+Type "${product}" into the search box
+Press Enter
+Verify page contains "results"
+Click the first result containing "${brand}"
+Click Add to Cart button
+Verify page contains "Added to Cart"
+Open https://www.amazon.in/gp/cart/view.html
+Verify page contains "Subtotal"
+Verify page contains "${brand}"

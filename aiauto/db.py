@@ -1,0 +1,363 @@
+"""Local SQLite store for the hub: runs, steps, script library, saved sessions and registered machines.
+
+Everything the web app shows comes from here, so restarting the server never loses history.
+Large binary artifacts (videos, screenshots, reports) stay on disk under the artifacts folder;
+the database keeps the metadata and paths.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+SCHEMA = """
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS runs (
+  run_id TEXT PRIMARY KEY, test_name TEXT, status TEXT, engine TEXT, browser TEXT, agent TEXT, mode TEXT,
+  started_at TEXT, finished_at TEXT, duration_ms INTEGER DEFAULT 0, total INTEGER DEFAULT 0,
+  done INTEGER DEFAULT 0, passed INTEGER DEFAULT 0, failed INTEGER DEFAULT 0, healed INTEGER DEFAULT 0,
+  current_step TEXT, video TEXT, thumb TEXT, error TEXT, iteration TEXT, batch_id TEXT,
+  config_json TEXT, created REAL, data_json TEXT, sensitive_json TEXT, source_run TEXT
+);
+CREATE INDEX IF NOT EXISTS runs_created ON runs(created DESC);
+CREATE TABLE IF NOT EXISTS steps (
+  run_id TEXT, idx INTEGER, status TEXT, raw TEXT, action TEXT, target TEXT, value TEXT, locator TEXT,
+  error TEXT, screenshot TEXT, url TEXT, duration_ms INTEGER, healed INTEGER DEFAULT 0, dialog TEXT,
+  PRIMARY KEY (run_id, idx)
+);
+CREATE TABLE IF NOT EXISTS run_secrets (run_id TEXT PRIMARY KEY, secrets_json TEXT);
+CREATE TABLE IF NOT EXISTS library (
+  name TEXT PRIMARY KEY, test_name TEXT, steps INTEGER, engine TEXT, sensitive TEXT, test_json TEXT,
+  source_run TEXT, created REAL, updated REAL
+);
+CREATE TABLE IF NOT EXISTS sessions (name TEXT PRIMARY KEY, state_json TEXT, domains TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS machines (
+  name TEXT PRIMARY KEY, hostname TEXT, platform TEXT, engines TEXT, browsers TEXT, version TEXT,
+  first_seen REAL, last_seen REAL, online INTEGER DEFAULT 0
+);
+"""
+
+LIVE = ("queued", "dispatched", "running")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class DB:
+    def __init__(self, path: str | Path):
+        self.path = str(path)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.executescript(SCHEMA)
+        have = {r[1] for r in self._conn.execute("PRAGMA table_info(runs)")}
+        for col in ("data_json", "sensitive_json", "source_run"):
+            if col not in have:
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        try:
+            os.chmod(self.path, 0o600)   # holds replay secrets: owner-only
+        except OSError:
+            pass
+
+    @contextmanager
+    def tx(self):
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                yield self._conn
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def q(self, sql: str, args: Iterable = ()) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(sql, tuple(args)).fetchall()]
+
+    def one(self, sql: str, args: Iterable = ()) -> dict | None:
+        rows = self.q(sql, args)
+        return rows[0] if rows else None
+
+    def x(self, sql: str, args: Iterable = ()) -> None:
+        with self._lock:
+            self._conn.execute(sql, tuple(args))
+
+    # ------------------------------------------------------------------ startup
+    def recover(self) -> int:
+        """Runs that were in flight when the server stopped can't finish any more: mark them."""
+        rows = self.q(f"SELECT run_id FROM runs WHERE status IN ({','.join('?' * len(LIVE))})", LIVE)
+        self.x(f"UPDATE runs SET status='interrupted', error=COALESCE(error,'Server restarted while this run was in progress'), "
+               f"finished_at=? WHERE status IN ({','.join('?' * len(LIVE))})", (now_iso(), *LIVE))
+        self.x("UPDATE machines SET online=0")
+        return len(rows)
+
+    # ------------------------------------------------------------------ runs
+    def create_run(self, run: dict) -> None:
+        cols = ["run_id", "test_name", "status", "engine", "browser", "agent", "mode", "started_at", "total",
+                "iteration", "batch_id", "config_json", "created", "data_json", "sensitive_json", "source_run"]
+        run = {**run, "created": run.get("created", time.time())}
+        self.x(f"INSERT OR REPLACE INTO runs ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+               [run.get(c) for c in cols])
+
+    def update_run(self, run_id: str, **fields) -> None:
+        if not fields:
+            return
+        self.x(f"UPDATE runs SET {', '.join(f'{k}=?' for k in fields)} WHERE run_id=?", (*fields.values(), run_id))
+
+    def on_event(self, ev: dict) -> None:
+        """Apply a runner event (from a local run or an agent) to the database."""
+        rid, t = ev.get("run_id"), ev.get("type")
+        if not rid:
+            return
+        if t == "run_started":
+            self.update_run(rid, status="running", total=ev.get("total", 0), started_at=now_iso(),
+                            **({"agent": ev["agent"]} if ev.get("agent") else {}))
+        elif t == "step_started":
+            self.update_run(rid, current_step=ev.get("raw"))
+            self.x("INSERT OR REPLACE INTO steps (run_id, idx, status, raw, action, target, value) VALUES (?,?,?,?,?,?,?)",
+                   (rid, ev["index"], "running", ev.get("raw"), ev.get("action"), ev.get("target"), ev.get("value")))
+        elif t == "step_finished":
+            with self.tx() as c:
+                c.execute("""INSERT INTO steps (run_id, idx, status, raw, action, locator, error, screenshot, url, duration_ms, healed, dialog)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                             ON CONFLICT(run_id, idx) DO UPDATE SET status=excluded.status, locator=excluded.locator,
+                             error=excluded.error, screenshot=excluded.screenshot, url=excluded.url,
+                             duration_ms=excluded.duration_ms, healed=excluded.healed, dialog=excluded.dialog,
+                             raw=COALESCE(excluded.raw, steps.raw), action=COALESCE(excluded.action, steps.action)""",
+                          (rid, ev["index"], ev.get("status"), ev.get("raw"), ev.get("action"), ev.get("locator"), ev.get("error"),
+                           ev.get("screenshot"), ev.get("url"), ev.get("duration_ms"), 1 if ev.get("healed") else 0, ev.get("dialog")))
+                st = ev.get("status")
+                c.execute(f"""UPDATE runs SET done=done+1, passed=passed+?, failed=failed+?, healed=healed+?,
+                              thumb=COALESCE(?, thumb) WHERE run_id=?""",
+                          (1 if st == "passed" else 0, 1 if st == "failed" else 0, 1 if ev.get("healed") else 0,
+                           ev.get("screenshot"), rid))
+        elif t == "run_finished":
+            self.update_run(rid, status=ev.get("status", "failed"), finished_at=now_iso(), current_step=None,
+                            **({"error": ev["error"]} if ev.get("error") else {}))
+
+    def finalize_from_summary(self, run_dir: Path) -> None:
+        """Make the DB match summary.json (authoritative once a run's artifacts exist)."""
+        p = Path(run_dir) / "summary.json"
+        if not p.exists():
+            return
+        s = json.loads(p.read_text())
+        res = s.get("results", [])
+        shots = [r["screenshot"] for r in res if r.get("screenshot")]
+        err = next((r.get("error") for r in res if r.get("status") == "failed"), None)
+        existing = self.one("SELECT run_id, created, config_json, batch_id, iteration, browser, data_json, sensitive_json, source_run FROM runs WHERE run_id=?", (s["run_id"],))
+        created = existing["created"] if existing else (datetime.fromisoformat(s["started_at"]).timestamp() if s.get("started_at") else p.stat().st_mtime)
+        with self.tx() as c:
+            c.execute("""INSERT OR REPLACE INTO runs (run_id, test_name, status, engine, browser, agent, mode, started_at, finished_at,
+                         duration_ms, total, done, passed, failed, healed, current_step, video, thumb, error, iteration, batch_id, config_json, created,
+                         data_json, sensitive_json, source_run)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (s["run_id"], s.get("test_name"), s.get("status"), s.get("engine"), existing and existing["browser"], s.get("agent"),
+                       s.get("mode"), s.get("started_at"), s.get("finished_at"), s.get("duration_ms", 0), len(res), len(res),
+                       sum(1 for r in res if r.get("status") == "passed"), sum(1 for r in res if r.get("status") == "failed"),
+                       s.get("healed_steps", 0), None, s.get("video"), shots[-1] if shots else None, err,
+                       existing and existing["iteration"], existing and existing["batch_id"], existing and existing["config_json"], created,
+                       (existing and existing["data_json"]) or _read(Path(run_dir) / "data.json"),
+                       (existing and existing["sensitive_json"]) or json.dumps(_script_sensitive(Path(run_dir))),
+                       existing and existing["source_run"]))
+            c.execute("DELETE FROM steps WHERE run_id=?", (s["run_id"],))
+            for r in res:
+                st = r.get("step", {})
+                loc = st.get("locator")
+                c.execute("""INSERT OR REPLACE INTO steps (run_id, idx, status, raw, action, target, value, locator, error, screenshot,
+                             url, duration_ms, healed, dialog) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          (s["run_id"], r["index"], r.get("status"), st.get("raw"), st.get("action"), st.get("target"),
+                           r.get("shown_value"), _loc_label(loc), r.get("error"), r.get("screenshot"), r.get("url"),
+                           r.get("duration_ms"), 1 if r.get("healed") else 0, r.get("dialog")))
+
+    def import_artifacts(self, root: Path) -> int:
+        """Pick up run folders that aren't in the DB yet (e.g. created before the DB existed)."""
+        known = {r["run_id"] for r in self.q("SELECT run_id FROM runs")}
+        n = 0
+        for p in Path(root).glob("*/summary.json"):
+            if p.parent.name not in known:
+                try:
+                    self.finalize_from_summary(p.parent)
+                    n += 1
+                except Exception:
+                    pass
+        return n
+
+    def put_secrets(self, run_id: str, secrets: dict) -> None:
+        if secrets:
+            self.x("INSERT OR REPLACE INTO run_secrets (run_id, secrets_json) VALUES (?,?)", (run_id, json.dumps(secrets)))
+
+    def get_secrets(self, run_id: str) -> dict:
+        r = self.one("SELECT secrets_json FROM run_secrets WHERE run_id=?", (run_id,))
+        return json.loads(r["secrets_json"]) if r else {}
+
+    def batch_runs(self, batch_id: str) -> list[dict]:
+        return self.q("SELECT * FROM runs WHERE batch_id=? ORDER BY created", (batch_id,))
+
+    def raw_run(self, run_id: str) -> dict | None:
+        return self.one("SELECT * FROM runs WHERE run_id=?", (run_id,))
+
+    def list_runs(self, limit: int = 200, status: str | None = None, q: str | None = None) -> list[dict]:
+        sql, args = "SELECT * FROM runs WHERE 1=1", []
+        if status:
+            sql += " AND status=?"
+            args.append(status)
+        if q:
+            sql += " AND (test_name LIKE ? OR agent LIKE ? OR engine LIKE ?)"
+            args += [f"%{q}%"] * 3
+        sql += " ORDER BY created DESC LIMIT ?"
+        args.append(limit)
+        return [_run_out(r) for r in self.q(sql, args)]
+
+    def get_run(self, run_id: str) -> dict | None:
+        r = self.one("SELECT * FROM runs WHERE run_id=?", (run_id,))
+        if not r:
+            return None
+        out = _run_out(r)
+        out["steps"] = self.q("SELECT * FROM steps WHERE run_id=? ORDER BY idx", (run_id,))
+        out["data"] = json.loads(r["data_json"]) if r.get("data_json") else {}
+        out["sensitive"] = json.loads(r["sensitive_json"]) if r.get("sensitive_json") else []
+        out["config"] = json.loads(r["config_json"]) if r.get("config_json") else {}
+        out["has_secrets"] = bool(self.get_secrets(run_id))
+        out["source_run"] = r.get("source_run")
+        if r.get("batch_id"):
+            out["batch"] = [_run_out(b) for b in self.batch_runs(r["batch_id"])]
+        return out
+
+    def delete_run(self, run_id: str) -> None:
+        with self.tx() as c:
+            c.execute("DELETE FROM steps WHERE run_id=?", (run_id,))
+            c.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+            c.execute("DELETE FROM run_secrets WHERE run_id=?", (run_id,))
+
+    def stats(self) -> dict:
+        r = self.one("""SELECT COUNT(*) total,
+                          SUM(status='passed') passed, SUM(status='failed') failed,
+                          SUM(status IN ('queued','dispatched','running')) live,
+                          AVG(CASE WHEN status IN ('passed','failed') THEN duration_ms END) avg_ms,
+                          SUM(healed) healed,
+                          SUM(created > ?) day, SUM(created > ? AND status='failed') day_failed
+                        FROM runs""", (time.time() - 86400, time.time() - 86400)) or {}
+        trend = self.q("""SELECT date(created, 'unixepoch') d, SUM(status='passed') passed, SUM(status='failed') failed
+                          FROM runs WHERE created > ? GROUP BY d ORDER BY d""", (time.time() - 14 * 86400,))
+        return {k: (v or 0) for k, v in r.items()} | {"trend": trend}
+
+    # ------------------------------------------------------------------ library
+    def lib_put(self, name: str, test: dict, source_run: str | None = None) -> dict:
+        now = time.time()
+        old = self.one("SELECT created FROM library WHERE name=?", (name,))
+        self.x("""INSERT OR REPLACE INTO library (name, test_name, steps, engine, sensitive, test_json, source_run, created, updated)
+                  VALUES (?,?,?,?,?,?,?,?,?)""",
+               (name, test.get("name"), len(test.get("steps", [])), test.get("engine"), json.dumps(test.get("sensitive", [])),
+                json.dumps(test), source_run, old["created"] if old else now, now))
+        return self.lib_meta(name)
+
+    def lib_meta(self, name: str) -> dict | None:
+        r = self.one("SELECT name, test_name, steps, engine, sensitive, source_run, created, updated, test_json FROM library WHERE name=?", (name,))
+        if not r:
+            return None
+        t = json.loads(r.pop("test_json"))
+        r["sensitive"] = json.loads(r["sensitive"] or "[]")
+        r["data_keys"] = sorted((t.get("data") or {}).keys())
+        return r
+
+    def lib_list(self) -> list[dict]:
+        return [self.lib_meta(r["name"]) for r in self.q("SELECT name FROM library ORDER BY updated DESC")]
+
+    def lib_get(self, name: str) -> dict | None:
+        r = self.one("SELECT test_json FROM library WHERE name=?", (name,))
+        return json.loads(r["test_json"]) if r else None
+
+    def lib_delete(self, name: str) -> None:
+        self.x("DELETE FROM library WHERE name=?", (name,))
+
+    # ------------------------------------------------------------------ sessions
+    def session_put(self, name: str, state: dict) -> None:
+        domains = sorted({c.get("domain", "").lstrip(".") for c in state.get("cookies", []) if c.get("domain")})
+        origins = [o.get("origin", "") for o in state.get("origins", [])]
+        self.x("INSERT OR REPLACE INTO sessions (name, state_json, domains, updated) VALUES (?,?,?,?)",
+               (name, json.dumps(state), json.dumps((domains + origins)[:12]), time.time()))
+
+    def session_get(self, name: str) -> dict | None:
+        r = self.one("SELECT state_json FROM sessions WHERE name=?", (name,))
+        return json.loads(r["state_json"]) if r else None
+
+    def session_list(self) -> list[dict]:
+        return [{"name": r["name"], "domains": json.loads(r["domains"] or "[]"), "updated": int(r["updated"])}
+                for r in self.q("SELECT name, domains, updated FROM sessions ORDER BY updated DESC")]
+
+    def session_delete(self, name: str) -> None:
+        self.x("DELETE FROM sessions WHERE name=?", (name,))
+
+    # ------------------------------------------------------------------ machines
+    def machine_seen(self, name: str, info: dict, online: bool) -> None:
+        now = time.time()
+        old = self.one("SELECT first_seen FROM machines WHERE name=?", (name,))
+        self.x("""INSERT OR REPLACE INTO machines (name, hostname, platform, engines, browsers, version, first_seen, last_seen, online)
+                  VALUES (?,?,?,?,?,?,?,?,?)""",
+               (name, info.get("hostname"), info.get("platform"), json.dumps(info.get("engines") or []),
+                json.dumps(info.get("browsers") or []), info.get("version"), old["first_seen"] if old else now, now, 1 if online else 0))
+
+    def machine_offline(self, name: str) -> None:
+        self.x("UPDATE machines SET online=0, last_seen=? WHERE name=?", (time.time(), name))
+
+    def machines(self) -> list[dict]:
+        out = []
+        for r in self.q("SELECT * FROM machines ORDER BY online DESC, last_seen DESC"):
+            r["engines"] = json.loads(r["engines"] or "[]")
+            r["browsers"] = json.loads(r["browsers"] or "[]")
+            r["online"] = bool(r["online"])
+            out.append(r)
+        return out
+
+    def machine_delete(self, name: str) -> None:
+        self.x("DELETE FROM machines WHERE name=?", (name,))
+
+
+def _read(p: Path) -> str | None:
+    return p.read_text() if p.exists() else None
+
+
+def _script_sensitive(run_dir: Path) -> list:
+    try:
+        return json.loads((run_dir / "script.json").read_text()).get("sensitive", [])
+    except Exception:
+        return []
+
+
+def _loc_label(loc: dict | None) -> str | None:
+    if not loc:
+        return None
+    where = "".join(f"iframe[{f}] » " for f in loc.get("frames") or []) + "".join(f"shadow[{s}] » " for s in loc.get("shadow") or [])
+    role = f"{loc['role']}:" if loc.get("role") else ""
+    return f"{where}{loc['strategy']}={role}{loc['value']}"
+
+
+def _run_out(r: dict) -> dict:
+    r = dict(r)
+    cfg = r.pop("config_json", None)
+    for k in ("data_json", "sensitive_json"):
+        r.pop(k, None)
+    if cfg:
+        try:
+            c = json.loads(cfg)
+            r["headless"] = c.get("headless")
+            r["browser"] = r.get("browser") or c.get("browser")
+        except Exception:
+            pass
+    r["healed_steps"] = r.get("healed", 0)
+    r["passed_steps"] = r.get("passed", 0)
+    r["failed_steps"] = r.get("failed", 0)
+    r["live"] = r.get("status") in LIVE
+    return r
+
+
+def open_db() -> DB:
+    return DB(os.getenv("AIAUTO_DB", "aiauto.db"))

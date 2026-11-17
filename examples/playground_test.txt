@@ -1,0 +1,52 @@
+Open PLAYGROUND_URL
+Type "${first}" into First name
+Type "${last}" into Last name field
+Type "${email}" into the you@example.com field
+Type ${password} into Password
+Type "3" into Quantity
+Type "1990-05-17" into Date of birth
+Type "75" into Volume slider
+Type "#ff8800" into Favourite colour
+Type "Loves testing" into Bio
+Select "${country}" from Country dropdown
+Select "English|Telugu" from Languages
+Click Pro radio
+Check I agree to the terms
+Uncheck Send me the newsletter
+Upload "UPLOAD_FILE" to Resume
+Click Submit form
+Verify page contains "Submitted | ${last} | ${email} | qty=3 | dob=1990-05-17 | vol=75 | color=#ff8800 | country=in | langs=English+Telugu | plan=pro | terms=true | news=false | bio=Loves testing | pwdlen=8 | file=resume.txt"
+Select "Large" from Size dropdown
+Verify page contains "Size: Large"
+Double click Open row
+Verify page contains "Row opened by double click"
+Right click File actions
+Verify page contains "Context menu shown"
+Dismiss the next alert
+Click Delete item
+Verify alert says "Delete this item?"
+Verify page contains "Delete cancelled"
+Accept the next alert
+Click Show alert
+Verify alert says "Saved successfully"
+Type "Remember the milk" into Notes editor
+Hover over Settings menu
+Click Profile settings
+Verify page contains "Opened Profile settings"
+Drag Card A to Done column
+Verify page contains "Card A moved to Done column"
+Click Load more
+Verify page contains "More loaded"
+Click the second View button
+Verify page contains "View order 1002"
+Type "Ravi" into Display name
+Click Update profile
+Verify page contains "Profile updated: Ravi"
+Type "Hyderabad" into City
+Click Save address
+Verify page contains "Address saved: Hyderabad"
+Type "${card}" into Card number
+Click Pay now
+Verify page contains "Paid with 4242"
+Click Apply coupon
+Verify page contains "Coupon applied"

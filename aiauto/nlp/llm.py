@@ -32,9 +32,11 @@ STEP_SCHEMA: dict[str, Any] = {
                     "action": {"type": "string", "enum": _ACTIONS},
                     "target": {"type": ["string", "null"]},
                     "value": {"type": ["string", "null"]},
+                    "nth": {"type": ["integer", "null"]},
+                    "optional": {"type": "boolean"},
                     "raw": {"type": "string"},
                 },
-                "required": ["action", "target", "value", "raw"],
+                "required": ["action", "target", "value", "nth", "optional", "raw"],
                 "additionalProperties": False,
             },
         },
@@ -54,7 +56,12 @@ For each step output:
 - value: the data for the action: URL for navigate (always with scheme), text for type/append, key name for press
   (Playwright key names: Enter, Tab, Escape, ArrowDown, Control+A), option label for select, expected text for
   assert_text/assert_url/assert_title, seconds for wait, "down"/"up"/"top"/"bottom" (optionally ":<pixels>") for
-  scroll, file path for upload. Otherwise null.
+  scroll, file path for upload, the *destination element description* for drag, seconds for pause,
+  "accept"/"dismiss" for dialog, tab index ("0", "1", ...) or "last" for switch_tab, expected text for
+  assert_dialog. Otherwise null.
+- nth: 0-based position when the user picks one of several similar elements ("first result" -> 0,
+  "second Add to cart button" -> 1, "last row" -> -1); then target is the text the element contains
+  (e.g. "Logitech") or its kind. Otherwise null.
 - raw: the fragment of the original instruction this step came from.
 
 Rules:
@@ -62,6 +69,8 @@ Rules:
 - One sentence may contain several steps ("type x in y and press enter" is two steps).
 - "Login with alice / secret" style shorthand expands into the individual type and click steps.
 - Use assert_text with target null when the text may be anywhere on the page.
+- optional: true only when the user says the step may not apply ("if present", "if a cookie banner shows").
+- Use pause (not wait) when a human must do something in the browser, e.g. SSO / MFA login.
 - Do not add steps the user did not ask for."""
 
 PICK_SYSTEM = """You pick which DOM element a browser test step refers to.
@@ -157,7 +166,8 @@ def parse_steps(text: str, data_keys: list[str] | None = None) -> tuple[str, lis
     steps = []
     for s in out.get("steps", []):
         try:
-            steps.append(Step(action=Action(s["action"]), target=s.get("target"), value=s.get("value"), raw=s.get("raw", "")))
+            steps.append(Step(action=Action(s["action"]), target=s.get("target"), value=s.get("value"),
+                              nth=s.get("nth"), optional=bool(s.get("optional")), raw=s.get("raw", "")))
         except (ValueError, KeyError):
             continue
     return out.get("name") or "Untitled test", steps

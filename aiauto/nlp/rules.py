@@ -69,7 +69,7 @@ def _p(regex: str, action: Action, kind: str = "") -> None:
     PATTERNS.append((re.compile(regex, re.I), action, kind))
 
 
-URL = r"(?P<v>(?:https?://|www\.|file://|data:)\S+|[\w.-]+\.(?:com|org|net|io|dev|in|co|app|ai|edu|gov)(?:/\S*)?)"
+URL = r"(?P<v>(?:https?://|www\.|file://|data:|\$\{|\{\{)\S+|[\w.-]+\.(?:com|org|net|io|dev|in|co|app|ai|edu|gov)(?:/\S*)?)"
 
 _p(rf"^(?:go\s+to|goto|open|navigate\s+to|visit|launch|browse\s+to|load)\s+(?:the\s+)?(?:url\s+|page\s+|site\s+|website\s+)?{Q}?{URL}{Q}?", Action.NAVIGATE)
 _p(r"^(?:go\s+back|navigate\s+back|back)$", Action.BACK)
@@ -89,6 +89,12 @@ _p(r"^(?:uncheck|untick|deselect|disable)\s+(?P<t>.+)$", Action.UNCHECK)
 _p(r"^(?:check|tick|enable)\s+(?P<t>(?!that|if|whether).+)$", Action.CHECK)
 _p(r"^(?:hover|mouse\s*over|move\s+(?:the\s+)?mouse\s+(?:to|over))\s+(?:over\s+|on\s+)?(?P<t>.+)$", Action.HOVER)
 _p(rf"^(?:upload|attach)\s+{QV}\s+(?:to|in|into|using)\s+(?P<t>.+)$", Action.UPLOAD)
+_p(rf"^(?:drag|move)\s+(?:the\s+)?(?P<t>.+?)\s+(?:and\s+drop\s+)?(?:to|onto|into|on|over)\s+(?:the\s+)?(?P<v>.+)$", Action.DRAG)
+_p(r"^(?:pause|wait)\s+(?:for\s+)?(?P<v>\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)?\s+(?:for|to\s+(?:allow|let))\s+.*(?:login|log\s*in|sign\s*in|sso|mfa|otp|manual|captcha|user).*$", Action.PAUSE)
+_p(r"^pause(?:\s+for)?\s+(?P<v>\d+(?:\.\d+)?)", Action.PAUSE)
+_p(r"^(?P<v>accept|dismiss|cancel|confirm|ok)\s+(?:the\s+)?(?:next\s+)?(?:alert|dialog|popup|confirm(?:ation)?|prompt)s?$", Action.DIALOG)
+_p(rf"^(?:verify|assert|check|ensure|confirm|expect)\s+(?:that\s+)?(?:the\s+)?(?:alert|dialog|popup|confirm(?:ation)?|prompt)\s+(?:says|shows|contains|has|reads|displays|text\s+is)\s+{QV}", Action.ASSERT_DIALOG)
+_p(r"^(?:switch|go|move)\s+to\s+(?:the\s+)?(?:(?P<v>new|last|first|second|third|\d+)(?:st|nd|rd|th)?\s+)?(?:browser\s+)?(?:tab|window)(?:\s+(?P<n>\d+))?$", Action.SWITCH_TAB)
 _p(r"^(?:click|tap|press|hit|submit|push)\s+(?:on\s+)?(?P<t>.+)$", Action.CLICK)
 _p(r"^scroll\s+(?:down\s+)?to\s+(?P<t>.+)$", Action.SCROLL, "to")
 _p(r"^scroll\s+(?P<v>up|down|top|bottom)(?:\s+(?:by\s+)?(?P<n>\d+))?", Action.SCROLL)
@@ -102,17 +108,37 @@ _p(r"^(?:verify|assert|check|ensure|confirm|validate|expect)\s+(?:that\s+)?(?:th
 _p(r"^(?:take|capture|grab)\s+(?:a\s+)?(?:full\s+page\s+)?screenshot(?:\s+(?:named|as)\s+(?P<v>\S+))?", Action.SCREENSHOT)
 
 
+_OPTIONAL = re.compile(r"(?:,?\s+(?:if|when)\s+(?:it\s+|one\s+|the\s+\w+\s+)?(?:is\s+|are\s+)?(?:present|shown|visible|displayed|exists|appears|there|available|any)|\s+\(optional\)|,?\s+optionally)$", re.I)
+
+
 def parse_sentence(sentence: str) -> Step | None:
     s = sentence.strip()
+    optional = False
+    if _OPTIONAL.search(s):
+        s, optional = _OPTIONAL.sub("", s).strip(), True
+    elif re.match(r"^(?:optionally|if present,?|if shown,?)\s+", s, re.I):
+        s, optional = re.sub(r"^(?:optionally|if present,?|if shown,?)\s+", "", s, flags=re.I), True
+    step = _parse(s, sentence)
+    if step and optional:
+        step.optional = True
+    return step
+
+
+def _parse(s: str, sentence: str) -> Step | None:
     for rx, action, kind in PATTERNS:
         m = rx.match(s)
         if not m:
             continue
         g = m.groupdict()
         value = g.get("v")
-        target = _clean_target(g.get("t"))
+        nth = None
+        raw_t = g.get("t")
+        if raw_t:
+            raw_t = re.sub(r"^(?:on|at|in|into|to|over)\s+", "", raw_t.strip().rstrip("."), flags=re.I)
+            raw_t, nth = _ordinal(raw_t)
+        target = _clean_target(raw_t)
         if action == Action.NAVIGATE:
-            if value and not re.match(r"^(?:https?|file|data):", value, re.I):
+            if value and not re.match(r"^(?:https?:|file:|data:|\$\{|\{\{)", value, re.I):
                 value = "https://" + value
         elif action == Action.TYPE and kind == "clear":
             value = ""
@@ -125,9 +151,16 @@ def parse_sentence(sentence: str) -> Step | None:
             value = None
         elif action == Action.PRESS and value:
             value = _normalize_key(value)
+        elif action == Action.SWITCH_TAB:
+            word = (g.get("n") or value or "last").lower()
+            value = {"new": "last", "last": "last", "first": "0", "second": "1", "third": "2"}.get(word, word)
+            if value.isdigit() and g.get("n"):
+                value = str(int(value) - 1)
+        elif action == Action.DIALOG:
+            value = "dismiss" if value.lower() in ("dismiss", "cancel") else "accept"
         elif action == Action.CLICK:
             # "click on Login" vs "click the 'Login' button"
-            qm = re.search(QT, s)
+            qm = re.search(QT, s) if nth is None else None
             if qm:
                 rest = s[qm.end():].strip()
                 role = re.match(r"(button|link|tab|icon|menu|checkbox|radio|option)\b", rest, re.I)
@@ -139,8 +172,29 @@ def parse_sentence(sentence: str) -> Step | None:
             qm = re.fullmatch(QT, target)
             if qm:
                 target = qm.group("t")
-        return Step(action=action, target=target, value=value, raw=sentence)
+        if action == Action.DRAG and value:
+            value, _ = _ordinal(_clean_target(value))
+        return Step(action=action, target=target, value=value, raw=sentence, nth=nth)
     return None
+
+
+_ORD = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2, "fourth": 3, "4th": 3, "fifth": 4,
+        "5th": 4, "last": -1}
+
+
+def _ordinal(target: str) -> tuple[str, int | None]:
+    """'first result containing "Logitech"' -> ('Logitech', 0);  'second Add to cart button' -> ('Add to cart button', 1)"""
+    m = re.match(r"^(?:the\s+)?(first|second|third|fourth|fifth|last|\d+(?:st|nd|rd|th))\s+(.+)$", target, re.I)
+    if not m or re.match(r"(?:name|names|page|time|login|step)\b", m.group(2), re.I):
+        return target, None          # "First name field", "last page" are names, not ordinals
+    word, rest = m.group(1).lower(), m.group(2)
+    n = _ORD.get(word, int(re.sub(r"\D", "", word) or 1) - 1)
+    q = re.search(r"(?:containing|with|named|called|titled|labell?ed|matching|that says|saying)\s+" + QT, rest, re.I)
+    if q:
+        return q.group("t"), n
+    rest = re.sub(r"^(?:search\s+)?(?:result|item|product|link|row|option|element|entry)s?\s+(?:for|of)\s+", "", rest, flags=re.I)
+    rest = re.sub(rf"^{Q}(.+?){Q}(\s+.*)?$", lambda mm: mm.group(1) + (mm.group(2) or ""), rest)
+    return rest.strip(), n
 
 
 def _normalize_key(k: str) -> str:

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Element Playground</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; }
+  header { background: #20243a; color: #fff; padding: 10px 16px; display: flex; gap: 18px; }
+  header a { color: #fff; }
+  .menu { position: relative; } .menu .sub { display: none; position: absolute; top: 22px; background: #fff; border: 1px solid #ccc; padding: 6px; }
+  .menu:hover .sub { display: block; } .sub a { color: #000; display: block; padding: 4px 8px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+  label { display: block; margin-top: 6px; }
+  .col { min-height: 60px; border: 2px dashed #aaa; padding: 6px; margin-top: 6px; }
+  .card { background: #eef; padding: 6px; margin: 4px; cursor: grab; }
+  .listbox { border: 1px solid #999; display: none; } .listbox.open { display: block; }
+  .listbox [role=option] { padding: 4px; cursor: pointer; } .listbox [role=option]:hover { background: #def; }
+  #log { white-space: pre-wrap; background: #f7f7f7; padding: 8px; min-height: 80px; }
+  iframe { width: 100%; height: 170px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<header>
+  <a href="#">Home</a>
+  <div class="menu"><a href="#" aria-haspopup="true">Settings</a>
+    <div class="sub"><a href="#" onclick="log('Opened Profile settings')">Profile settings</a><a href="#" onclick="log('Opened Billing')">Billing</a></div>
+  </div>
+  <a href="#" onclick="log('Help clicked')">Help</a>
+</header>
+<main>
+  <section id="forms">
+    <h2>Forms</h2>
+    <label for="first">First name</label><input id="first" autocomplete="off">
+    <input aria-label="Last name">
+    <input placeholder="you@example.com" type="email" name="email">
+    <label>Password <input type="password" name="pwd"></label>
+    <label for="qty">Quantity</label><input id="qty" type="number" min="1" max="10">
+    <label for="dob">Date of birth</label><input id="dob" type="date">
+    <label for="vol">Volume</label><input id="vol" type="range" min="0" max="100" value="10">
+    <label for="fav">Favourite colour</label><input id="fav" type="color" value="#000000">
+    <label for="bio">Bio</label><textarea id="bio"></textarea>
+    <label for="country">Country</label>
+    <select id="country"><option value="">Choose…</option><option value="in">India</option><option value="us">United States</option><option value="de">Germany</option></select>
+    <label for="langs">Languages</label>
+    <select id="langs" multiple size="4"><option>English</option><option>Hindi</option><option>German</option><option>Telugu</option></select>
+    <fieldset><legend>Plan</legend>
+      <label><input type="radio" name="plan" value="free"> Free</label>
+      <label><input type="radio" name="plan" value="pro"> Pro</label>
+    </fieldset>
+    <label><input type="checkbox" id="terms"> I agree to the terms</label>
+    <label><input type="checkbox" id="news" checked> Send me the newsletter</label>
+    <label for="cv">Resume</label><input id="cv" type="file">
+    <p><button type="button" id="submit-form" onclick="submitForm()">Submit form</button></p>
+  </section>
+
+  <section id="widgets">
+    <h2>Widgets</h2>
+    <!-- custom (non-native) dropdown -->
+    <div>
+      <span id="size-label">Size</span>
+      <div role="combobox" tabindex="0" aria-labelledby="size-label" aria-expanded="false" id="size-combo"
+           onclick="this.nextElementSibling.classList.toggle('open')" style="border:1px solid #999;padding:4px;width:140px">Pick a size</div>
+      <div class="listbox" role="listbox">
+        <div role="option" onclick="pickSize(this)">Small</div><div role="option" onclick="pickSize(this)">Medium</div><div role="option" onclick="pickSize(this)">Large</div>
+      </div>
+    </div>
+    <p><button type="button" ondblclick="log('Row opened by double click')">Open row</button>
+       <button type="button" oncontextmenu="event.preventDefault(); log('Context menu shown')">File actions</button></p>
+    <p><button type="button" onclick="if (confirm('Delete this item?')) log('Item deleted'); else log('Delete cancelled')">Delete item</button>
+       <button type="button" onclick="alert('Saved successfully'); log('Alert closed')">Show alert</button></p>
+    <p><a href="about:blank#new-tab" target="_blank" onclick="setTimeout(()=>{},0)">Open help in new tab</a></p>
+    <div contenteditable="true" role="textbox" aria-label="Notes editor" style="border:1px solid #999;min-height:30px;padding:4px"></div>
+    <h3>Board</h3>
+    <div style="display:flex;gap:8px">
+      <div class="col" id="todo-col" aria-label="To do column" ondragover="event.preventDefault()" ondrop="drop(event, this)">
+        <div class="card" draggable="true" ondragstart="drag(event)" id="card-a">Card A</div>
+        <div class="card" draggable="true" ondragstart="drag(event)" id="card-b">Card B</div>
+      </div>
+      <div class="col" aria-label="Done column" ondragover="event.preventDefault()" ondrop="drop(event, this)" style="flex:1">Done</div>
+    </div>
+    <p id="late-holder"></p>
+    <table><thead><tr><th>Order</th><th>Status</th><th></th></tr></thead>
+      <tbody><tr><td>#1001</td><td>Shipped</td><td><button type="button" onclick="log('View order 1001')">View</button></td></tr>
+             <tr><td>#1002</td><td>Pending</td><td><button type="button" onclick="log('View order 1002')">View</button></td></tr></tbody></table>
+  </section>
+
+  <section id="shadow-section">
+    <h2>Shadow DOM</h2>
+    <user-card></user-card>
+  </section>
+
+  <section id="frames">
+    <h2>Iframes</h2>
+    <iframe title="Payment frame" id="pay-frame" srcdoc='<!doctype html><body style="font-family:sans-serif">
+      <label for="card">Card number</label><input id="card" autocomplete="off">
+      <button type="button" onclick="parent.log(&apos;Paid with &apos; + document.getElementById(&apos;card&apos;).value.slice(-4))">Pay now</button>
+      <iframe title="Inner frame" style="height:70px" srcdoc="&amp;lt;button onclick=&amp;quot;parent.parent.log(&amp;apos;Coupon applied&amp;apos;)&amp;quot;&amp;gt;Apply coupon&amp;lt;/button&amp;gt;"></iframe>
+      </body>'></iframe>
+  </section>
+</main>
+<div id="log" aria-live="polite"></div>
+
+<script>
+  function log(t) { document.getElementById('log').textContent += t + '\n'; }
+  // dynamic ids / classes: regenerated on every load (the kind auto-generated by frameworks)
+  const rnd = () => Math.random().toString(36).slice(2, 10);
+  document.querySelectorAll('section button, section input, section select, section textarea').forEach(el => {
+    const old = el.id;
+    el.id = 'el-' + rnd() + Date.now();
+    if (old) { const l = document.querySelector('label[for="' + old + '"]'); if (l) l.htmlFor = el.id; }
+    el.classList.add('css-' + rnd());
+  });
+  function submitForm() {
+    const q = s => document.querySelector(s);
+    const langs = Array.from(q('select[multiple]').selectedOptions).map(o => o.text).join('+');
+    const plan = (document.querySelector('input[name=plan]:checked') || {}).value;
+    log(['Submitted', q('[aria-label="Last name"]').value, q('[name=email]').value, 'qty=' + q('[type=number]').value,
+         'dob=' + q('[type=date]').value, 'vol=' + q('[type=range]').value, 'color=' + q('[type=color]').value,
+         'country=' + q('select:not([multiple])').value, 'langs=' + langs, 'plan=' + plan,
+         'terms=' + document.querySelectorAll('[type=checkbox]')[0].checked, 'news=' + document.querySelectorAll('[type=checkbox]')[1].checked,
+         'bio=' + q('textarea').value, 'pwdlen=' + q('[type=password]').value.length,
+         'file=' + (q('[type=file]').files[0] || {}).name].join(' | '));
+  }
+  function pickSize(o) { document.getElementById('size-combo').textContent = o.textContent; o.parentElement.classList.remove('open'); log('Size: ' + o.textContent); }
+  function drag(e) { e.dataTransfer.setData('text', e.target.id); }
+  function drop(e, col) { e.preventDefault(); const id = e.dataTransfer.getData('text'); const c = document.getElementById(id); if (c) { col.appendChild(c); log(c.textContent + ' moved to ' + col.getAttribute('aria-label')); } }
+  // element that shows up late
+  setTimeout(() => { const b = document.createElement('button'); b.textContent = 'Load more'; b.onclick = () => log('More loaded'); document.getElementById('late-holder').appendChild(b); }, 1500);
+
+  // nested shadow roots: <user-card> -> #shadow-root -> <address-form> -> #shadow-root
+  class AddressForm extends HTMLElement {
+    constructor() { super(); const r = this.attachShadow({mode: 'open'});
+      r.innerHTML = `<label for="city">City</label><input id="city-${rnd()}" class="c-${rnd()}" placeholder="City">
+        <button type="button">Save address</button>`;
+      r.querySelector('label').htmlFor = r.querySelector('input').id;
+      r.querySelector('button').onclick = () => log('Address saved: ' + r.querySelector('input').value); }
+  }
+  class UserCard extends HTMLElement {
+    constructor() { super(); const r = this.attachShadow({mode: 'open'});
+      r.innerHTML = `<div class="card-${rnd()}"><h3>Profile</h3><input aria-label="Display name">
+        <button type="button" id="btn-${rnd()}">Update profile</button><address-form></address-form></div>`;
+      r.querySelector('button').onclick = () => log('Profile updated: ' + r.querySelector('input').value); }
+  }
+  customElements.define('address-form', AddressForm);
+  customElements.define('user-card', UserCard);
+</script>
+</body>
+</html>

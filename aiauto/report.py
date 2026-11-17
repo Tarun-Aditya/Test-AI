@@ -15,8 +15,9 @@ def _b64(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode()
 
 
-def render(summary: RunSummary, test: TestCase, run_dir: Path) -> str:
-    e = html.escape
+def render(summary: RunSummary, test: TestCase, run_dir: Path, mask=lambda x: x) -> str:
+    def e(x):
+        return html.escape(mask(x) if isinstance(x, str) else str(x))
     passed = sum(1 for r in summary.results if r.status == StepStatus.PASSED)
     failed = sum(1 for r in summary.results if r.status == StepStatus.FAILED)
     skipped = sum(1 for r in summary.results if r.status == StepStatus.SKIPPED)
@@ -37,13 +38,18 @@ def render(summary: RunSummary, test: TestCase, run_dir: Path) -> str:
                    f'src="data:image/png;base64,{_b64(run_dir / r.screenshot)}"></a>')
         loc = ""
         if st.locator:
-            loc = (f'<div class="kv"><span>locator</span><code>{e(st.locator.strategy)}={e(st.locator.value)}</code></div>'
-                   f'<div class="kv"><span>element</span>{e(st.locator.description)}</div>')
+            fb = "".join(f"<div class='fb'><code>{e(f.label())}</code></div>" for f in st.fallbacks)
+            loc = (f'<div class="kv"><span>{e(summary.engine)}</span><code>{e(st.locator.label())}</code></div>'
+                   f'<div class="kv"><span>element</span>{e(st.locator.description)}</div>'
+                   + (f'<details><summary>{len(st.fallbacks)} fallback locator(s) for self-healing</summary>{fb}</details>' if fb else ''))
+        if st.target_locator:
+            loc += f'<div class="kv"><span>drop on</span><code>{e(st.target_locator.label())}</code></div>'
+        if r.dialog:
+            loc += f'<div class="kv"><span>dialog</span>{e(r.dialog)}</div>'
+
         err = f'<pre class="err">{e(r.error)}</pre>' if r.error else ""
         healed = '<span class="tag heal">self-healed</span>' if r.healed else ""
-        value = st.value
-        if value and any(w in f"{st.target} {st.raw}".lower() for w in ("password", "secret", "token")):
-            value = "••••••"
+        value = r.shown_value if r.shown_value is not None else st.value
         rows.append(f"""
 <article class="step {r.status.value}">
   <header><span class="num">{r.index + 1}</span><span class="status">{r.status.value}</span>
@@ -91,7 +97,7 @@ code{{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);paddi
 .err{{white-space:pre-wrap;background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad);padding:8px;border-radius:6px;font-size:12px}}
 .shot img{{width:100%;border:1px solid var(--line);border-radius:6px;cursor:zoom-in}}
 #lb{{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;padding:16px;cursor:zoom-out}}
-#lb img{{max-width:100%;max-height:100%}}pre.src{{white-space:pre-wrap;font-size:12px}}
+#lb img{{max-width:100%;max-height:100%}}pre.src{{white-space:pre-wrap;font-size:12px}}details{{margin-top:4px;color:var(--mut);font-size:12px}}.fb{{margin:2px 0 2px 12px}}
 </style></head><body><main>
 <h1>{e(summary.test_name)} <span class="badge {status_cls}">{status_cls.upper()}</span></h1>
 <div class="sub">Run <code>{e(summary.run_id)}</code> · engine <b>{e(summary.engine)}</b> · mode <b>{e(summary.mode)}</b> ·
@@ -101,6 +107,7 @@ agent <b>{e(summary.agent)}</b> · {e(summary.started_at)}</div>
 <div class="stat"><span class="sub">Passed</span><b style="color:var(--ok)">{passed}</b></div>
 <div class="stat"><span class="sub">Failed</span><b style="color:var(--bad)">{failed}</b></div>
 <div class="stat"><span class="sub">Skipped</span><b>{skipped}</b></div>
+<div class="stat"><span class="sub">Self-healed</span><b>{summary.healed_steps}</b></div>
 <div class="stat"><span class="sub">Duration</span><b>{summary.duration_ms / 1000:.1f}s</b></div>
 </div>
 {video_html}
