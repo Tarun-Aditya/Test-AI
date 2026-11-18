@@ -126,9 +126,9 @@ function Replay({ r, onDone }) {
 }
 
 export default function RunDrawer({ id, tab: initialTab, onClose }) {
-  const { toast, loadLibrary, loadRuns } = useApp();
+  const { toast, loadLibrary, loadRuns, can } = useApp();
   const [r, setR] = useState(null);
-  const [tab, setTab] = useState(initialTab || "overview");
+  const [tab, setTab] = useState(initialTab === "replay" && !can.run ? "overview" : initialTab || "overview");
   useEffect(() => { setTab(initialTab || "overview"); }, [id, initialTab]);
   useEffect(() => { api(`/api/runs/${encodeURIComponent(id)}`).then(setR).catch((e) => { toast(e.message, true); onClose(); }); }, [id]);
   useEffect(() => { const h = (e) => e.key === "Escape" && onClose(); document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
@@ -157,7 +157,7 @@ export default function RunDrawer({ id, tab: initialTab, onClose }) {
         <button className="x" onClick={onClose} title="Close"><Icon name="x" /></button>
       </div>
       <div className="tabs" style={{ background: "var(--panel)" }}>
-        {TABS.map(([k, l]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
+        {TABS.filter(([k]) => can.run || k !== "replay").map(([k, l]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
       </div>
       <div className={"drawer-b" + (tab === "code" ? " flush" : "")}>
         {!r ? <div className="empty-state">Loading…</div> : isLive(r) ? <div className="empty-state">This run is still in progress. <a href={`#/studio/${encodeURIComponent(r.run_id)}`} onClick={onClose}>Watch it live</a>

@@ -17,6 +17,36 @@ const PRESETS = {
   "Playwright browser server": { engine: "playwright", url: "ws://host:3000/", browser: "chromium", platform: "remote Playwright", caps: {} },
 };
 
+function AgentTokens() {
+  const { toast } = useApp();
+  const [list, setList] = useState([]);
+  const [fresh, setFresh] = useState(null);
+  const load = () => api("/api/agent-tokens").then(setList).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const add = async () => {
+    const label = window.prompt("Which machine is this token for? (e.g. qa-docker-1, Ann's laptop)");
+    if (!label) return;
+    try { setFresh(await api("/api/agent-tokens", { method: "POST", body: { label } })); load(); } catch (e) { toast(e.message, true); }
+  };
+  const revoke = async (t) => { if (!window.confirm(`Revoke "${t.label}"? Machines using it are disconnected.`)) return; await api(`/api/agent-tokens/${t.id}`, { method: "DELETE" }); load(); toast("Revoked"); };
+  return (
+    <div className="panel" style={{ marginTop: 18 }}>
+      <div className="panel-h"><h3>Agent tokens</h3><span className="spacer" /><button className="btn sm" onClick={add}>+ New token</button></div>
+      <div className="panel-b">
+        <p className="hint" style={{ marginTop: 0 }}>Each machine connects with its own token, so you can see which one is used where and revoke one without touching the others.</p>
+        {fresh && <div className="card" style={{ marginBottom: 12 }}><h4>Token for "{fresh.label}" (copy it now, it is not shown again)</h4>
+          <div className="copy"><span>{fresh.token}</span><button className="btn sm" onClick={() => navigator.clipboard?.writeText(fresh.token).then(() => toast("Copied"))}><Icon name="copy" size={14} />Copy</button></div></div>}
+        {list.length > 0 && <table className="dt"><thead><tr><th>Machine</th><th>Created</th><th>Last used</th><th /></tr></thead><tbody>
+          {list.map((t) => <tr key={t.id} className={t.revoked ? "off" : ""}><td><b>{t.label}</b>{t.created_by ? <div className="mut">by {t.created_by}</div> : null}</td>
+            <td className="mut">{new Date(t.created * 1000).toLocaleString()}</td>
+            <td className="mut">{t.last_used ? `${new Date(t.last_used * 1000).toLocaleString()}${t.last_machine ? ` · ${t.last_machine}` : ""}` : "never"}</td>
+            <td>{t.revoked ? <span className="pill">revoked</span> : <button className="btn sm ghost danger" onClick={() => revoke(t)}>Revoke</button>}</td></tr>)}
+        </tbody></table>}
+      </div>
+    </div>
+  );
+}
+
 function Grids() {
   const { toast, loadMachines } = useApp();
   const [grids, setGrids] = useState([]);
@@ -78,7 +108,7 @@ function Grids() {
 }
 
 export default function Machines() {
-  const { machines, health, form, setForm, nav, toast, loadMachines } = useApp();
+  const { machines, health, form, setForm, nav, toast, loadMachines, can } = useApp();
   const cmd = `python -m aiauto agent --server ${location.origin} --name my-laptop --token <token> --slots 2`;
   const dcmd = `docker run -d --shm-size=2g autopilot agent --server ${location.origin} --name docker-1 --token <token> --slots 2`;
   const use = (name) => { setForm({ agent: name, agents: [name] }); nav("studio"); toast(`Tests will run on ${name === "local" ? health.local_name : name}`); };
@@ -103,6 +133,7 @@ export default function Machines() {
   return (
     <section className="view on">
       <div className="cards"><Card local />{machines.filter((m) => m.kind !== "grid").map((m) => <Card key={m.name} m={m} />)}</div>
+      {can.admin && <AgentTokens />}
       <Grids />
       <div className="panel" style={{ marginTop: 18 }}>
         <div className="panel-h"><h3>Add a machine</h3></div>

@@ -1,8 +1,11 @@
 export async function api(path, opts = {}) {
-  const init = opts.body instanceof FormData ? opts : { headers: { "Content-Type": "application/json" }, ...opts };
-  if (init.body && !(init.body instanceof FormData) && typeof init.body !== "string") init.body = JSON.stringify(init.body);
+  const form = opts.body instanceof FormData;
+  // X-Requested-With: the hub refuses writes without it (a page on another site can't add it: CSRF guard)
+  const init = { ...opts, headers: { "X-Requested-With": "autopilot", ...(form ? {} : { "Content-Type": "application/json" }), ...(opts.headers || {}) } };
+  if (init.body && !form && typeof init.body !== "string") init.body = JSON.stringify(init.body);
   const r = await fetch(path, init);
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && !path.startsWith("/api/auth/")) window.dispatchEvent(new Event("aiauto:signed-out"));
   if (!r.ok) {
     const d = j.detail;
     throw new Error(typeof d === "string" ? d : d && d.unparsed ? "Not understood: " + d.unparsed.join(" · ") : JSON.stringify(d || j));

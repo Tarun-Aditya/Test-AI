@@ -8,6 +8,10 @@ services:
     environment:
       AIAUTO_AGENT_TOKEN: ${AIAUTO_AGENT_TOKEN:-change-me}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # accounts: first admin (or use the setup code printed in the log), public URL for SSO redirects
+      AIAUTO_ADMIN_USER: ${AIAUTO_ADMIN_USER:-}
+      AIAUTO_ADMIN_PASSWORD: ${AIAUTO_ADMIN_PASSWORD:-}
+      AIAUTO_PUBLIC_URL: ${AIAUTO_PUBLIC_URL:-}
       # your subscription inside Docker (image built with --build-arg AI_CLIS=1):
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}     # from `claude setup-token`
       COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN:-}           # GitHub token allowed to use Copilot
@@ -18,5 +22,16 @@ services:
     shm_size: 2gb            # Chromium needs more than Docker's default 64 MB /dev/shm (~1 GB per slot)
     depends_on: [hub]
     restart: unless-stopped
+  # HTTPS in front of the hub:  DOMAIN=autopilot.example.com docker compose --profile https up -d
+  # (Caddy gets and renews a Let's Encrypt certificate; the domain's DNS must point at this server, ports 80/443 open)
+  https:
+    image: caddy:2
+    profiles: ["https"]
+    command: ["caddy", "reverse-proxy", "--from", "${DOMAIN:-localhost}", "--to", "hub:8000"]
+    ports: ["80:80", "443:443"]
+    volumes: ["caddy-data:/data"]
+    depends_on: [hub]
+    restart: unless-stopped
 volumes:
   autopilot-data:
+  caddy-data:

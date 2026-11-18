@@ -78,13 +78,14 @@ function Trend({ trend }) {
 }
 
 export default function Dashboard() {
-  const { runs, stats, nav, openRun } = useApp();
+  const { runs, stats, nav, openRun, me, can } = useApp();
   const [filter, setFilter] = useState("");
+  const [mine, setMine] = useState(false);
   const live = runs.filter(isLive);
   const done = runs.filter((r) => !isLive(r));
   const finished = (stats?.passed || 0) + (stats?.failed || 0);
   const rate = finished ? Math.round((100 * stats.passed) / finished) : 0;
-  const recent = done.filter((r) => !filter || r.status === filter).slice(0, 30);
+  const recent = done.filter((r) => (!filter || r.status === filter) && (!mine || r.owner === me?.username)).slice(0, 30);
 
   const kpis = [
     ["Pass rate", finished ? `${rate}%` : "–", `${stats?.passed || 0} of ${finished} finished runs`, finished ? (rate >= 80 ? "var(--ok)" : rate >= 50 ? "var(--warn)" : "var(--bad)") : ""],
@@ -112,10 +113,11 @@ export default function Dashboard() {
           <div className="running-row" key={r.run_id}>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Status s={r.status} /><ModeBadge mode={r.mode} parser={r.parser} /><b className="ellipsis">{r.test_name}</b></div>
-              <div className="mut ellipsis" style={{ marginTop: 4 }}>{r.engine}{r.browser ? ` · ${r.browser}` : ""} · {r.agent} · {r.current_step ? `▶ ${r.current_step}` : "starting…"}</div>
+              <div className="mut ellipsis" style={{ marginTop: 4 }}>{r.engine}{r.browser ? ` · ${r.browser}` : ""} · {r.agent}{r.owner ? ` · ${r.owner}` : ""} · {r.current_step ? `▶ ${r.current_step}` : "starting…"}</div>
             </div>
             <div><StepBar r={r} /><div className="mut" style={{ marginTop: 4 }}>{r.done || 0} / {r.total} steps{r.failed_steps ? <span style={{ color: "var(--bad)" }}> · {r.failed_steps} failed</span> : null}</div></div>
-            <div className="links"><button onClick={() => nav("studio", r.run_id)}><span className="dot-live" /> Watch live</button><StopButton ids={[r.run_id]} /></div>
+            <div className="links"><button onClick={() => nav("studio", r.run_id)}><span className="dot-live" /> Watch live</button>
+              {(can.admin || !r.owner || r.owner === me?.username) && can.run && <StopButton ids={[r.run_id]} />}</div>
           </div>
         )) : <div className="empty-state" style={{ padding: 18 }}>Nothing running. <a href="#/studio">Start a test</a></div>}
       </div></div>
@@ -123,6 +125,8 @@ export default function Dashboard() {
       <div className="sec-h"><h3>Recent runs</h3><span className="mut">{done.length} total, kept across restarts</span><span className="spacer" />
         <div className="seg">{[["", "All"], ["passed", "Passed"], ["failed", "Failed"], ["cancelled", "Stopped"], ["interrupted", "Interrupted"]].map(([k, l]) =>
           <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{l}</button>)}</div>
+        {me && <div className="seg"><button className={!mine ? "on" : ""} onClick={() => setMine(false)}>Everyone</button>
+          <button className={mine ? "on" : ""} onClick={() => setMine(true)}>Mine</button></div>}
         <button className="btn sm" onClick={() => nav("runs")}>Table view</button></div>
       <div className="legend">
         <span>How each run's steps were made:</span>
@@ -144,7 +148,7 @@ export default function Dashboard() {
             <div className="bd">
               <div className="nm" title={r.test_name}>{r.test_name}</div>
               <StepBar r={r} />
-              <div className="mut">{r.passed_steps}/{r.total} steps · {r.engine}{r.browser ? `/${r.browser}` : ""} · {r.agent} · {ago(r.started_at)}</div>
+              <div className="mut">{r.passed_steps}/{r.total} steps · {r.engine}{r.browser ? `/${r.browser}` : ""} · {r.agent} · {ago(r.started_at)}{r.owner ? ` · by ${r.owner}` : ""}</div>
               {r.error && <div className="mut ellipsis" style={{ color: "var(--bad)" }} title={r.error}>{r.error}</div>}
             </div>
             <div className="acts links" onClick={(e) => e.stopPropagation()}>
@@ -152,7 +156,7 @@ export default function Dashboard() {
               <a href={art(r.run_id, "report.html")} target="_blank" rel="noreferrer">Report</a>
               {r.video && <button onClick={() => openRun(r.run_id, "video")}>▶ Video</button>}
               <button onClick={() => openRun(r.run_id, "code")}>Code</button>
-              <button className="accent" onClick={() => openRun(r.run_id, "replay")}>▶ Replay</button>
+              {can.run && <button className="accent" onClick={() => openRun(r.run_id, "replay")}>▶ Replay</button>}
             </div>
           </div>
         ))}

@@ -38,6 +38,17 @@ CREATE TABLE IF NOT EXISTS library (
 );
 CREATE TABLE IF NOT EXISTS sessions (name TEXT PRIMARY KEY, state_json TEXT, domains TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, name TEXT, email TEXT, role TEXT NOT NULL,
+  pw_hash TEXT, sso_issuer TEXT, sso_sub TEXT, disabled INTEGER DEFAULT 0, created REAL, last_login REAL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS users_sso ON users(sso_issuer, sso_sub) WHERE sso_sub IS NOT NULL;
+CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER, created REAL, expires REAL);
+CREATE TABLE IF NOT EXISTS user_ai (user_id INTEGER PRIMARY KEY, data_enc TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS agent_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT, token_hash TEXT UNIQUE, created REAL, created_by TEXT,
+  last_used REAL, last_machine TEXT, revoked INTEGER DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS machines (
   name TEXT PRIMARY KEY, hostname TEXT, platform TEXT, engines TEXT, browsers TEXT, version TEXT,
   first_seen REAL, last_seen REAL, online INTEGER DEFAULT 0
@@ -60,9 +71,12 @@ class DB:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         have = {r[1] for r in self._conn.execute("PRAGMA table_info(runs)")}
-        for col in ("data_json", "sensitive_json", "source_run", "parser"):
+        for col in ("data_json", "sensitive_json", "source_run", "parser", "owner"):
             if col not in have:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        for table in ("library", "sessions"):
+            if "owner" not in {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN owner TEXT")
         have = {r[1] for r in self._conn.execute("PRAGMA table_info(steps)")}
         for col in ("parsed_by", "picked_by", "origin"):
             if col not in have:
@@ -107,7 +121,7 @@ class DB:
     # ------------------------------------------------------------------ runs
     def create_run(self, run: dict) -> None:
         cols = ["run_id", "test_name", "status", "engine", "browser", "agent", "mode", "started_at", "total",
-                "iteration", "batch_id", "config_json", "created", "data_json", "sensitive_json", "source_run", "parser"]
+                "iteration", "batch_id", "config_json", "created", "data_json", "sensitive_json", "source_run", "parser", "owner"]
         run = {**run, "created": run.get("created", time.time())}
         self.x(f"INSERT OR REPLACE INTO runs ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                [run.get(c) for c in cols])
@@ -158,13 +172,13 @@ class DB:
         res = s.get("results", [])
         shots = [r["screenshot"] for r in res if r.get("screenshot")]
         err = next((r.get("error") for r in res if r.get("status") == "failed"), None)
-        existing = self.one("SELECT run_id, created, config_json, batch_id, iteration, browser, data_json, sensitive_json, source_run, parser FROM runs WHERE run_id=?", (s["run_id"],))
+        existing = self.one("SELECT run_id, created, config_json, batch_id, iteration, browser, data_json, sensitive_json, source_run, parser, owner FROM runs WHERE run_id=?", (s["run_id"],))
         created = existing["created"] if existing else (datetime.fromisoformat(s["started_at"]).timestamp() if s.get("started_at") else p.stat().st_mtime)
         with self.tx() as c:
             c.execute("""INSERT OR REPLACE INTO runs (run_id, test_name, status, engine, browser, agent, mode, started_at, finished_at,
                          duration_ms, total, done, passed, failed, healed, current_step, video, thumb, error, iteration, batch_id, config_json, created,
-                         data_json, sensitive_json, source_run, parser)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         data_json, sensitive_json, source_run, parser, owner)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (s["run_id"], s.get("test_name"), s.get("status"), s.get("engine"), existing and existing["browser"], s.get("agent"),
                        s.get("mode"), s.get("started_at"), s.get("finished_at"), s.get("duration_ms", 0), len(res), len(res),
                        sum(1 for r in res if r.get("status") == "passed"), sum(1 for r in res if r.get("status") == "failed"),
@@ -173,7 +187,8 @@ class DB:
                        (existing and existing["data_json"]) or _read(Path(run_dir) / "data.json"),
                        (existing and existing["sensitive_json"]) or json.dumps(_script_sensitive(Path(run_dir))),
                        existing and existing["source_run"],
-                       (existing and existing["parser"]) or _parser_of(Path(run_dir), s.get("mode"))))
+                       (existing and existing["parser"]) or _parser_of(Path(run_dir), s.get("mode")),
+                       existing and existing["owner"]))
             c.execute("DELETE FROM steps WHERE run_id=?", (s["run_id"],))
             for r in res:
                 st = r.get("step", {})
@@ -203,13 +218,21 @@ class DB:
         for r in self.q("SELECT run_id, mode FROM runs WHERE parser IS NULL"):
             self.update_run(r["run_id"], parser=_parser_of(Path(root) / r["run_id"], r["mode"]))
 
+    vault = None          # set by the hub: secrets kept for replays are encrypted at rest
+
     def put_secrets(self, run_id: str, secrets: dict) -> None:
         if secrets:
-            self.x("INSERT OR REPLACE INTO run_secrets (run_id, secrets_json) VALUES (?,?)", (run_id, json.dumps(secrets)))
+            raw = ("enc:" + self.vault.enc(secrets)) if self.vault else json.dumps(secrets)
+            self.x("INSERT OR REPLACE INTO run_secrets (run_id, secrets_json) VALUES (?,?)", (run_id, raw))
 
     def get_secrets(self, run_id: str) -> dict:
         r = self.one("SELECT secrets_json FROM run_secrets WHERE run_id=?", (run_id,))
-        return json.loads(r["secrets_json"]) if r else {}
+        if not r:
+            return {}
+        raw = r["secrets_json"]
+        if raw.startswith("enc:"):
+            return (self.vault.dec(raw[4:], {}) if self.vault else {}) or {}
+        return json.loads(raw)           # stored before encryption existed
 
     def batch_runs(self, batch_id: str) -> list[dict]:
         return self.q("SELECT * FROM runs WHERE batch_id=? ORDER BY created", (batch_id,))
@@ -217,8 +240,12 @@ class DB:
     def raw_run(self, run_id: str) -> dict | None:
         return self.one("SELECT * FROM runs WHERE run_id=?", (run_id,))
 
-    def list_runs(self, limit: int = 200, status: str | None = None, q: str | None = None) -> list[dict]:
+    def list_runs(self, limit: int = 200, status: str | None = None, q: str | None = None,
+                  owner: str | None = None) -> list[dict]:
         sql, args = "SELECT * FROM runs WHERE 1=1", []
+        if owner:
+            sql += " AND owner=?"
+            args.append(owner)
         if status:
             sql += " AND status=?"
             args.append(status)
@@ -263,17 +290,17 @@ class DB:
         return {k: (v or 0) for k, v in r.items()} | {"trend": trend}
 
     # ------------------------------------------------------------------ library
-    def lib_put(self, name: str, test: dict, source_run: str | None = None) -> dict:
+    def lib_put(self, name: str, test: dict, source_run: str | None = None, owner: str | None = None) -> dict:
         now = time.time()
-        old = self.one("SELECT created FROM library WHERE name=?", (name,))
-        self.x("""INSERT OR REPLACE INTO library (name, test_name, steps, engine, sensitive, test_json, source_run, created, updated)
-                  VALUES (?,?,?,?,?,?,?,?,?)""",
+        old = self.one("SELECT created, owner FROM library WHERE name=?", (name,))
+        self.x("""INSERT OR REPLACE INTO library (name, test_name, steps, engine, sensitive, test_json, source_run, created, updated, owner)
+                  VALUES (?,?,?,?,?,?,?,?,?,?)""",
                (name, test.get("name"), len(test.get("steps", [])), test.get("engine"), json.dumps(test.get("sensitive", [])),
-                json.dumps(test), source_run, old["created"] if old else now, now))
+                json.dumps(test), source_run, old["created"] if old else now, now, (old and old["owner"]) or owner))
         return self.lib_meta(name)
 
     def lib_meta(self, name: str) -> dict | None:
-        r = self.one("SELECT name, test_name, steps, engine, sensitive, source_run, created, updated, test_json FROM library WHERE name=?", (name,))
+        r = self.one("SELECT name, test_name, steps, engine, sensitive, source_run, created, updated, test_json, owner FROM library WHERE name=?", (name,))
         if not r:
             return None
         t = json.loads(r.pop("test_json"))
@@ -292,11 +319,16 @@ class DB:
         self.x("DELETE FROM library WHERE name=?", (name,))
 
     # ------------------------------------------------------------------ sessions
-    def session_put(self, name: str, state: dict) -> None:
+    def session_put(self, name: str, state: dict, owner: str | None = None) -> None:
         domains = sorted({c.get("domain", "").lstrip(".") for c in state.get("cookies", []) if c.get("domain")})
         origins = [o.get("origin", "") for o in state.get("origins", [])]
-        self.x("INSERT OR REPLACE INTO sessions (name, state_json, domains, updated) VALUES (?,?,?,?)",
-               (name, json.dumps(state), json.dumps((domains + origins)[:12]), time.time()))
+        old = self.one("SELECT owner FROM sessions WHERE name=?", (name,))
+        self.x("INSERT OR REPLACE INTO sessions (name, state_json, domains, updated, owner) VALUES (?,?,?,?,?)",
+               (name, json.dumps(state), json.dumps((domains + origins)[:12]), time.time(), owner or (old and old["owner"])))
+
+    def session_owner(self, name: str) -> str | None:
+        r = self.one("SELECT owner FROM sessions WHERE name=?", (name,))
+        return r["owner"] if r else None
 
     def setting_get(self, key: str, default: Any = None) -> Any:
         r = self.one("SELECT value_json FROM settings WHERE key=?", (key,))
@@ -309,9 +341,91 @@ class DB:
         r = self.one("SELECT state_json FROM sessions WHERE name=?", (name,))
         return json.loads(r["state_json"]) if r else None
 
-    def session_list(self) -> list[dict]:
-        return [{"name": r["name"], "domains": json.loads(r["domains"] or "[]"), "updated": int(r["updated"])}
-                for r in self.q("SELECT name, domains, updated FROM sessions ORDER BY updated DESC")]
+    def session_list(self, owner: str | None = None) -> list[dict]:
+        sql, args = "SELECT name, domains, updated, owner FROM sessions", []
+        if owner is not None:            # a user sees their own saved logins (and old ones nobody owns)
+            sql += " WHERE owner=? OR owner IS NULL"
+            args.append(owner)
+        return [{"name": r["name"], "domains": json.loads(r["domains"] or "[]"), "updated": int(r["updated"]), "owner": r["owner"]}
+                for r in self.q(sql + " ORDER BY updated DESC", args)]
+
+    # ------------------------------------------------------------------ users
+    def user_get(self, user_id: int | None = None, username: str | None = None) -> dict | None:
+        if user_id is not None:
+            return self.one("SELECT * FROM users WHERE id=?", (user_id,))
+        return self.one("SELECT * FROM users WHERE username=? COLLATE NOCASE", (username,))
+
+    def user_by_sso(self, issuer: str, sub: str) -> dict | None:
+        return self.one("SELECT * FROM users WHERE sso_issuer=? AND sso_sub=?", (issuer, sub))
+
+    def user_by_email(self, email: str) -> dict | None:
+        return self.one("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)) if email else None
+
+    def users(self) -> list[dict]:
+        return self.q("SELECT id, username, name, email, role, disabled, created, last_login, sso_issuer, "
+                      "pw_hash IS NOT NULL AS has_password FROM users ORDER BY username")
+
+    def user_count(self) -> int:
+        return self.one("SELECT COUNT(*) AS n FROM users")["n"]
+
+    def user_create(self, username: str, role: str, pw_hash: str | None = None, name: str | None = None,
+                    email: str | None = None, sso_issuer: str | None = None, sso_sub: str | None = None) -> dict:
+        self.x("INSERT INTO users (username, name, email, role, pw_hash, sso_issuer, sso_sub, created) VALUES (?,?,?,?,?,?,?,?)",
+               (username, name, email, role, pw_hash, sso_issuer, sso_sub, time.time()))
+        return self.user_get(username=username)
+
+    def user_update(self, user_id: int, **fields) -> None:
+        if fields:
+            self.x(f"UPDATE users SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*fields.values(), user_id))
+
+    def user_delete(self, user_id: int) -> None:
+        with self.tx() as c:
+            c.execute("DELETE FROM auth_sessions WHERE user_id=?", (user_id,))
+            c.execute("DELETE FROM user_ai WHERE user_id=?", (user_id,))
+            c.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+    def auth_session_put(self, token_hash: str, user_id: int, expires: float) -> None:
+        self.x("INSERT INTO auth_sessions (token_hash, user_id, created, expires) VALUES (?,?,?,?)",
+               (token_hash, user_id, time.time(), expires))
+
+    def auth_session_user(self, token_hash: str) -> dict | None:
+        r = self.one("SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>?",
+                     (token_hash, time.time()))
+        return r if r and not r["disabled"] else None
+
+    def auth_session_delete(self, token_hash: str | None = None, user_id: int | None = None) -> None:
+        if token_hash:
+            self.x("DELETE FROM auth_sessions WHERE token_hash=?", (token_hash,))
+        if user_id is not None:
+            self.x("DELETE FROM auth_sessions WHERE user_id=?", (user_id,))
+        self.x("DELETE FROM auth_sessions WHERE expires<?", (time.time(),))
+
+    def agent_token_add(self, label: str, token_hash: str, created_by: str | None) -> int:
+        self.x("INSERT INTO agent_tokens (label, token_hash, created, created_by) VALUES (?,?,?,?)",
+               (label, token_hash, time.time(), created_by))
+        return self.one("SELECT id FROM agent_tokens WHERE token_hash=?", (token_hash,))["id"]
+
+    def agent_token_find(self, token_hash: str) -> dict | None:
+        return self.one("SELECT * FROM agent_tokens WHERE token_hash=? AND revoked=0", (token_hash,))
+
+    def agent_token_used(self, token_id: int, machine: str | None) -> None:
+        self.x("UPDATE agent_tokens SET last_used=?, last_machine=COALESCE(?, last_machine) WHERE id=?", (time.time(), machine, token_id))
+
+    def agent_tokens(self) -> list[dict]:
+        return self.q("SELECT id, label, created, created_by, last_used, last_machine, revoked FROM agent_tokens ORDER BY created DESC")
+
+    def agent_token_revoke(self, token_id: int) -> None:
+        self.x("UPDATE agent_tokens SET revoked=1 WHERE id=?", (token_id,))
+
+    def agent_token_count(self) -> int:
+        return self.one("SELECT COUNT(*) AS n FROM agent_tokens WHERE revoked=0")["n"]
+
+    def user_ai_get(self, user_id: int) -> str | None:
+        r = self.one("SELECT data_enc FROM user_ai WHERE user_id=?", (user_id,))
+        return r["data_enc"] if r else None
+
+    def user_ai_put(self, user_id: int, data_enc: str) -> None:
+        self.x("INSERT OR REPLACE INTO user_ai (user_id, data_enc, updated) VALUES (?,?,?)", (user_id, data_enc, time.time()))
 
     def session_delete(self, name: str) -> None:
         self.x("DELETE FROM sessions WHERE name=?", (name,))

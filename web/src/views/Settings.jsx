@@ -13,8 +13,8 @@ const HELP = {
     <code>bedrock/…</code>, <code>ollama/llama3</code>. Set a base URL to use a LiteLLM proxy or any OpenAI-compatible endpoint.</>,
 };
 
-export default function Settings() {
-  const { toast } = useApp();
+function OrgAI() {
+  const { toast, me } = useApp();
   const [ai, setAi] = useState(null);
   const [form, setForm] = useState({});
   const [test, setTest] = useState(null);
@@ -23,7 +23,8 @@ export default function Settings() {
     const a = await api("/api/ai");
     setAi(a);
     setForm({ provider: a.provider || "auto", model: a.model || "", litellm_model: a.litellm_model || "", litellm_base: a.litellm_base || "",
-      anthropic_key: "", litellm_key: "", share_keys_with_agents: !!a.share_keys_with_agents });
+      anthropic_key: "", litellm_key: "", share_keys_with_agents: !!a.share_keys_with_agents,
+      users_may_use_org: a.users_may_use_org !== false });
   };
   useEffect(() => { load().catch((e) => toast(e.message, true)); }, []);
   if (!ai) return <section className="view on"><div className="empty-state">Loading…</div></section>;
@@ -50,7 +51,7 @@ export default function Settings() {
     <section className="view on">
       <div className="grid2" style={{ alignItems: "start" }}>
         <div className="panel">
-          <div className="panel-h"><h3>AI provider</h3></div>
+          <div className="panel-h"><h3>{me ? "Organisation AI" : "AI provider"}</h3></div>
           <div className="panel-b">
             <p className="hint" style={{ marginTop: 0 }}>The AI turns your English into steps, breaks ties between similar elements, and finds elements drawn on a canvas
               from a screenshot. Everything else runs without it. By default it uses <b>your own subscription</b>, then an API key, then LiteLLM.</p>
@@ -86,6 +87,8 @@ export default function Settings() {
                   placeholder={ai.litellm_key_set ? "•••••• (stored on the hub)" : "key for that provider (or set its usual env var on the server)"} style={{ flex: 1 }} />
                   {ai.litellm_key_set && <button className="btn sm ghost danger" onClick={() => clearKey("litellm_key")}>Remove</button>}</div></div>
             </>}
+            {me && <label className="toggle" style={{ margin: "6px 0 8px" }}><input type="checkbox" checked={form.users_may_use_org} onChange={(e) => set("users_may_use_org", e.target.checked)} /><span className="sw" />
+              People who haven't set their own AI (My AI) may use this organisation AI. Off: they need their own subscription or key.</label>}
             <label className="toggle" style={{ margin: "6px 0 14px" }}><input type="checkbox" checked={form.share_keys_with_agents} onChange={(e) => set("share_keys_with_agents", e.target.checked)} /><span className="sw" />
               Send API keys to remote machines with each run (only over HTTPS). Otherwise each machine uses its own subscription CLI or env key.</label>
             <div style={{ display: "flex", gap: 8 }}>
@@ -110,5 +113,115 @@ export default function Settings() {
         </div>
       </div>
     </section>
+  );
+}
+
+
+function Users() {
+  const { toast, me } = useApp();
+  const [users, setUsers] = useState([]);
+  const [f, setF] = useState({ username: "", name: "", email: "", role: "tester", password: "" });
+  const load = () => api("/api/users").then(setUsers).catch((e) => toast(e.message, true));
+  useEffect(() => { load(); }, []);
+  const add = async (e) => {
+    e.preventDefault();
+    try { await api("/api/users", { method: "POST", body: f }); setF({ username: "", name: "", email: "", role: "tester", password: "" }); load(); toast("User added"); }
+    catch (x) { toast(x.message, true); }
+  };
+  const upd = async (u, body, msg) => { try { await api(`/api/users/${u.id}`, { method: "PUT", body }); load(); toast(msg); } catch (x) { toast(x.message, true); } };
+  const del = async (u) => { if (!window.confirm(`Delete ${u.username}? Their runs stay.`)) return; try { await api(`/api/users/${u.id}`, { method: "DELETE" }); load(); } catch (x) { toast(x.message, true); } };
+  const reset = (u) => { const p = window.prompt(`New password for ${u.username} (at least 10 characters)`); if (p) upd(u, { password: p }, "Password reset; they were signed out"); };
+  return (
+    <div className="panel">
+      <div className="panel-h"><h3>Users</h3><span className="mut">{users.length}</span></div>
+      <div className="panel-b">
+        <table className="dt"><thead><tr><th>User</th><th>E-mail</th><th>Role</th><th>Sign-in</th><th>Last seen</th><th /></tr></thead><tbody>
+          {users.map((u) => <tr key={u.id} className={u.disabled ? "off" : ""}>
+            <td><b>{u.name}</b><div className="mut">{u.username}{u.id === me.id ? " (you)" : ""}</div></td>
+            <td>{u.email || "—"}</td>
+            <td><select value={u.role} disabled={u.id === me.id} onChange={(e) => upd(u, { role: e.target.value }, "Role changed")}>
+              {["admin", "tester", "viewer"].map((r) => <option key={r}>{r}</option>)}</select></td>
+            <td>{[u.has_password && "password", u.sso && "SSO"].filter(Boolean).join(" + ") || "—"}</td>
+            <td className="mut">{u.last_login ? new Date(u.last_login * 1000).toLocaleString() : "never"}</td>
+            <td style={{ whiteSpace: "nowrap" }}>
+              <button className="btn sm" onClick={() => reset(u)}>Set password</button>
+              {u.id !== me.id && <button className="btn sm" onClick={() => upd(u, { disabled: !u.disabled }, u.disabled ? "Enabled" : "Disabled; signed out")}>{u.disabled ? "Enable" : "Disable"}</button>}
+              {u.id !== me.id && <button className="btn sm ghost danger" onClick={() => del(u)}>Delete</button>}</td>
+          </tr>)}</tbody></table>
+        <form className="grid-add" onSubmit={add}>
+          <input placeholder="username" value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} required />
+          <input placeholder="name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+          <input placeholder="e-mail (links SSO sign-in)" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+          <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{["tester", "viewer", "admin"].map((r) => <option key={r}>{r}</option>)}</select>
+          <input type="password" placeholder="password (blank = SSO only)" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+          <button className="btn primary sm">Add user</button>
+        </form>
+        <p className="hint"><b>admin</b>: everything, including users, sign-in, organisation AI, machines and grids · <b>tester</b>: create, run and replay tests, own saved logins ·
+          <b> viewer</b>: read runs, reports and videos. Changing a role or password signs that person out.</p>
+      </div>
+    </div>
+  );
+}
+
+function SSO() {
+  const { toast } = useApp();
+  const [c, setC] = useState(null);
+  const [secret, setSecret] = useState("");
+  const load = () => api("/api/auth/sso-config").then((x) => setC({ enabled: false, auto_create: true, default_role: "tester", label: "Sign in with SSO", domains: [], ...x }));
+  useEffect(() => { load().catch((e) => toast(e.message, true)); }, []);
+  if (!c) return null;
+  const set = (k, v) => setC({ ...c, [k]: v });
+  const save = async () => {
+    try {
+      const body = { enabled: c.enabled, issuer: c.issuer || "", client_id: c.client_id || "", domains: c.domains, default_role: c.default_role,
+        auto_create: c.auto_create, label: c.label };
+      if (secret) body.client_secret = secret;
+      setC({ ...c, ...(await api("/api/auth/sso-config", { method: "PUT", body })) }); setSecret(""); toast("Sign-in settings saved");
+    } catch (e) { toast(e.message, true); }
+  };
+  return (
+    <div className="panel">
+      <div className="panel-h"><h3>Company sign-in (SSO)</h3></div>
+      <div className="panel-b">
+        <p className="hint" style={{ marginTop: 0 }}>OpenID Connect: Okta, Microsoft Entra ID (Azure AD), Google Workspace, Keycloak, Auth0, OneLogin, Ping…
+          Create a web application there with this <b>redirect URI</b>, then paste its issuer, client ID and secret.</p>
+        <div className="copy"><span>{c.redirect_uri}</span><button className="btn sm" onClick={() => navigator.clipboard?.writeText(c.redirect_uri).then(() => toast("Copied"))}><Icon name="copy" size={14} />Copy</button></div>
+        <label className="toggle" style={{ margin: "12px 0" }}><input type="checkbox" checked={!!c.enabled} onChange={(e) => set("enabled", e.target.checked)} /><span className="sw" />Show the SSO button on the sign-in page</label>
+        <div className="field"><span>Issuer URL</span><input className="mono" value={c.issuer || ""} onChange={(e) => set("issuer", e.target.value)}
+          placeholder="https://login.microsoftonline.com/<tenant>/v2.0 · https://<org>.okta.com · https://accounts.google.com" /></div>
+        <div className="grid2">
+          <div className="field"><span>Client ID</span><input className="mono" value={c.client_id || ""} onChange={(e) => set("client_id", e.target.value)} /></div>
+          <div className="field"><span>Client secret {c.client_secret_set && <span className="pill">saved</span>}</span>
+            <input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={c.client_secret_set ? "•••••• (type to replace)" : ""} /></div>
+        </div>
+        <div className="grid2">
+          <div className="field"><span>Allowed e-mail domains</span><input value={(c.domains || []).join(", ")} onChange={(e) => set("domains", e.target.value.split(",").map((d) => d.trim()).filter(Boolean))} placeholder="corp.com, corp.co.uk (empty = any)" /></div>
+          <div className="field"><span>Role for new people</span><select value={c.default_role} onChange={(e) => set("default_role", e.target.value)}>{["tester", "viewer", "admin"].map((r) => <option key={r}>{r}</option>)}</select></div>
+        </div>
+        <div className="grid2">
+          <div className="field"><span>Button label</span><input value={c.label || ""} onChange={(e) => set("label", e.target.value)} /></div>
+          <label className="toggle" style={{ marginTop: 22 }}><input type="checkbox" checked={c.auto_create !== false} onChange={(e) => set("auto_create", e.target.checked)} /><span className="sw" />
+            Create an account on first SSO sign-in (off: only people an admin added, matched by e-mail)</label>
+        </div>
+        <button className="btn primary" onClick={save}>Save sign-in settings</button>
+      </div>
+    </div>
+  );
+}
+
+export default function Settings() {
+  const { me } = useApp();
+  const [tab, setTab] = useState("ai");
+  if (!me) return <OrgAI />;                     // single-user mode: just the AI settings
+  return (
+    <>
+      <div className="seg" style={{ margin: "16px 24px 0" }}>
+        {[["ai", "Organisation AI"], ["sso", "Sign-in (SSO)"], ["users", "Users"]].map(([k, l]) =>
+          <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
+      </div>
+      {tab === "ai" && <OrgAI />}
+      {tab === "sso" && <section className="view on"><SSO /></section>}
+      {tab === "users" && <section className="view on"><Users /></section>}
+    </>
   );
 }

@@ -33,6 +33,7 @@ def _no_real_ai(request, monkeypatch):
     tests of the AI path inject a fake provider instead."""
     from aiauto.nlp import providers
     providers.configure(None)
+    monkeypatch.setenv("AIAUTO_AUTH", "off")         # single-user mode unless a test turns accounts on
     if "live_ai" not in request.keywords:
         monkeypatch.setenv("AIAUTO_DISABLE_LLM", "1")
     yield

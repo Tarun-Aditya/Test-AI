@@ -9,6 +9,7 @@ import Library from "./views/Library.jsx";
 import Machines from "./views/Machines.jsx";
 import Sessions from "./views/Sessions.jsx";
 import Settings from "./views/Settings.jsx";
+import MyAI from "./views/MyAI.jsx";
 import MachinePicker, { agentsOf } from "./components/MachinePicker.jsx";
 import RunDrawer from "./components/RunDrawer.jsx";
 
@@ -22,8 +23,11 @@ const VIEWS = {
   library: ["Script library", "Reusable scripts with native locators. Run them on any engine or machine", "lib"],
   machines: ["Machines", "Computers that can run tests", "pc"],
   sessions: ["Sessions", "Saved logins (cookies + localStorage) a run can start with", "key"],
-  settings: ["Settings", "AI provider: your subscription, an API key, or any model", "spark"],
+  myai: ["My AI", "Your own AI subscription or key, used for your runs", "spark"],
+  settings: ["Admin", "Organisation AI, sign-in (SSO) and users", "key"],
 };
+// which pages a role sees (no accounts = single user, sees everything except My AI)
+const visibleViews = (me) => Object.keys(VIEWS).filter((k) => (k === "myai" ? !!me : k === "settings" ? !me || me.role === "admin" : true));
 const THEMES = ["auto", "light", "dark"];
 
 function useHashRoute() {
@@ -36,8 +40,11 @@ function useHashRoute() {
   return route;
 }
 
-export default function App() {
+export default function App({ me = null, reloadMe = () => {} }) {
   const route = useHashRoute();
+  const role = me ? me.role : "admin";
+  const can = { run: role !== "viewer", admin: role === "admin" };
+  const [menu, setMenu] = useState(false);
   const [form, setFormState] = useState(loadForm);
   const [runs, setRuns] = useState([]);
   const [stats, setStats] = useState(null);
@@ -121,8 +128,17 @@ export default function App() {
 
   const ctx = useMemo(() => ({
     form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy,
-    loadRuns, loadMachines, loadSessions, loadLibrary, openRun: (id, tab) => setDrawer({ id, tab: tab || "overview" }),
-  }), [form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy, loadRuns, loadMachines, loadSessions, loadLibrary]);
+    loadRuns, loadMachines, loadSessions, loadLibrary, openRun: (id, tab) => setDrawer({ id, tab: tab || "overview" }), me, can,
+  }), [form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy, loadRuns, loadMachines, loadSessions, loadLibrary, me]);
+  const signOut = async () => { try { await api("/api/auth/logout", { method: "POST" }); } catch { /* already out */ } reloadMe(); };
+  const changePassword = async () => {
+    const current = me?.has_password ? window.prompt("Current password") : "";
+    if (current === null) return;
+    const next = window.prompt("New password (at least 10 characters)");
+    if (!next) return;
+    try { await api("/api/me/password", { method: "POST", body: { current, new: next } }); toast("Password changed. Other devices were signed out"); }
+    catch (e) { toast(e.message, true); }
+  };
 
   const liveCount = runs.filter(isLive).length;
   const [title, sub] = VIEWS[route.view];
@@ -135,7 +151,7 @@ export default function App() {
         <aside className="side">
           <div className="brand"><div className="logo"><Icon name="spark" /></div><div><b>Autopilot</b><small>AI test automation</small></div></div>
           <nav className="nav">
-            {Object.entries(VIEWS).map(([k, [label, , icon]]) => (
+            {Object.entries(VIEWS).filter(([k]) => visibleViews(me).includes(k)).map(([k, [label, , icon]]) => (
               <button key={k} className={route.view === k ? "on" : ""} onClick={() => nav(k)}>
                 <Icon name={icon} /><span className="lbl">{label === "Script library" ? "Library" : label}</span>
                 {k === "dashboard" && liveCount > 0 && <span className="count" style={{ background: "var(--warn-soft)", color: "var(--warn)" }}>{liveCount} live</span>}
@@ -144,6 +160,16 @@ export default function App() {
             ))}
           </nav>
           <div className="side-foot">
+            {me && <div className="usermenu">
+              <button className="userchip" aria-haspopup="true" aria-expanded={menu} onClick={() => setMenu(!menu)}>
+                <span className="avatar">{(me.name || me.username).slice(0, 1).toUpperCase()}</span>
+                <span className="ellipsis"><b>{me.name || me.username}</b><small>{me.role}{me.sso ? " · SSO" : ""}</small></span></button>
+              {menu && <div className="umenu" onMouseLeave={() => setMenu(false)}>
+                <button onClick={() => { setMenu(false); nav("myai"); }}>My AI subscription</button>
+                {me.has_password && <button onClick={() => { setMenu(false); changePassword(); }}>Change password</button>}
+                <button onClick={signOut}>Sign out</button>
+              </div>}
+            </div>}
             <button className="chip" title={health.llm} onClick={() => nav("settings")}><span className={"dotc " + (health.llm_on ? "ok" : "")} />AI {health.llm_on ? "on" : "off (rules)"}</button>
             <button className="theme" onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3])}><Icon name="moon" size={14} />Theme: {theme}</button>
           </div>
@@ -153,6 +179,7 @@ export default function App() {
           <header className="topbar">
             <div><h1>{title}</h1><div className="sub">{sub}</div></div>
             <div className="spacer" />
+            {can.run && <>
             <div className="seg" title="Execution engine. Both: every run once with Playwright and once with Selenium, in parallel">
               {[["playwright", "Playwright"], ["selenium", "Selenium"], ["both", "Both"]].map(([e, l]) =>
                 <button key={e} className={form.engine === e ? "on" : ""} onClick={() => setForm({ engine: e })}>{l}</button>)}
@@ -161,6 +188,8 @@ export default function App() {
               onChange={({ agents, spread }) => setForm({ agents, spread, agent: agents[0] })} />
             <label className="toggle"><input type="checkbox" checked={form.headless} onChange={(e) => setForm({ headless: e.target.checked })} /><span className="sw" />Headless</label>
             <button className="btn primary" disabled={busy} onClick={() => startRun()}><Icon name="play" size={14} />Run test</button>
+            </>}
+            {!can.run && <span className="pill">viewer: read-only</span>}
           </header>
 
           {route.view === "dashboard" && <Dashboard />}
@@ -169,7 +198,8 @@ export default function App() {
           {route.view === "library" && <Library />}
           {route.view === "machines" && <Machines />}
           {route.view === "sessions" && <Sessions />}
-          {route.view === "settings" && <Settings />}
+          {route.view === "settings" && (can.admin ? <Settings /> : <div className="view on"><div className="empty-state">Only admins can open this page.</div></div>)}
+          {route.view === "myai" && me && <MyAI />}
         </div>
       </div>
       {drawer && <RunDrawer {...drawer} onClose={() => setDrawer(null)} />}

@@ -19,6 +19,8 @@ AIAUTO_CLAUDE_CLI / AIAUTO_CURSOR_CLI / AIAUTO_COPILOT_CLI (binary paths).
 """
 from __future__ import annotations
 
+import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -46,9 +48,64 @@ CLI_TIMEOUT = int(os.getenv("AIAUTO_AI_TIMEOUT", "180"))
 
 # settings pushed by the hub (web UI) override the environment; keys never leave the machine they were set on
 _settings: dict[str, Any] = {}
-_failed: dict[str, str] = {}            # provider -> why it was skipped (cleared when settings change)
+# per-call settings (one user's own AI on a shared hub): `with using(settings): ...`
+_scoped: contextvars.ContextVar[dict | None] = contextvars.ContextVar("aiauto_ai_settings", default=None)
+_failed_by: dict[str, dict[str, str]] = {}   # settings fingerprint -> provider -> why it was skipped
 _lock = threading.Lock()
 _anthropic_client = None                # tests inject a mock client here
+_anthropic_clients: dict[str, Any] = {}  # per API key (each user's own key)
+
+# a user's subscription token for each CLI, passed to the CLI as the variable it reads
+TOKEN_ENV = {"claude-code": ("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
+             "copilot": ("copilot_token", "COPILOT_GITHUB_TOKEN"),
+             "cursor": ("cursor_key", "CURSOR_API_KEY")}
+
+
+def _active_settings() -> dict[str, Any]:
+    s = _scoped.get()
+    return s if s is not None else _settings
+
+
+def _fingerprint() -> str:
+    s = _active_settings()
+    return hashlib.sha256(json.dumps(s, sort_keys=True, default=str).encode()).hexdigest()[:16] if s is not _settings else "global"
+
+
+class _FailedView:
+    """`_failed[...]` for the settings currently in effect (each user's providers fail independently)."""
+
+    def _d(self) -> dict[str, str]:
+        return _failed_by.setdefault(_fingerprint(), {})
+
+    def __contains__(self, k):
+        return k in self._d()
+
+    def __getitem__(self, k):
+        return self._d()[k]
+
+    def __setitem__(self, k, v):
+        self._d()[k] = v
+
+    def clear(self):
+        _failed_by.clear()
+
+
+_failed = _FailedView()
+
+
+class using:
+    """Run AI calls with these settings (e.g. the signed-in user's own subscription), in this thread / task only."""
+
+    def __init__(self, settings: dict[str, Any] | None):
+        self.settings = None if settings is None else {k: v for k, v in settings.items() if v not in (None, "")}
+
+    def __enter__(self):
+        self._tok = _scoped.set(self.settings)
+        return self
+
+    def __exit__(self, *exc):
+        _scoped.reset(self._tok)
+        return False
 
 
 class ProviderError(Exception):
@@ -70,12 +127,21 @@ def configure(settings: dict[str, Any] | None) -> None:
 
 
 def setting(key: str, env: str | None = None, default: Any = None) -> Any:
-    return _settings.get(key) or (os.getenv(env) if env else None) or default
+    s = _active_settings()
+    if s is not _settings or s.get("scoped"):
+        # one user's own settings: never fall back to this server's environment (its keys / logins aren't theirs)
+        return s.get(key) or default
+    return s.get(key) or (os.getenv(env) if env else None) or default
+
+
+def _scoped_user() -> bool:
+    s = _active_settings()
+    return bool(s.get("scoped"))
 
 
 def chosen() -> str:
     p = (setting("provider", "AIAUTO_AI_PROVIDER", "auto") or "auto").lower()
-    return p if p in ORDER or p == "auto" else "auto"
+    return p if p in ORDER or p in ("auto", "none") else "auto"
 
 
 def model_for(name: str) -> str | None:
@@ -97,7 +163,7 @@ def _cli(name: str) -> list[str] | None:
     """The command that starts a provider CLI. The setting may be a path, a command line ("npx …"), or a list."""
     env = {"claude-code": "AIAUTO_CLAUDE_CLI", "cursor": "AIAUTO_CURSOR_CLI", "copilot": "AIAUTO_COPILOT_CLI"}[name]
     exe = {"claude-code": "claude", "cursor": "cursor-agent", "copilot": "copilot"}[name]
-    raw = setting(env.lower(), env)
+    raw = setting(env.lower()) or os.getenv(env)      # where the CLI is installed: machine config, not a credential
     if isinstance(raw, (list, tuple)):
         return [str(x) for x in raw] or None
     if raw:
@@ -143,12 +209,18 @@ def detect(name: str) -> tuple[bool, str]:
         return False, _failed[name]
     if name in ("claude-code", "cursor", "copilot"):
         cmd = _cli(name)
-        return (True, f"CLI found: {' '.join(cmd)}") if cmd else (False, "CLI not installed on this machine")
+        if not cmd:
+            return False, "CLI not installed on this machine"
+        if _scoped_user() and not setting(TOKEN_ENV[name][0]):
+            return False, "add your own token for this subscription (My AI)"
+        return True, f"CLI found: {' '.join(cmd)}" + (" · your token" if _scoped_user() else "")
     if name == "anthropic":
         try:
             import anthropic  # noqa: F401
         except ImportError:
             return False, "anthropic package not installed"
+        if _scoped_user():
+            return (True, "your API key") if setting("anthropic_key") else (False, "no API key of yours")
         return (True, "API key / profile found") if _anthropic_cred() or _anthropic_client else (False, "no API key")
     if name == "hub":
         return (True, f"via {setting('hub_url')}") if setting("hub_url") else (False, "only used by remote machines")
@@ -162,6 +234,8 @@ def detect(name: str) -> tuple[bool, str]:
 
 
 def candidates() -> list[str]:
+    if setting("provider") == "none":
+        return []
     c = chosen()
     names = ORDER if c == "auto" else [c, "hub"]      # a machine without the chosen provider asks the hub
     return [n for n in dict.fromkeys(names) if detect(n)[0]]
@@ -259,10 +333,30 @@ _FATAL = re.compile(r"not (logged|signed) in|login|log in|authenticat|unauthori[
                     r"quota|billing|api key|forbidden|401|403|not installed|no such file", re.I)
 
 
-def _run(cmd: list[str], stdin: str, cwd: str | None = None) -> subprocess.CompletedProcess:
+def _cli_env(name: str | None) -> dict[str, str]:
+    """Environment for a provider CLI. With one user's own settings: their token, and a private home/profile
+    directory, so the server's own login (or another user's) is never used and nothing leaks between users."""
+    env = {**os.environ, "NO_COLOR": "1"}
+    if name in TOKEN_ENV and setting(TOKEN_ENV[name][0]):
+        key, var = TOKEN_ENV[name]
+        env[var] = setting(key)
+        if name == "copilot":
+            env["GH_TOKEN"] = env["GITHUB_TOKEN"] = setting(key)
+    home = setting("isolate_dir")
+    if home:
+        os.makedirs(home, mode=0o700, exist_ok=True)
+        for var in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+            env[var] = home if var in ("HOME", "USERPROFILE") else os.path.join(home, {"XDG_CONFIG_HOME": ".config",
+                       "CLAUDE_CONFIG_DIR": ".claude", "XDG_DATA_HOME": ".local/share", "XDG_STATE_HOME": ".local/state"}[var])
+        for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY"):
+            env.pop(var, None)
+    return env
+
+
+def _run(cmd: list[str], stdin: str, cwd: str | None = None, provider: str | None = None) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=CLI_TIMEOUT, cwd=cwd,
-                              env={**os.environ, "NO_COLOR": "1"})
+                              env=_cli_env(provider))
     except FileNotFoundError as e:
         raise ProviderError(f"{cmd[0]} not installed", fatal=True) from e
     except subprocess.TimeoutExpired as e:
@@ -294,7 +388,7 @@ def _claude_code(system, user, schema, png, max_tokens, effort):
         m = model_for("claude-code")
         if m:
             cmd += ["--model", m]
-        r = _run(cmd, prompt, cwd=d)
+        r = _run(cmd, prompt, cwd=d, provider="claude-code")
     try:
         out = json.loads(r.stdout)
     except json.JSONDecodeError as e:
@@ -321,7 +415,7 @@ def _cursor(system, user, schema, png, max_tokens, effort):
         m = model_for("cursor")
         if m:
             cmd += ["--model", m]
-        r = _run(cmd + [prompt], "", cwd=d)
+        r = _run(cmd + [prompt], "", cwd=d, provider="cursor")
     text = r.stdout.strip()
     if r.returncode != 0 and not text:
         msg = (r.stderr or "").strip()[:300]
@@ -349,7 +443,7 @@ def _copilot(system, user, schema, png, max_tokens, effort):
         m = model_for("copilot")
         if m:
             cmd += ["--model", m]
-        r = _run(cmd, "", cwd=d)
+        r = _run(cmd, "", cwd=d, provider="copilot")
     if r.returncode != 0:
         msg = (r.stderr or r.stdout or "").strip()[:300]
         raise ProviderError(f"copilot: {msg or f'exit {r.returncode}'}", fatal=bool(_FATAL.search(msg)))
@@ -360,16 +454,21 @@ def _copilot(system, user, schema, png, max_tokens, effort):
 def _anthropic(system, user, schema, png, max_tokens, effort):
     global _anthropic_client
     import anthropic
-    if _anthropic_client is None:
-        key = setting("anthropic_key")
-        _anthropic_client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+    key = setting("anthropic_key")
+    if _anthropic_client is not None and not _scoped_user():
+        client = _anthropic_client
+    elif key:
+        client = _anthropic_clients.get(key) or _anthropic_clients.setdefault(key, anthropic.Anthropic(api_key=key))
+    else:
+        _anthropic_client = _anthropic_client or anthropic.Anthropic()
+        client = _anthropic_client
     content: Any = user
     if png:
         import base64
         content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(png).decode()}},
                    {"type": "text", "text": user}]
     try:
-        resp = _anthropic_client.beta.messages.create(
+        resp = client.beta.messages.create(
             model=model_for("anthropic"), max_tokens=max_tokens, system=system,
             messages=[{"role": "user", "content": content}],
             output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
@@ -441,7 +540,7 @@ def _hub(system, user, schema, png, max_tokens, effort):
     url = setting("hub_url").rstrip("/") + "/api/ai/call"
     headers = {"x-agent-token": setting("hub_token")} if setting("hub_token") else {}
     body = {"system": system, "user": user, "schema": schema, "max_tokens": max_tokens, "effort": effort,
-            "image_png": base64.b64encode(png).decode() if png else None}
+            "image_png": base64.b64encode(png).decode() if png else None, "run_id": setting("hub_run")}
     try:
         r = httpx.post(url, json=body, headers=headers, timeout=CLI_TIMEOUT + 60)
     except httpx.HTTPError as e:

@@ -37,11 +37,11 @@ def _start_hub(tmp_path, procs, env):
     raise AssertionError("hub did not start")
 
 
-def _start_agent(base, tmp_path, procs, env, name, slots=1):
+def _start_agent(base, tmp_path, procs, env, name, slots=1, token="t0k"):
     # headed runs need a screen: give the agent a virtual one where Xvfb is installed
     wrap = ["xvfb-run", "-a"] if shutil.which("xvfb-run") else []
     procs.append(subprocess.Popen([*wrap, sys.executable, "-m", "aiauto", "agent", "--server", base, "--name", name,
-                                   "--token", "t0k", "--slots", str(slots), "--out", str(tmp_path / f"out_{name}")],
+                                   "--token", token, "--slots", str(slots), "--out", str(tmp_path / f"out_{name}")],
                                   cwd=tmp_path, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     return bool(wrap)
 
@@ -343,3 +343,82 @@ def test_agent_without_ai_uses_the_hubs_subscription(cluster, tmp_path):
     assert run["status"] == "passed", [(st["idx"], st["error"]) for st in run["steps"] if st["error"]]
     assert run["agent"] == "docker-like"
     assert log.exists() and "--json-schema" in log.read_text(encoding="utf-8")     # answered by the hub's CLI
+
+
+def test_users_own_subscription_follows_their_runs_to_any_machine(cluster, tmp_path):
+    """Accounts on: Ann sets her own Claude token. Her run goes to an agent with no AI (like Docker); the canvas
+    screenshot call travels to the hub, which answers with ANN's token - never the server's or anyone else's."""
+    log = tmp_path / "hub-cli.log"
+    fake = tmp_path / "fake_claude.py"
+    answer = {"found": True, "x": 230, "y": 205, "reason": "Buy now"}
+    fake.write_text("import json, os, sys\n"
+                    f"open({str(log)!r}, 'a', encoding='utf-8').write(json.dumps(os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')) + '\\n')\n"
+                    f"print(json.dumps({{'type': 'result', 'is_error': False, 'structured_output': {answer!r}}}))\n", encoding="utf-8")
+    hub_cli = f'"{sys.executable}" "{fake}"' if os.name == "nt" else f"{sys.executable} {fake}"
+    nowhere = str(tmp_path / "not-installed")
+    no_ai = {"AIAUTO_DISABLE_LLM": None, "AIAUTO_CLAUDE_CLI": nowhere, "AIAUTO_CURSOR_CLI": nowhere,
+             "AIAUTO_COPILOT_CLI": nowhere, "AIAUTO_LITELLM_MODEL": None, "ANTHROPIC_API_KEY": None}
+    pw = "correct horse battery"
+    base, _ = cluster({"docker-like": 1}, agent_env=no_ai,
+                      hub_env={**no_ai, "AIAUTO_CLAUDE_CLI": hub_cli, "AIAUTO_AUTH": "on",
+                               "AIAUTO_ADMIN_USER": "admin", "AIAUTO_ADMIN_PASSWORD": pw})
+    W = {"X-Requested-With": "autopilot"}
+    admin = httpx.Client(base_url=base, timeout=30)
+    assert admin.post("/api/auth/login", json={"username": "admin", "password": pw}).status_code == 200
+    assert admin.post("/api/users", json={"username": "ann", "password": pw, "role": "tester"}, headers=W).status_code == 200
+    admin.put("/api/ai", json={"users_may_use_org": False}, headers=W)
+    ann = httpx.Client(base_url=base, timeout=30)
+    assert ann.post("/api/auth/login", json={"username": "ann", "password": pw}).status_code == 200
+    assert ann.put("/api/me/ai", json={"provider": "claude-code", "claude_token": "tok-ann"}, headers=W).status_code == 200
+    assert httpx.get(base + "/api/runs").status_code == 401                          # signed out: nothing
+    steps = [{"action": "navigate", "value": (EXAMPLES / "canvas.html").as_uri()},
+             {"action": "click", "target": "Buy now"}, {"action": "assert_text", "value": "Clicked Buy now"}]
+    r = ann.post("/api/runs", headers=W, json={"steps": steps, "name": "canvas", "agent": "docker-like",
+                 "config": {"engine": "playwright", "use_llm": True, "record_video": False, "timeout_ms": 3000}})
+    assert r.status_code == 200, r.text
+    rid = r.json()["run_ids"][0]
+    end = time.time() + 90
+    while time.time() < end and ann.get(f"/api/runs/{rid}").json()["status"] in ("queued", "dispatched", "running"):
+        time.sleep(0.5)
+    run = ann.get(f"/api/runs/{rid}").json()
+    assert run["status"] == "passed" and run["owner"] == "ann" and run["agent"] == "docker-like", \
+        [(s["idx"], s["error"]) for s in run["steps"] if s["error"]]
+    assert set(json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()) == {"tok-ann"}
+    # an AI call for a run that is not in progress is refused (agents can't use people's AI at will)
+    r = httpx.post(base + "/api/ai/call", headers={"x-agent-token": "t0k"},
+                   json={"system": "s", "user": "u", "schema": {"type": "object"}, "run_id": rid})
+    assert r.status_code == 403
+
+
+def test_per_machine_agent_tokens(cluster, tmp_path):
+    """Accounts on, no shared token: a machine needs its own token (made by an admin, shown once); revoking it
+    disconnects that machine and keeps it out."""
+    pw = "correct horse battery"
+    base, _ = cluster({}, hub_env={"AIAUTO_AUTH": "on", "AIAUTO_AGENT_TOKEN": None,
+                                   "AIAUTO_ADMIN_USER": "admin", "AIAUTO_ADMIN_PASSWORD": pw})
+    W = {"X-Requested-With": "autopilot"}
+    admin = httpx.Client(base_url=base, timeout=30)
+    admin.post("/api/auth/login", json={"username": "admin", "password": pw})
+    env = {k: v for k, v in os.environ.items() if k != "AIAUTO_AGENT_TOKEN"}
+    env["PYTHONPATH"] = os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])
+    procs = []
+    try:
+        _start_agent(base, tmp_path, procs, env, "no-token", token="")
+        time.sleep(4)
+        assert httpx.get(base + "/api/health").json()["agents"] == 0                 # refused
+        t = admin.post("/api/agent-tokens", json={"label": "qa-box"}, headers=W).json()
+        assert t["token"].startswith("apt_")
+        assert t["token"] not in json.dumps(admin.get("/api/agent-tokens").json())   # shown once, never listed
+        _start_agent(base, tmp_path, procs, env, "qa-box", token=t["token"])
+        _wait_agents(base, 1)
+        row = admin.get("/api/agent-tokens").json()[0]
+        assert row["last_machine"] == "qa-box" and row["last_used"]
+        assert admin.delete(f"/api/agent-tokens/{t['id']}", headers=W).status_code == 200
+        _wait_agents(base, 0)                                                         # disconnected now
+        time.sleep(3)
+        assert httpx.get(base + "/api/health").json()["agents"] == 0                 # and can't come back
+        r = httpx.post(base + "/api/agents/upload/x", headers={"x-agent-token": t["token"]}, files={"file": ("a.zip", b"x")})
+        assert r.status_code == 401
+    finally:
+        for p in procs:
+            p.terminate()

@@ -171,11 +171,14 @@ def _do_job(link: _Link, job: dict, server: str, token: str | None, out: Path, a
     test = TestCase.model_validate(job["test"])
     cfg = RunConfig.model_validate(job["config"])
     cfg.session_state = job.get("session_state")
-    if job.get("ai") is not None:        # the hub's AI choice; this machine's own CLIs / env keys still apply
-        from .nlp import providers
-        # without a usable provider here, AI calls go to the hub, which answers with its own (e.g. your
-        # subscription logged in on the hub's computer)
-        providers.configure({**job["ai"], **_local_ai(), "hub_url": server, "hub_token": token})
+    from .nlp import providers
+    ai = job.get("ai") or {}
+    if ai.get("provider") in ("hub", "none"):
+        # the run's owner uses their own AI account: every call goes to the hub (which holds their token)
+        ai_settings = {"provider": ai["provider"], "hub_url": server, "hub_token": token, "hub_run": run_id}
+    else:
+        # the hub's choice; this machine's own CLI login / env keys come first, then the hub answers
+        ai_settings = {**ai, **_local_ai(), "hub_url": server, "hub_token": token, "hub_run": run_id}
     final = {}
 
     def on_event(ev: dict) -> None:
@@ -186,11 +189,12 @@ def _do_job(link: _Link, job: dict, server: str, token: str | None, out: Path, a
 
     summary = None
     try:
-        summary = run_test(test, cfg, out, mode=job.get("mode", "ai"), on_event=on_event,
-                           agent=agent_name, run_id=run_id, runner_out=holder)
+        with providers.using(ai_settings):      # per job: parallel slots may serve different people
+            summary = run_test(test, cfg, out, mode=job.get("mode", "ai"), on_event=on_event,
+                               agent=agent_name, run_id=run_id, runner_out=holder)
         if cfg.save_session and holder and holder[0].saved_session:
             # session tokens go straight to the hub's session store, never into the artifacts zip
-            link.send({"type": "session", "name": cfg.save_session, "state": holder[0].saved_session})
+            link.send({"type": "session", "name": cfg.save_session, "state": holder[0].saved_session, "run_id": run_id})
     except Exception as e:
         log.exception("run failed")
         final = {"type": "run_finished", "run_id": run_id, "status": "failed", "error": str(e)}

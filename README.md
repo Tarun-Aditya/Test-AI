@@ -213,6 +213,45 @@ re-identifies the element from the step's description, marks the step *self-heal
 **new script with the repaired locators**. The generated scripts never self-heal: they are plain native code
 that either passes or fails.
 
+## Accounts: a shared platform for a team
+
+Host the hub once (a server or VM, or Docker) and everyone signs in from their browser. It works the same
+on `localhost` for one person.
+
+* **Sign-in**: built-in accounts (username + password, scrypt-hashed, with a lockout after repeated failures)
+  and/or **company SSO** over OpenID Connect: Okta, Microsoft Entra ID (Azure AD), Google Workspace, Keycloak,
+  Auth0 and so on (Admin → Sign-in). SSO tokens are signature-checked against the provider's keys. You can limit
+  sign-in to e-mail domains, and accounts are created on first sign-in (or only for people an admin added, matched
+  by e-mail).
+* **First start**: the log prints a one-time **setup code**; the first visitor enters it and becomes admin. Or set
+  `AIAUTO_ADMIN_USER` / `AIAUTO_ADMIN_PASSWORD` (Docker).
+* **Roles**: **admin** (users, sign-in, organisation AI, machines, grids, agent tokens) · **tester** (create,
+  run, replay, library, their own saved logins) · **viewer** (runs, reports, videos; read-only). Changing a
+  role or password, or disabling someone, signs them out at once.
+* **Ownership**: every run, library script and saved login records who made it, and the dashboard has an
+  *Everyone / Mine* filter. The team sees all runs, but only the owner (or an admin) can delete or stop them,
+  and a replay reuses the stored secrets only for the owner. **Saved logins (sessions) are private**: they
+  hold cookies.
+* **Each person's own AI (My AI)**: everyone can tie their own subscription or key to their account. Claude
+  (`claude setup-token`), GitHub Copilot (a GitHub token with Copilot access), Cursor (API key), an Anthropic
+  key, or any model via LiteLLM. It is used for **their** runs only, on whatever machine the run lands on:
+  agents send AI calls back to the hub, which answers with the run owner's settings. The subscription CLI runs
+  with that person's token in a private profile, so nobody's login is used for anyone else, and the server's
+  own keys and logins are never used for them. People who haven't set anything use the **organisation AI** the
+  admin configured (a company key or gateway), unless the admin turns that off.
+* **Secrets at rest**: AI tokens and keys, the SSO client secret and replay secrets are encrypted (Fernet) with
+  `AIAUTO_SECRET_KEY` or a generated key file next to the database. Keep that key safe and back it up with the
+  database.
+* **Agent tokens**: per machine (Machines → Agent tokens), shown once, stored as a hash, revocable. Revoking a
+  token disconnects that machine. With accounts on, agents must present a token (a per-machine one, or the
+  shared `AIAUTO_AGENT_TOKEN`).
+* **HTTPS**: `DOMAIN=autopilot.example.com docker compose --profile https up -d` puts Caddy in front of the hub
+  with an automatic Let's Encrypt certificate. Behind any proxy, cookies are marked `Secure` when the request
+  arrived over HTTPS. Set `AIAUTO_PUBLIC_URL=https://autopilot.example.com` so SSO redirects use it.
+* **Single user**: `AIAUTO_AUTH=off` turns accounts off (no sign-in), as before.
+* Writes need the `X-Requested-With: autopilot` header (the web app sends it), so another website can't make
+  your browser change things.
+
 ## Machines (run anywhere)
 
 The hub runs tests itself by default (*local*). Any other computer can register:
@@ -387,6 +426,11 @@ python -m aiauto parse "Open example.com then click More information"
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `AIAUTO_AUTH` | `on` | `off` = single user, no sign-in |
+| `AIAUTO_ADMIN_USER` / `AIAUTO_ADMIN_PASSWORD` | – | Create the first admin at startup |
+| `AIAUTO_SECRET_KEY` | generated file | Key for secrets at rest |
+| `AIAUTO_PUBLIC_URL` | – | External URL (SSO redirects) |
+| `AIAUTO_SESSION_HOURS` | `168` | How long a sign-in lasts |
 | `AIAUTO_AI_PROVIDER` | `auto` | `auto`, `claude-code`, `cursor`, `copilot`, `anthropic`, `litellm` (also in Settings → AI) |
 | `AIAUTO_MODEL` | `claude-opus-5-5` | Model for the chosen provider |
 | `ANTHROPIC_API_KEY` | – | Anthropic API key (`ant auth login` profiles work too) |
