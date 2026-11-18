@@ -4,7 +4,7 @@ import { useApp } from "../App.jsx";
 import { BROWSERS } from "../form.js";
 import Icon from "../icons.jsx";
 import CodeExplorer from "./CodeExplorer.jsx";
-import { ModeBadge, Status } from "../views/Dashboard.jsx";
+import { ModeBadge, Prov, Status } from "../views/Dashboard.jsx";
 
 const TABS = [["overview", "Overview"], ["code", "Code & files"], ["video", "Video"], ["report", "Report"], ["config", "Data & config"], ["replay", "Replay"]];
 
@@ -27,7 +27,9 @@ function Overview({ r }) {
       {r.steps.map((x) => (
         <div key={x.idx} className={"tstep " + x.status}>
           <span className="ic">{x.status === "passed" ? "✓" : x.status === "failed" ? "✕" : "–"}</span>
-          <div style={{ minWidth: 0 }}><div className="t1">{x.raw || x.action}</div>
+          <div style={{ minWidth: 0 }}><div className="t1">{x.raw || x.action} <Prov parsed={x.parsed_by} picked={x.picked_by} /></div>
+            {x.origin && x.origin !== x.raw && <div className="t2 origin">“{x.origin}”</div>}
+            {x.value && <div className="t2" style={{ color: "var(--ok)" }}>value: {x.value}</div>}
             <div className="t2">{x.healed ? <span className="heal">self-healed · </span> : null}{x.locator || x.action} · {secs(x.duration_ms)}</div>
             {x.error && <div className="err">{x.error}</div>}</div>
           {x.screenshot ? <a href={art(r.run_id, x.screenshot)} target="_blank" rel="noreferrer"><img loading="lazy" src={art(r.run_id, x.screenshot)} alt="" /></a> : <span className="noimg" />}
@@ -38,7 +40,7 @@ function Overview({ r }) {
 
 function Config({ r }) {
   const c = r.config || {};
-  const rows = [["Mode", r.mode === "replay" ? "Script (replay of generated script)" : "AI (plain English → locators)"], ["Engine", c.engine || r.engine],
+  const rows = [["Mode", r.mode === "replay" ? "Script (replay of generated script)" : r.parser === "rules" ? "English → steps by rule parser (AI off)" : r.parser === "user" ? "Steps edited by hand" : "English → steps by AI (Claude)"], ["Engine", c.engine || r.engine],
     ["Browser", c.browser || r.browser], ["Machine", r.agent], ["Headless", String(c.headless ?? "")], ["Step timeout", c.timeout_ms ? `${c.timeout_ms / 1000}s` : ""],
     ["Video", String(c.record_video ?? "")], ["Self-heal (engine)", String(c.self_heal ?? "")], ["Dialogs", c.dialogs], ["Session", c.session || "—"],
     ["Chrome profile", c.profile_dir || "—"], ["Iteration", r.iteration || "single"], ["Replay of", r.source_run || "—"], ["Run id", r.run_id]];
@@ -118,7 +120,7 @@ export default function RunDrawer({ id, tab: initialTab, onClose }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 className="ellipsis">{r ? r.test_name : "Loading…"}</h2>
           {r && <div className="mut" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
-            <Status s={r.status} /><ModeBadge mode={r.mode} />{r.engine}{r.browser ? ` / ${r.browser}` : ""} · {r.agent} · {(r.started_at || "").replace("T", " ").slice(0, 19)}</div>}
+            <Status s={r.status} /><ModeBadge mode={r.mode} parser={r.parser} />{r.engine}{r.browser ? ` / ${r.browser}` : ""} · {r.agent} · {(r.started_at || "").replace("T", " ").slice(0, 19)}</div>}
         </div>
         {done && <div className="links">
           <a href={`/api/runs/${encodeURIComponent(id)}/export`}><Icon name="up" size={12} style={{ transform: "rotate(180deg)" }} /> Export project</a>

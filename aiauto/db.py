@@ -59,9 +59,13 @@ class DB:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         have = {r[1] for r in self._conn.execute("PRAGMA table_info(runs)")}
-        for col in ("data_json", "sensitive_json", "source_run"):
+        for col in ("data_json", "sensitive_json", "source_run", "parser"):
             if col not in have:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        have = {r[1] for r in self._conn.execute("PRAGMA table_info(steps)")}
+        for col in ("parsed_by", "picked_by", "origin"):
+            if col not in have:
+                self._conn.execute(f"ALTER TABLE steps ADD COLUMN {col} TEXT")
         try:
             os.chmod(self.path, 0o600)   # holds replay secrets: owner-only
         except OSError:
@@ -102,7 +106,7 @@ class DB:
     # ------------------------------------------------------------------ runs
     def create_run(self, run: dict) -> None:
         cols = ["run_id", "test_name", "status", "engine", "browser", "agent", "mode", "started_at", "total",
-                "iteration", "batch_id", "config_json", "created", "data_json", "sensitive_json", "source_run"]
+                "iteration", "batch_id", "config_json", "created", "data_json", "sensitive_json", "source_run", "parser"]
         run = {**run, "created": run.get("created", time.time())}
         self.x(f"INSERT OR REPLACE INTO runs ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                [run.get(c) for c in cols])
@@ -122,18 +126,19 @@ class DB:
                             **({"agent": ev["agent"]} if ev.get("agent") else {}))
         elif t == "step_started":
             self.update_run(rid, current_step=ev.get("raw"))
-            self.x("INSERT OR REPLACE INTO steps (run_id, idx, status, raw, action, target, value) VALUES (?,?,?,?,?,?,?)",
-                   (rid, ev["index"], "running", ev.get("raw"), ev.get("action"), ev.get("target"), ev.get("value")))
+            self.x("INSERT OR REPLACE INTO steps (run_id, idx, status, raw, action, target, value, origin, parsed_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                   (rid, ev["index"], "running", ev.get("raw"), ev.get("action"), ev.get("target"), ev.get("value"), ev.get("origin"), ev.get("parsed_by")))
         elif t == "step_finished":
             with self.tx() as c:
-                c.execute("""INSERT INTO steps (run_id, idx, status, raw, action, locator, error, screenshot, url, duration_ms, healed, dialog)
-                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                             ON CONFLICT(run_id, idx) DO UPDATE SET status=excluded.status, locator=excluded.locator,
+                c.execute("""INSERT INTO steps (run_id, idx, status, raw, action, locator, error, screenshot, url, duration_ms, healed, dialog, picked_by)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             ON CONFLICT(run_id, idx) DO UPDATE SET status=excluded.status, locator=excluded.locator, picked_by=excluded.picked_by,
                              error=excluded.error, screenshot=excluded.screenshot, url=excluded.url,
                              duration_ms=excluded.duration_ms, healed=excluded.healed, dialog=excluded.dialog,
                              raw=COALESCE(excluded.raw, steps.raw), action=COALESCE(excluded.action, steps.action)""",
                           (rid, ev["index"], ev.get("status"), ev.get("raw"), ev.get("action"), ev.get("locator"), ev.get("error"),
-                           ev.get("screenshot"), ev.get("url"), ev.get("duration_ms"), 1 if ev.get("healed") else 0, ev.get("dialog")))
+                           ev.get("screenshot"), ev.get("url"), ev.get("duration_ms"), 1 if ev.get("healed") else 0, ev.get("dialog"),
+                           ev.get("picked_by")))
                 st = ev.get("status")
                 c.execute(f"""UPDATE runs SET done=done+1, passed=passed+?, failed=failed+?, healed=healed+?,
                               thumb=COALESCE(?, thumb) WHERE run_id=?""",
@@ -152,13 +157,13 @@ class DB:
         res = s.get("results", [])
         shots = [r["screenshot"] for r in res if r.get("screenshot")]
         err = next((r.get("error") for r in res if r.get("status") == "failed"), None)
-        existing = self.one("SELECT run_id, created, config_json, batch_id, iteration, browser, data_json, sensitive_json, source_run FROM runs WHERE run_id=?", (s["run_id"],))
+        existing = self.one("SELECT run_id, created, config_json, batch_id, iteration, browser, data_json, sensitive_json, source_run, parser FROM runs WHERE run_id=?", (s["run_id"],))
         created = existing["created"] if existing else (datetime.fromisoformat(s["started_at"]).timestamp() if s.get("started_at") else p.stat().st_mtime)
         with self.tx() as c:
             c.execute("""INSERT OR REPLACE INTO runs (run_id, test_name, status, engine, browser, agent, mode, started_at, finished_at,
                          duration_ms, total, done, passed, failed, healed, current_step, video, thumb, error, iteration, batch_id, config_json, created,
-                         data_json, sensitive_json, source_run)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         data_json, sensitive_json, source_run, parser)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (s["run_id"], s.get("test_name"), s.get("status"), s.get("engine"), existing and existing["browser"], s.get("agent"),
                        s.get("mode"), s.get("started_at"), s.get("finished_at"), s.get("duration_ms", 0), len(res), len(res),
                        sum(1 for r in res if r.get("status") == "passed"), sum(1 for r in res if r.get("status") == "failed"),
@@ -166,16 +171,18 @@ class DB:
                        existing and existing["iteration"], existing and existing["batch_id"], existing and existing["config_json"], created,
                        (existing and existing["data_json"]) or _read(Path(run_dir) / "data.json"),
                        (existing and existing["sensitive_json"]) or json.dumps(_script_sensitive(Path(run_dir))),
-                       existing and existing["source_run"]))
+                       existing and existing["source_run"],
+                       (existing and existing["parser"]) or _parser_of(Path(run_dir), s.get("mode"))))
             c.execute("DELETE FROM steps WHERE run_id=?", (s["run_id"],))
             for r in res:
                 st = r.get("step", {})
                 loc = st.get("locator")
                 c.execute("""INSERT OR REPLACE INTO steps (run_id, idx, status, raw, action, target, value, locator, error, screenshot,
-                             url, duration_ms, healed, dialog) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                             url, duration_ms, healed, dialog, parsed_by, picked_by, origin) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                           (s["run_id"], r["index"], r.get("status"), st.get("raw"), st.get("action"), st.get("target"),
                            r.get("shown_value"), _loc_label(loc), r.get("error"), r.get("screenshot"), r.get("url"),
-                           r.get("duration_ms"), 1 if r.get("healed") else 0, r.get("dialog")))
+                           r.get("duration_ms"), 1 if r.get("healed") else 0, r.get("dialog"), st.get("source"), r.get("picked_by"),
+                           st.get("origin")))
 
     def import_artifacts(self, root: Path) -> int:
         """Pick up run folders that aren't in the DB yet (e.g. created before the DB existed)."""
@@ -189,6 +196,11 @@ class DB:
                 except Exception:
                     pass
         return n
+
+    def backfill_parser(self, root: Path) -> None:
+        """Older rows have no 'parser': work it out from their script.json so badges are truthful."""
+        for r in self.q("SELECT run_id, mode FROM runs WHERE parser IS NULL"):
+            self.update_run(r["run_id"], parser=_parser_of(Path(root) / r["run_id"], r["mode"]))
 
     def put_secrets(self, run_id: str, secrets: dict) -> None:
         if secrets:
@@ -319,6 +331,20 @@ class DB:
 
     def machine_delete(self, name: str) -> None:
         self.x("DELETE FROM machines WHERE name=?", (name,))
+
+
+def _parser_of(run_dir: Path, mode: str | None) -> str:
+    if mode == "replay":
+        return "script"
+    try:
+        srcs = {st.get("source") for st in json.loads((run_dir / "script.json").read_text()).get("steps", [])}
+        if "ai" in srcs:
+            return "ai"
+        if "user" in srcs:
+            return "user"
+        return "rules"          # includes runs recorded before provenance existed (AI was not configured)
+    except Exception:
+        return "rules"
 
 
 def _read(p: Path) -> str | None:

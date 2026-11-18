@@ -88,7 +88,8 @@ def _body(st: Step, lines: list[str]) -> list[str]:
 
 def _comment(st: Step, i: int) -> str:
     raw = (st.raw or f"{st.action.value} {st.target or ''} {st.value or ''}").replace("\n", " ")
-    return f"    # Step {i}: {raw}"
+    origin = f'   (from: "{st.origin}")' if st.origin and st.origin != st.raw else ""
+    return f"    # Step {i}: {raw}{origin}".replace("\n", " ")
 
 
 def _header(test: TestCase, fname: str, engine: str) -> str:

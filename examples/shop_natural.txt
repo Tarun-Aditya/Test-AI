@@ -1,0 +1,2 @@
+Go to ${base_url}/index.html, search for a ${product} and open the first ${brand} result.
+Add ${qty} of them to the cart, then go to the cart and make sure it shows ${brand}.

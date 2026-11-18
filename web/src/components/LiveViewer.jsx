@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
-import { Status } from "../views/Dashboard.jsx";
+import { Prov, Status } from "../views/Dashboard.jsx";
 
 const ICON = { passed: "✓", failed: "✕", skipped: "–" };
 
@@ -39,9 +39,10 @@ export default function LiveViewer({ runId }) {
     switch (e.type) {
       case "run_started": setRun((r) => ({ ...(r || {}), status: "running", total: e.total, test_name: e.test, engine: e.engine, agent: e.agent || r?.agent })); break;
       case "live_frame": setFrame(`data:${e.mime};base64,${e.image}`); break;
-      case "step_started": put(e.index, { status: "running", raw: e.raw, action: e.action, value: e.value, error: null }); setCaption(`Step ${e.index + 1} · ${e.raw}`); break;
+      case "step_started": put(e.index, { status: "running", raw: e.raw, action: e.action, value: e.value, error: null, origin: e.origin, parsed_by: e.parsed_by }); setCaption(`Step ${e.index + 1} · ${e.raw}`); break;
       case "step_finished":
-        put(e.index, { status: e.status, raw: e.raw, locator: e.locator, error: e.error, healed: e.healed, url: e.url, duration_ms: e.duration_ms, dialog: e.dialog });
+        put(e.index, { status: e.status, raw: e.raw, locator: e.locator, error: e.error, healed: e.healed, url: e.url, duration_ms: e.duration_ms, dialog: e.dialog,
+          picked_by: e.picked_by, parsed_by: e.parsed_by, origin: e.origin });
         if (e.url) setUrl(e.url);
         break;
       case "step_shot": put(e.index, { img: `data:${e.mime};base64,${e.image}` }); break;
@@ -112,7 +113,8 @@ export default function LiveViewer({ runId }) {
             <div key={s.idx} className={`tstep ${s.status || ""} ${selected === s.idx ? "active" : ""}`} onClick={() => s.img && setSelected(selected === s.idx ? null : s.idx)}>
               <span className="ic">{s.status === "running" ? "" : ICON[s.status] || s.idx + 1}</span>
               <div style={{ minWidth: 0 }}>
-                <div className="t1">{s.raw || s.action}</div>
+                <div className="t1">{s.raw || s.action} <Prov parsed={s.parsed_by} picked={s.picked_by} /></div>
+                {s.origin && s.origin !== s.raw && <div className="t2 origin">“{s.origin}”</div>}
                 <div className="t2">{s.healed ? <span className="heal">self-healed · </span> : null}{s.locator || s.action}{s.duration_ms ? ` · ${secs(s.duration_ms)}` : ""}</div>
                 {s.dialog && <div className="t2">dialog: {s.dialog}</div>}
                 {s.error && <div className="err">{s.error}</div>}

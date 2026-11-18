@@ -48,6 +48,7 @@ class Runner:
         self.engine: Engine | None = None
         self.mask = Masker(test.data, test.sensitive)
         self.saved_session: dict | None = None
+        self._picked: str | None = None
 
     # ---------------------------------------------------------------- public
     def run(self) -> RunSummary:
@@ -74,6 +75,7 @@ class Runner:
                 self._emit("step_finished", index=i, status=res.status.value, error=res.error, healed=res.healed,
                            screenshot=res.screenshot, raw=template_step.raw, action=template_step.action.value,
                            locator=template_step.locator.label() if template_step.locator else None,
+                           parsed_by=template_step.source, picked_by=res.picked_by, origin=self.mask(template_step.origin),
                            url=res.url, duration_ms=res.duration_ms, dialog=res.dialog)
             if self.config.save_session and not failed:
                 self.saved_session = self.engine.storage_state()
@@ -110,7 +112,9 @@ class Runner:
         secret = self.mask.is_sensitive_template(step.value) or (value and value in self.mask.values)
         shown = MASK if secret and value else self.mask(value)
         live = step.model_copy(update={"target": target, "value": value})
+        self._picked = None
         self._emit("step_started", index=i, raw=self.mask(step.raw), action=step.action.value,
+                   origin=self.mask(step.origin), parsed_by=step.source,
                    target=self.mask(target), value=shown)
         res = StepResult(index=i, step=step, status=StepStatus.PASSED, shown_value=shown)
         e.last_dialog = None
@@ -124,6 +128,7 @@ class Runner:
             if needs_el:
                 loc, healed = self._resolve(live, step, target)
                 res.healed = healed
+                res.picked_by = self._picked
                 if self.config.screenshot_each_step:
                     e.highlight(loc)
                 if secret and step.action in (Action.TYPE, Action.APPEND):
@@ -177,6 +182,7 @@ class Runner:
                         template.locator, template.fallbacks = loc, [l for l in stored if l is not loc][:3]
                     if idx > 0:
                         self._emit("healing", target=self.mask(target), how=f"fallback locator {loc.label()}")
+                    self._picked = "script" if idx == 0 else "fallback"
                     return loc, idx > 0
             if not self.config.self_heal:
                 raise StepError(f"Element not found with stored locator {stored_primary.label()} (self-heal off)")
@@ -199,6 +205,7 @@ class Runner:
             if winner:
                 verified = self._verify(winner)
                 if verified:
+                    self._picked = winner.get("picked_by") or "heuristic"
                     if attr == "locator":
                         template.locator, template.fallbacks = verified[0], verified[1:4]
                     else:
@@ -254,7 +261,10 @@ class Runner:
         elif a == Action.RIGHT_CLICK:
             e.click(loc, button="right")
         elif a == Action.TYPE:
-            e.fill(loc, v or "", clear=True)
+            if e.info(loc)["tag"] == "select":       # "set Country to India" on a <select>
+                e.select(loc, [v or ""])
+            else:
+                e.fill(loc, v or "", clear=True)
         elif a == Action.APPEND:
             e.fill(loc, v or "", clear=False)
         elif a == Action.PRESS:
@@ -264,8 +274,11 @@ class Runner:
             time.sleep(0.4)  # let menus open for the screenshot
         elif a == Action.SELECT:
             options = [o.strip() for o in (v or "").split("|") if o.strip()]
-            if e.info(loc)["tag"] == "select":
+            info = e.info(loc)
+            if info["tag"] == "select":
                 e.select(loc, options)
+            elif info["tag"] in ("input", "textarea") and info["type"] not in ("checkbox", "radio"):
+                e.fill(loc, options[0] if options else "", clear=True)   # "choose 3 as quantity" on a number input
             else:   # custom dropdown: open it, then click each option by its text
                 for opt in options:
                     e.click(loc)

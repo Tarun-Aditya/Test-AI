@@ -15,10 +15,26 @@ export function StepBar({ r }) {
   );
 }
 
-export function ModeBadge({ mode }) {
-  const script = mode === "replay";
-  return <span className={"mode " + (script ? "script" : "ai")} title={script ? "Replayed the generated script (stored native locators)" : "Plain English interpreted by AI"}>
-    {script ? "Script" : "AI"}</span>;
+const MODES = {
+  ai: ["AI", "ai", "English broken into steps by AI (Claude)"],
+  rules: ["Rules", "rules", "English broken into steps by the built-in rule parser (AI off)"],
+  user: ["Edited", "rules", "Steps reviewed or edited by hand before running"],
+  script: ["Script", "script", "Replayed a generated script: stored native locators, no AI parsing"],
+};
+export function ModeBadge({ mode, parser }) {
+  const key = mode === "replay" ? "script" : parser || "ai";
+  const [label, cls, title] = MODES[key] || MODES.ai;
+  return <span className={"mode " + cls} title={title}>{label}</span>;
+}
+
+/** Who did what for one step: AI or rules split the English, AI or heuristics picked the element. */
+export function Prov({ parsed, picked }) {
+  const P = { ai: "AI", rules: "rules", user: "edited" };
+  const K = { ai: "AI", heuristic: "heuristic", script: "script locator", fallback: "fallback locator" };
+  return <>
+    {parsed && <span className={"prov " + (parsed === "ai" ? "ai" : "")} title="Who turned the English into this step">step: {P[parsed] || parsed}</span>}
+    {picked && <span className={"prov " + (picked === "ai" ? "ai" : "")} title="How the element was identified">element: {K[picked] || picked}</span>}
+  </>;
 }
 
 export function Status({ s }) {
@@ -76,7 +92,7 @@ export default function Dashboard() {
         {live.length ? live.map((r) => (
           <div className="running-row" key={r.run_id}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Status s={r.status} /><ModeBadge mode={r.mode} /><b className="ellipsis">{r.test_name}</b></div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Status s={r.status} /><ModeBadge mode={r.mode} parser={r.parser} /><b className="ellipsis">{r.test_name}</b></div>
               <div className="mut ellipsis" style={{ marginTop: 4 }}>{r.engine}{r.browser ? ` · ${r.browser}` : ""} · {r.agent} · {r.current_step ? `▶ ${r.current_step}` : "starting…"}</div>
             </div>
             <div><StepBar r={r} /><div className="mut" style={{ marginTop: 4 }}>{r.done || 0} / {r.total} steps{r.failed_steps ? <span style={{ color: "var(--bad)" }}> · {r.failed_steps} failed</span> : null}</div></div>
@@ -89,13 +105,20 @@ export default function Dashboard() {
         <div className="seg">{[["", "All"], ["passed", "Passed"], ["failed", "Failed"], ["interrupted", "Interrupted"]].map(([k, l]) =>
           <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{l}</button>)}</div>
         <button className="btn sm" onClick={() => nav("runs")}>Table view</button></div>
+      <div className="legend">
+        <span>How each run's steps were made:</span>
+        <span><ModeBadge mode="ai" parser="ai" /> Claude (AI) turned your English into steps</span>
+        <span><ModeBadge mode="ai" parser="rules" /> built-in rule parser, used when AI is off</span>
+        <span><ModeBadge mode="ai" parser="user" /> you edited the steps</span>
+        <span><ModeBadge mode="replay" /> replay of a generated script, no parsing</span>
+      </div>
       <div className="runcards">
         {recent.map((r) => (
           <div className="rc" key={r.run_id} onClick={() => openRun(r.run_id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && openRun(r.run_id)}>
             <div className="th">
               {r.thumb && <img loading="lazy" src={art(r.run_id, r.thumb)} alt="" onError={(e) => (e.currentTarget.style.display = "none")} />}
               <Status s={r.status} />
-              <span className="mode-pos"><ModeBadge mode={r.mode} /></span>
+              <span className="mode-pos"><ModeBadge mode={r.mode} parser={r.parser} /></span>
               {r.video && <span className="vid"><Icon name="video" size={13} /></span>}
               <span className="dur">{secs(r.duration_ms)}</span>
             </div>

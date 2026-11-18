@@ -199,7 +199,7 @@ ROLE_WORDS = {
 STOP = {"the", "a", "an", "on", "in", "into", "to", "of", "for", "with", "at", "field", "button", "link", "box",
         "textbox", "input", "dropdown", "menu", "checkbox", "radio", "tab", "icon", "image", "element", "option",
         "btn", "text", "area", "page", "heading", "title", "item", "result", "results", "containing", "named",
-        "called", "labelled", "labeled", "slider", "editor"}
+        "called", "labelled", "labeled", "slider", "editor", "or", "and"}
 
 
 def _kinds(c: dict) -> set[str]:
@@ -323,8 +323,13 @@ def nth_match(step: Step, candidates: list[dict], target: str, n: int) -> tuple[
     """Ordinal pick ('first result containing Logitech'): nth match in document order, de-duplicated so a
     link and the span inside it count once."""
     pool = []
+    generic = all(w in STOP for w in _tokens(target))      # "the first result" / "the second product"
     for c in candidates:
-        if _contains_all(target, c) and _action_fit(step.action, c) >= 0:
+        if generic:
+            ok = (c.get("role") in ("link", "button") or c["tag"] in ("a", "button")) and len(c.get("name") or c.get("text") or "") >= 15
+        else:
+            ok = _contains_all(target, c)
+        if ok and _action_fit(step.action, c) >= 0:
             c = dict(c)
             c["score"] = score(step, c, target)
             pool.append(c)
@@ -338,7 +343,10 @@ def nth_match(step: Step, candidates: list[dict], target: str, n: int) -> tuple[
             kept[kept.index(dup)] = c       # prefer the better-scoring (usually clickable) one
     if n < 0:
         n = len(kept) + n
-    return (kept[n] if 0 <= n < len(kept) else None), kept[:8]
+    win = kept[n] if 0 <= n < len(kept) else None
+    if win:
+        win["picked_by"] = "heuristic"
+    return win, kept[:8]
 
 
 def choose(step: Step, candidates: list[dict], target: str | None = None, use_llm: bool = True) -> tuple[dict | None, list[dict]]:
@@ -348,6 +356,8 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
         return nth_match(step, candidates, target, step.nth)
     ranked = rank(step, candidates, target)
     winner = ranked[0] if ranked and ranked[0]["score"] >= 1.0 else None
+    if winner:
+        winner["picked_by"] = "heuristic"
     ambiguous = len(ranked) > 1 and (winner is None or ranked[0]["score"] - ranked[1]["score"] < 0.35)
     if use_llm and ambiguous and ranked:
         from .nlp import llm
@@ -356,6 +366,7 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
             idx = llm.pick_candidate(probe, ranked)
             if idx is not None:
                 winner = ranked[idx]
+                winner["picked_by"] = "ai"
     return winner, ranked
 
 
@@ -378,5 +389,5 @@ def describe(c: dict) -> str:
 def to_locators(c: dict) -> list[Locator]:
     desc = describe(c)
     return [Locator(strategy=l["strategy"], value=l["value"], role=l.get("role"), frames=c.get("frames", []),
-                    shadow=c.get("shadow", []), score=c.get("score", 0), description=desc)
+                    shadow=c.get("shadow", []), score=c.get("score", 0), description=desc, picked_by=c.get("picked_by"))
             for l in c.get("locators", [])]

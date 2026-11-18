@@ -92,6 +92,7 @@ hub = Hub()
 async def _startup():
     hub.loop = asyncio.get_running_loop()
     interrupted = db.recover()
+    db.backfill_parser(ARTIFACTS)
     imported = db.import_artifacts(ARTIFACTS)
     _import_legacy_files()
     log.info("db=%s artifacts=%s | recovered %d interrupted, imported %d runs | LLM: %s",
@@ -185,6 +186,7 @@ def api_parse(req: ParseRequest):
 async def api_run(req: RunRequest):
     data, sens = normalize(_data(req.data), req.sensitive)
     mode = "ai"
+    parser = "user"
     source_run = None
     if req.replay_run_id or req.library:
         if req.replay_run_id:
@@ -206,13 +208,16 @@ async def api_run(req: RunRequest):
             test = TestCase.model_validate(raw)
         test = test.model_copy(update={"data": data if source_run else {**test.data, **data},
                                        "sensitive": sorted(set(test.sensitive) | set(sens))})
-        mode = "replay"
+        mode, parser = "replay", "script"
     elif req.steps:
         test = TestCase(name=req.name or "Edited test", steps=req.steps, data=data, sensitive=sens, source_text=req.text or "")
+        srcs = {s.source for s in req.steps}
+        parser = "ai" if "ai" in srcs else "rules" if "rules" in srcs else "user"
     elif req.text:
         test, info = await asyncio.to_thread(parse_text, req.text, data, req.name, req.config.use_llm, sens)
         if info["unparsed"]:
             raise HTTPException(422, {"message": "Some sentences were not understood", "unparsed": info["unparsed"]})
+        parser = "ai" if info["parser"].startswith("llm") else "rules"
     else:
         raise HTTPException(400, "Provide text, steps, replay_run_id or library")
 
@@ -238,9 +243,11 @@ async def api_run(req: RunRequest):
         raise HTTPException(404, f"Machine '{req.agent}' is not connected")
 
     batch = uuid.uuid4().hex[:8] if len(plan) > 1 else None
+    labels = _iteration_labels([(row, c) for row, c, _ in plan], test.sensitive) if len(plan) > 1 else [None]
     run_ids = []
-    for row, c, label in plan:
-        t = test.model_copy(update={"data": row, "name": f"{test.name} [{label}]" if label else test.name})
+    for (row, c, _), label in zip(plan, labels):
+        name = _display_name(test.name, row, test.sensitive)
+        t = test.model_copy(update={"data": row, "name": f"{name} · {label}" if label else name})
         rid = new_run_id(t.name)
         run_ids.append(rid)
         job = {"run_id": rid, "test": json.loads(t.model_dump_json()), "config": c.model_dump(),
@@ -249,7 +256,7 @@ async def api_run(req: RunRequest):
                        "agent": req.agent, "mode": mode, "started_at": now_iso(), "total": len(t.steps),
                        "iteration": label, "batch_id": batch, "config_json": c.model_dump_json(),
                        "data_json": json.dumps(masked_data(row, t.sensitive)), "sensitive_json": json.dumps(t.sensitive),
-                       "source_run": source_run})
+                       "source_run": source_run, "parser": parser})
         secrets = {}
         for k in t.sensitive:
             try:
@@ -575,6 +582,27 @@ def _data(d: Any) -> dict:
         return load_data(d)
     except (ValueError, json.JSONDecodeError) as e:
         raise HTTPException(400, f"Invalid data: {e}")
+
+
+def _display_name(name: str, row: dict, sensitive: list[str]) -> str:
+    """Fill ${placeholders} in a test name with this run's values (secrets stay masked)."""
+    from ..data import Masker, substitute
+    return Masker(row, sensitive)(substitute(name, row)) or name
+
+
+def _iteration_labels(rows: list[tuple[dict, RunConfig]], sensitive: list[str]) -> list[str]:
+    """'#2 HP, qty 1 · chrome': the iteration number plus the data values and browser that differ."""
+    from ..data import flatten_items
+    flat = [dict(flatten_items(r)) for r, _ in rows]
+    keys = [k for k in dict.fromkeys(k for f in flat for k in f)
+            if k not in sensitive and len({str(f.get(k)) for f in flat}) > 1][:2]
+    browsers_differ = len({c.browser for _, c in rows}) > 1
+    out = []
+    for i, (f, (_, c)) in enumerate(zip(flat, rows), 1):
+        bits = [str(f.get(k))[:24] if j == 0 else f"{k.split('.')[-1]} {str(f.get(k))[:16]}" for j, k in enumerate(keys)]
+        label = f"#{i}" + (f" {', '.join(bits)}" if bits else "")
+        out.append(label + (f" · {c.browser}" if browsers_differ else ""))
+    return out
 
 
 def _merge(a: dict, b: dict) -> dict:

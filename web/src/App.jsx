@@ -94,7 +94,12 @@ export default function App() {
       const body = { data: d.data, sensitive: d.sensitive, iterations: d.iterations || null, config: runConfig(form), agent: form.agent, ...extra };
       if (!extra.library && !extra.replay_run_id) {
         if (form.srcMode === "lib") { if (!form.libName) throw new Error("Pick a script from the library"); body.library = form.libName; }
-        else { if (!form.text.trim()) throw new Error("Write some steps first"); body.text = form.text; body.name = (form.name || "").trim() || null; }
+        else {
+          if (!form.text.trim()) throw new Error("Describe the test first");
+          body.text = form.text; body.name = (form.name || "").trim() || null;
+          // run the reviewed / edited breakdown when it still matches the text
+          if (form.steps && form.steps.length && form.stepsText === form.text) body.steps = form.steps;
+        }
       }
       const r = await api("/api/runs", { method: "POST", body });
       loadRuns();

@@ -69,6 +69,15 @@ def normalize(data: dict[str, Any], sensitive: Iterable[str] = ()) -> tuple[dict
     return plain, sorted(keys)
 
 
+def flatten_items(d: Any, prefix: str = ""):
+    """('user.email', 'a@b.c') pairs for nested data."""
+    if isinstance(d, dict):
+        for k, v in d.items():
+            yield from flatten_items(v, f"{prefix}{k}.")
+    else:
+        yield prefix.rstrip("."), d
+
+
 def lookup(data: dict[str, Any], path: str) -> Any:
     cur: Any = data
     for token in re.findall(r"[^.\[\]]+", path):

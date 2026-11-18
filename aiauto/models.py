@@ -67,6 +67,7 @@ class Locator(BaseModel):
     shadow: list[str] = Field(default_factory=list)
     score: float = 0.0
     description: str = ""
+    picked_by: Optional[str] = None   # how the element was identified: ai | heuristic
 
     def label(self) -> str:
         where = "".join(f"iframe[{f}] » " for f in self.frames) + "".join(f"shadow[{s}] » " for s in self.shadow)
@@ -80,7 +81,9 @@ class Step(BaseModel):
     target: Optional[str] = Field(None, description="Natural-language description of the element, e.g. 'Login button'")
     value: Optional[str] = Field(None, description="Text to type, URL, key, option, expected text, seconds ...")
     nth: Optional[int] = Field(None, description="0-based ordinal when the user said 'first/second/3rd ...'")
-    raw: str = Field("", description="The original English sentence this step came from")
+    raw: str = Field("", description="The step as a sentence")
+    origin: Optional[str] = Field(None, description="The user's original wording this step was derived from")
+    source: Optional[str] = Field(None, description="Who turned the English into this step: ai | rules | user")
     locator: Optional[Locator] = None             # filled in after resolution (replayable)
     fallbacks: list[Locator] = Field(default_factory=list)
     target_locator: Optional[Locator] = None      # drag destination
@@ -111,6 +114,7 @@ class StepResult(BaseModel):
     screenshot: Optional[str] = None      # relative path inside run dir
     error: Optional[str] = None
     healed: bool = False                  # locator from script failed and was re-resolved
+    picked_by: Optional[str] = None       # ai | heuristic | script (stored locator) | fallback
     url: str = ""
     shown_value: Optional[str] = None     # value after data substitution, masked if sensitive
     dialog: Optional[str] = None          # text of a dialog that appeared during this step

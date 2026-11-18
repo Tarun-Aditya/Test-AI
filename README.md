@@ -57,30 +57,54 @@ sessions, registered machines. Restarting the hub keeps all history. Runs that w
 *interrupted*, artifact folders without a DB row are imported, and machines show as offline until they
 reconnect. Large files stay on disk under `artifacts/`.
 
-## Writing tests
+## Writing tests: describe them in plain English
+
+Write the test the way you'd describe it to a colleague. No step-by-step format is needed:
 
 ```
-Open ${base_url}/index.html
-Click Accept cookies if shown                       ← optional step (skipped if absent)
-Type "${product}" into the search box
-Press Enter
-Click the first result containing "${brand}"        ← ordinal + data-driven pick
-Select "${qty}" from Quantity
-Click Add to Cart button
-Verify page contains "Added to Cart"
-Hover over Settings menu
-Drag Card A to Done column
-Dismiss the next alert / Verify alert says "Delete this item?"
-Switch to new tab
-Pause 90 seconds for SSO login                      ← headed runs: a human completes MFA / SSO
-Verify the url contains "/cart"
+Go to ${base_url}/index.html, search for a ${product} and open the first ${brand} result.
+Add ${qty} of them to the cart, then go to the cart and make sure it shows ${brand}.
 ```
 
-The actions are navigate, click, double click, right click, type, append, press (with key combos), hover,
-select (native and custom dropdowns, multi-select with `A|B`), check, uncheck, drag, scroll, wait, pause,
-upload, back, refresh, switch tab, dialog accept/dismiss, screenshot, and assertions on text, visibility,
-URL, title and dialog text. Without an API key, the rule parser handles phrasings like these. With Claude you
-can write freely ("log in as ${user.email} and make sure the dashboard greets me").
+**Break down into steps** (Studio) shows how it was split into steps. Each step shows the phrase it came from
+and the value it will use with your data, and you can edit the steps before running:
+
+| # | step | from your text | with your data |
+|---|------|----------------|----------------|
+| 1 | navigate `${base_url}/index.html` | | http://shop… |
+| 2 | type "search box" ← `${product}` | "search for a ${product}" | wireless mouse |
+| 3 | press Enter | "search for a ${product}" | |
+| 4 | click the **first** result containing `${brand}` | "open the first ${brand} result" | Logitech |
+| 5 | select Quantity ← `${qty}` | "Add ${qty} of them to the cart" | 2 |
+| 6 | click Add to Cart button | "Add ${qty} of them to the cart" | |
+| 7 | click Cart | "go to the cart" | |
+| 8 | verify page contains `${brand}` | "make sure it shows ${brand}" | Logitech |
+
+**`${name}` is a placeholder.** It is replaced by the value called *name* under **Test data**, so the
+same test runs with different data (e.g. one iteration with Logitech, another with HP). Leave the test name
+empty and it's named after what it does, with the run's real values (`Search "wireless mouse" → first
+Logitech result → Cart → check "Logitech" · #1 Logitech, qty 2`).
+
+Step-by-step text works too ("Click the Login button", "Type "x" into Email", …), as do drag, hover,
+dialogs, tabs, optional steps ("Click Accept cookies if shown") and pauses for manual SSO login.
+
+## Where AI is used
+
+| Stage | With Claude (`ANTHROPIC_API_KEY` set on the hub) | Without it |
+|---|---|---|
+| **1. English → steps** | Claude reads the whole description and returns structured steps (action, element description, value, ordinal, optional) | Built-in parser: splits prose into clauses and expands common intents (search, log in, add to cart, go to cart, make sure / should see, set/choose …) |
+| **2. Which element on the page** | Candidates are scored by heuristics. **When the top matches are close, Claude picks** | Heuristic scoring only |
+| **3. Running the step** | No AI: native Playwright / Selenium calls, each locator verified by the engine | same |
+| **4. Self-healing on replay** | Stored locator → fallbacks → re-identify from the description (stage 2, so Claude breaks ties) | same, heuristics only |
+| **5. Generated scripts / exported project** | **No AI at all**: plain native code | same |
+
+The UI shows this for every run and step:
+* Run badge: **AI** (Claude split the English) · **Rules** (built-in parser, AI off) · **Edited** (you changed the
+  steps) · **Script** (replay of a generated script, no parsing).
+* Step chips: `step: AI/rules/edited` (who made the step) and `element: AI/heuristic/script locator/fallback`
+  (how the element was found). The same chips appear in `report.html`.
+
+The AI status chip at the bottom of the sidebar shows whether Claude is configured on this hub.
 
 ### Test data and iterations
 

@@ -50,15 +50,33 @@ def _flatten_keys(d, prefix=""):
 
 
 def _default_name(steps: list[Step], text: str) -> str:
-    """'shop.example.com: Add to Cart, Go to Cart' style name from the URL and the clicks."""
+    """A readable name from what the test does, e.g.
+    'localhost:8711 · Search "wireless mouse" → Add to Cart → check "Logitech"'.
+    Placeholders like ${brand} are kept here and filled with real values per run (server.display_name)."""
     from urllib.parse import urlparse
-    host = ""
+    host, parts = "", []
     for st in steps:
-        if st.action.value == "navigate" and st.value:
-            host = urlparse(st.value).netloc or ("" if "${" in st.value else st.value)
-            break
-    clicks = [st.target for st in steps if st.action.value in ("click", "type", "select") and st.target and "${" not in st.target][-2:]
-    if clicks:
-        return (f"{host}: " if host else "") + " → ".join(c[:30] for c in clicks)
+        a, t, v = st.action.value, st.target or "", st.value or ""
+        if a == "navigate" and not host and v:
+            host = urlparse(v).netloc if "://" in v else ("" if v.startswith("${") else v)
+        elif a == "type" and "search" in t.lower():
+            parts.append(f'Search "{v}"')
+        elif a == "type" and "password" in t.lower():
+            parts.append("Log in")
+        elif a in ("click", "select", "check", "drag") and t and not re.search(r"\b(?:log\s*in|sign\s*in|cookies?|close)\b", t, re.I):
+            name = re.sub(r"\s+(?:button|link|menu|field|dropdown|tab)$", "", t, flags=re.I)
+            ordw = {0: "first", 1: "second", 2: "third", -1: "last"}.get(st.nth, f"#{(st.nth or 0) + 1}") if st.nth is not None else ""
+            parts.append(f"{ordw} {name} result" if ordw else name if a != "select" else f"{name} {v}")
+    asserts = [st.value for st in steps if st.action.value == "assert_text" and st.value]
+    if asserts:
+        parts.append(f'check "{asserts[-1][:30]}"')
+    dedup = []
+    for p in parts:
+        if not dedup or dedup[-1] != p:
+            dedup.append(p)
+    if len(dedup) > 4:
+        dedup = dedup[:2] + ["…"] + dedup[-2:]
+    if dedup:
+        return ((host + " · ") if host else "") + " → ".join(dedup)
     first = text.strip().splitlines()[0] if text.strip() else "Untitled test"
-    return re.sub(r"\s+", " ", first)[:60]
+    return re.sub(r"\s+", " ", first)[:70]

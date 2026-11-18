@@ -49,11 +49,17 @@ def render(summary: RunSummary, test: TestCase, run_dir: Path, mask=lambda x: x)
 
         err = f'<pre class="err">{e(r.error)}</pre>' if r.error else ""
         healed = '<span class="tag heal">self-healed</span>' if r.healed else ""
+        prov = {"ai": "AI", "rules": "rules", "user": "edited", None: ""}
+        chips = ""
+        if st.source:
+            chips += f'<span class="tag {"ai" if st.source == "ai" else "rl"}" title="Who turned the English into this step">step: {prov.get(st.source, st.source)}</span>'
+        if r.picked_by:
+            chips += f'<span class="tag {"ai" if r.picked_by == "ai" else "rl"}" title="How the element was identified">element: {r.picked_by}</span>'
         value = r.shown_value if r.shown_value is not None else st.value
         rows.append(f"""
 <article class="step {r.status.value}">
   <header><span class="num">{r.index + 1}</span><span class="status">{r.status.value}</span>
-    <span class="raw">{e(st.raw or st.action.value)}</span>{healed}<span class="dur">{r.duration_ms} ms</span></header>
+    <span class="raw">{e(st.raw or st.action.value)}{f'<div class="origin">from: “{e(st.origin)}”</div>' if st.origin and st.origin != st.raw else ''}</span>{chips}{healed}<span class="dur">{r.duration_ms} ms</span></header>
   <div class="body">
     <div class="meta">
       <div class="kv"><span>action</span><b>{e(st.action.value)}</b></div>
@@ -89,7 +95,8 @@ video{{width:100%;border-radius:8px;background:#000}}
 .num{{font-weight:700;color:var(--mut);min-width:22px}}.status{{text-transform:uppercase;font-size:11px;font-weight:700;letter-spacing:.04em}}
 .passed .status{{color:var(--ok)}}.failed .status{{color:var(--bad)}}.skipped .status{{color:var(--skip)}}
 .raw{{flex:1;min-width:200px}}.dur{{color:var(--mut);font-size:12px}}
-.tag{{font-size:11px;padding:1px 8px;border-radius:99px}}.heal{{background:#fff3cd;color:#7a5b00}}
+.tag{{font-size:11px;padding:1px 8px;border-radius:99px}}.tag.ai{{background:#ecebff;color:#4b45d6}}.tag.rl{{background:var(--bg);color:var(--mut)}}
+.origin{{font-size:12px;color:var(--mut);font-style:italic}}.heal{{background:#fff3cd;color:#7a5b00}}
 .body{{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:16px;padding:14px}}
 @media (max-width:760px){{.body{{grid-template-columns:1fr}}}}
 .kv{{display:flex;gap:8px;margin:3px 0;word-break:break-all}}.kv span{{color:var(--mut);min-width:64px}}

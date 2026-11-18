@@ -89,3 +89,39 @@ def test_sensitive_normalize_and_mask():
     assert data == {"user": {"name": "a", "pwd": "S3cret"}} and sens == ["token", "user.pwd"]
     assert masked_data(data, sens)["user"]["pwd"] == MASK
     assert Masker(data, sens)("typed S3cret here") == f"typed {MASK} here"
+
+
+def test_natural_paragraph_is_split_into_steps():
+    text = ("Go to https://shop.test, search for a wireless mouse and open the first Logitech result. "
+            "Add 2 of them to the cart, then go to the cart and make sure it shows Logitech.")
+    got = steps(text)
+    assert got == [
+        (Action.NAVIGATE, None, "https://shop.test"),
+        (Action.TYPE, "search box", "wireless mouse"), (Action.PRESS, None, "Enter"),
+        (Action.CLICK, "Logitech", None),
+        (Action.SELECT, "Quantity", "2"), (Action.CLICK, "Add to Cart button", None),
+        (Action.CLICK, "Cart", None),
+        (Action.ASSERT_TEXT, None, "Logitech"),
+    ]
+    s, _ = rules.parse(text)
+    assert s[3].nth == 0 and s[1].origin == "search for a wireless mouse" and all(x.source == "rules" for x in s)
+
+
+def test_natural_login_and_checks():
+    got = steps("I want to log in as alice@x.io with password S3cret, then check that the dashboard says Welcome Alice. "
+                "Finally accept the cookies and sign out.")
+    assert got[:3] == [(Action.TYPE, "username or email field", "alice@x.io"), (Action.TYPE, "password field", "S3cret"),
+                       (Action.CLICK, "Log in or Sign in button", None)]
+    assert (Action.ASSERT_TEXT, None, "Welcome Alice") in got and got[-1] == (Action.CLICK, "sign out", None)
+
+
+def test_names_are_readable_and_filled_per_run():
+    from aiauto.nlp.parser import parse_text
+    from aiauto.server.app import _display_name, _iteration_labels
+    from aiauto.models import RunConfig
+    t, _ = parse_text("Go to ${url}, search for a ${product} and open the first ${brand} result. Make sure it shows ${brand}.", {}, use_llm=False)
+    assert "${" in t.name and "Search" in t.name
+    named = _display_name(t.name, {"product": "mouse", "brand": "HP", "url": "x"}, [])
+    assert named == 'Search "mouse" → first HP result → check "HP"'
+    assert _iteration_labels([({"brand": "A", "pw": "1"}, RunConfig()), ({"brand": "B", "pw": "2"}, RunConfig(browser="chrome"))], ["pw"]) \
+        == ["#1 A · chromium", "#2 B · chrome"]

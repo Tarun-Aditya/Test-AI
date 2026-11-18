@@ -9,7 +9,7 @@ export default function Runs() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [mode, setMode] = useState("");
-  const rows = runs.filter((r) => (!status || r.status === status) && (!mode || r.mode === mode)
+  const rows = runs.filter((r) => (!status || r.status === status) && (!mode || (mode === "script" ? r.mode === "replay" : r.mode !== "replay" && (r.parser || "ai") === mode))
     && (!q || `${r.test_name} ${r.agent} ${r.engine} ${r.browser}`.toLowerCase().includes(q.toLowerCase())));
   return (
     <section className="view on">
@@ -17,7 +17,7 @@ export default function Runs() {
         <label className="search"><Icon name="search" size={16} /><input className="in" placeholder="Filter by name, machine, engine…" value={q} onChange={(e) => setQ(e.target.value)} /></label>
         <div className="seg">{[["", "All"], ["passed", "Passed"], ["failed", "Failed"], ["running", "Running"], ["interrupted", "Interrupted"]].map(([k, l]) =>
           <button key={k} className={status === k ? "on" : ""} onClick={() => setStatus(k)}>{l}</button>)}</div>
-        <div className="seg">{[["", "Any mode"], ["ai", "AI"], ["replay", "Script"]].map(([k, l]) =>
+        <div className="seg">{[["", "Any mode"], ["ai", "AI"], ["rules", "Rules"], ["script", "Script"]].map(([k, l]) =>
           <button key={k} className={mode === k ? "on" : ""} onClick={() => setMode(k)}>{l}</button>)}</div>
         <span className="spacer" />
         <button className="btn" onClick={loadRuns}><Icon name="refresh" size={15} />Refresh</button>
@@ -30,7 +30,7 @@ export default function Runs() {
               <tr key={r.run_id} className="clickable" onClick={() => (isLive(r) ? nav("studio", r.run_id) : openRun(r.run_id))}>
                 <td><b style={{ fontWeight: 600 }}>{r.test_name}</b><div className="mut">{(r.started_at || "").replace("T", " ").slice(0, 19)}{r.healed_steps ? <span style={{ color: "var(--warn)" }}> · {r.healed_steps} healed</span> : null}</div></td>
                 <td><Status s={r.status} /></td>
-                <td><ModeBadge mode={r.mode} /></td>
+                <td><ModeBadge mode={r.mode} parser={r.parser} /></td>
                 <td>{r.engine}{r.browser ? ` · ${r.browser}` : ""}<div className="mut">{r.agent}</div></td>
                 <td><StepBar r={r} /><div className="mut" style={{ marginTop: 3 }}>{isLive(r) ? `${r.done || 0}/${r.total}` : `${r.passed_steps}/${r.total} passed`}</div></td>
                 <td className="mono">{secs(r.duration_ms)}</td>

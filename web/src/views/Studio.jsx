@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import DataEditor from "../components/DataEditor.jsx";
 import LiveViewer from "../components/LiveViewer.jsx";
-import { BROWSERS, EXAMPLES, dataPayload } from "../form.js";
+import { BROWSERS, EXAMPLES, dataPayload, previewValues } from "../form.js";
 import Icon from "../icons.jsx";
 
 function Toggle({ k, label }) {
@@ -14,17 +14,66 @@ function Field({ label, hint, children }) {
   return <div className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</div>;
 }
 
+const ACTIONS = ["navigate", "click", "double_click", "right_click", "type", "append", "press", "hover", "select", "check", "uncheck",
+  "drag", "scroll", "wait", "pause", "upload", "assert_text", "assert_visible", "assert_url", "assert_title", "assert_dialog", "dialog",
+  "switch_tab", "back", "refresh", "screenshot"];
+
+/** The AI (or rule) breakdown of the English, editable before running. */
+function Breakdown() {
+  const { form, setForm, health } = useApp();
+  const steps = form.steps || [];
+  const upd = (i, patch) => setForm((f) => ({ steps: f.steps.map((s, j) => (j === i ? { ...s, ...patch, source: "user", locator: null, fallbacks: [] } : s)) }));
+  const stale = form.stepsText !== form.text;
+  const fill = previewValues(form);
+  return (
+    <div className="breakdown">
+      <div className="bd-h">
+        <b>{steps.length} steps</b>
+        <span className="mut">split by {form.stepsParser === "ai" ? <span className="prov ai">AI (Claude)</span> : <span className="prov">rule parser</span>}
+          {stale && <span style={{ color: "var(--warn)" }}> · text changed since. Break down again to refresh</span>}</span>
+        <span className="spacer" />
+        <button className="btn sm ghost" onClick={() => setForm({ steps: null, stepsText: null })}>Discard</button>
+      </div>
+      <div className="bd-list">
+        {steps.map((s, i) => (
+          <div className="bd-row" key={i}>
+            <span className="n">{i + 1}</span>
+            <select value={s.action} onChange={(e) => upd(i, { action: e.target.value })}>{ACTIONS.map((a) => <option key={a}>{a}</option>)}</select>
+            <input value={s.target || ""} placeholder="element (in words)" onChange={(e) => upd(i, { target: e.target.value || null })} />
+            <input value={s.value || ""} placeholder="value" onChange={(e) => upd(i, { value: e.target.value || null })} />
+            <span className="bd-meta">
+              {s.nth != null && <span className="pill">#{s.nth < 0 ? "last" : s.nth + 1}</span>}
+              {s.optional && <span className="pill">optional</span>}
+              <span className={"prov " + (s.source === "ai" ? "ai" : "")}>{s.source === "ai" ? "AI" : s.source === "user" ? "edited" : "rules"}</span>
+            </span>
+            <button className="x" title="Remove step" onClick={() => setForm((f) => ({ steps: f.steps.filter((_, j) => j !== i) }))}><Icon name="x" size={14} /></button>
+            {(fill(s.target) || fill(s.value)) && <div className="bd-fill">with your data: {[fill(s.target), fill(s.value)].filter(Boolean).join(" · ")}</div>}
+            {s.origin && <div className="bd-origin">from your text: “{s.origin}”</div>}
+          </div>
+        ))}
+      </div>
+      <button className="btn sm" onClick={() => setForm((f) => ({ steps: [...(f.steps || []), { action: "click", target: "", value: null, source: "user", raw: "" }] }))}>
+        <Icon name="plus" size={14} />Add step</button>
+      <p className="hint">These steps run when you press <b>Run test</b>. Elements are identified on the live page{health.llm_on ? ", with AI breaking ties" : ""}.</p>
+    </div>
+  );
+}
+
 function Script() {
-  const { form, setForm, library, toast, loadLibrary } = useApp();
-  const [preview, setPreview] = useState(null);
+  const { form, setForm, library, toast, loadLibrary, health } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [unparsed, setUnparsed] = useState([]);
   const gutter = useRef(null);
   const lines = Math.max(1, form.text.split("\n").length);
-  const doPreview = async () => {
+  const breakDown = async () => {
+    setBusy(true);
     try {
       const d = dataPayload(form);
       const data = d.iterations ? { ...(d.data || {}), ...d.iterations[0].data } : d.data;
-      setPreview(await api("/api/parse", { method: "POST", body: { text: form.text, data, sensitive: d.sensitive, use_llm: form.useLlm } }));
-    } catch (e) { toast(e.message, true); }
+      const r = await api("/api/parse", { method: "POST", body: { text: form.text, data, sensitive: d.sensitive, use_llm: form.useLlm } });
+      setUnparsed(r.unparsed);
+      setForm({ steps: r.test.steps, stepsText: form.text, stepsParser: r.parser.startsWith("llm") ? "ai" : "rules" });
+    } catch (e) { toast(e.message, true); } finally { setBusy(false); }
   };
   const upload = async (file) => {
     const fd = new FormData(); fd.append("file", file);
@@ -34,43 +83,41 @@ function Script() {
   return (
     <>
       <div className="seg" style={{ marginBottom: 12 }}>
-        <button className={form.srcMode === "text" ? "on" : ""} onClick={() => setForm({ srcMode: "text" })}>Plain English</button>
+        <button className={form.srcMode === "text" ? "on" : ""} onClick={() => setForm({ srcMode: "text" })}>Describe in English</button>
         <button className={form.srcMode === "lib" ? "on" : ""} onClick={() => setForm({ srcMode: "lib" })}>From library</button>
       </div>
       {form.srcMode === "text" ? <>
-        <input className="name-in" value={form.name || ""} placeholder="Test name (e.g. Add product to cart)" onChange={(e) => setForm({ name: e.target.value })} aria-label="Test name" />
+        {!health.llm_on && <div className="callout warn-call"><b>AI is off on this server.</b> The built-in parser understands common phrasing
+          (search, log in, add to cart, make sure…). For any wording, set <code>ANTHROPIC_API_KEY</code> on the server and Claude breaks your description into steps.</div>}
+        <input className="name-in" value={form.name || ""} placeholder="Test name (optional; leave empty to name it from what the test does)" onChange={(e) => setForm({ name: e.target.value })} aria-label="Test name" />
         <div className="editor">
           <div className="gutter" ref={gutter}>{Array.from({ length: lines }, (_, i) => i + 1).join("\n")}</div>
-          <textarea spellCheck={false} value={form.text} onChange={(e) => setForm({ text: e.target.value })}
+          <textarea spellCheck={false} value={form.text} onChange={(e) => setForm({ text: e.target.value })} style={{ whiteSpace: "pre-wrap" }}
             onScroll={(e) => gutter.current && (gutter.current.scrollTop = e.currentTarget.scrollTop)}
-            placeholder={'Open https://shop.example.com\nClick Accept cookies if shown\nType "${product}" into the search box\nPress Enter\nClick the first result containing "${brand}"\nClick Add to Cart button\nVerify page contains "Added to Cart"'} />
+            placeholder={"Describe the test the way you'd tell a colleague, e.g.\n\nGo to ${base_url}, search for a wireless mouse and open the first ${brand} result. Add ${qty} of them to the cart, go to the cart and make sure it shows ${brand}."} />
         </div>
+        <p className="hint" style={{ margin: "8px 0 0" }}><code>{"${name}"}</code> is a placeholder: it is replaced by the value called <i>name</i> under
+          <b> Test data</b> (e.g. <code>{"${brand}"}</code> → Logitech), so the same test can run with different data.</p>
         <div className="examples">
           <span className="mut">Examples:</span>
-          {Object.keys(EXAMPLES).map((k) => <button key={k} onClick={() => setForm({ text: EXAMPLES[k] })}>{k}</button>)}
-          <span className="spacer" />
-          <button className="btn sm" onClick={doPreview}><Icon name="eye" size={14} />Preview steps</button>
+          {Object.keys(EXAMPLES).map((k) => <button key={k} onClick={() => setForm({ text: EXAMPLES[k], steps: null })}>{k}</button>)}
         </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+          <button className="btn primary" disabled={busy || !form.text.trim()} onClick={breakDown}><Icon name="spark" size={14} />{busy ? "Breaking down…" : "Break down into steps"}</button>
+          <span className="mut">{health.llm_on ? "Claude splits your description into steps" : "The rule parser splits your description into steps"}. Review them, then Run test.</span>
+        </div>
+        {unparsed.length > 0 && <div className="callout" style={{ background: "var(--bad-soft)", color: "var(--bad)" }}>Not understood: {unparsed.join(" · ")}</div>}
+        {form.steps && form.steps.length > 0 && <Breakdown />}
       </> : <>
-        <Field label="Saved script" hint="Runs with the stored native locators. Steps re-identify their element (self-heal) if the page changed.">
+        <div className="field"><span>Saved script</span>
           <select value={form.libName} onChange={(e) => setForm({ libName: e.target.value })}>
             <option value="">Choose a script…</option>
             {library.map((l) => <option key={l.name} value={l.name}>{l.name} · {l.steps} steps</option>)}
-          </select></Field>
+          </select><small>Runs with the stored native locators (Script mode). Steps re-identify their element (self-heal) if the page changed.</small></div>
         <label className="drop" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]); }}>
           <Icon name="up" /><b>Upload a script</b><span className="mut">script.json, or a generated test_playwright.py / test_selenium.py</span>
           <input type="file" accept=".json,.py" onChange={(e) => { e.target.files[0] && upload(e.target.files[0]); e.target.value = ""; }} />
         </label>
-      </>}
-      {preview && form.srcMode === "text" && <>
-        <div className="hint" style={{ marginTop: 14 }}>{preview.test.steps.length} steps · parsed by <b>{preview.parser}</b></div>
-        <div className="plist">
-          {preview.test.steps.map((s, i) => (
-            <div className="pstep" key={i}><span className="n">{i + 1}</span><span className="tag">{s.action}</span>
-              <div>{s.target}{s.nth != null && <span className="pill"> #{s.nth < 0 ? "last" : s.nth + 1}</span>}{s.optional && <span className="pill"> optional</span>} <span className="val">{s.value}</span></div></div>
-          ))}
-        </div>
-        {preview.unparsed.length > 0 && <div className="callout" style={{ background: "var(--bad-soft)", color: "var(--bad)" }}>Not understood: {preview.unparsed.join(" · ")}</div>}
       </>}
     </>
   );

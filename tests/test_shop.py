@@ -47,3 +47,13 @@ def test_session_saved_by_playwright_loads_in_selenium(shop_url, tmp_path):
     with_session.session_state = holder[0].saved_session
     assert run_test(test, with_session, tmp_path).status.value == "passed"
     assert run_test(test, RunConfig(engine="selenium", record_video=False, timeout_ms=3000), tmp_path).status.value == "failed"
+
+
+def test_natural_english_end_to_end(shop_url, tmp_path):
+    test, info = parse_text((EXAMPLES / "shop_natural.txt").read_text(),
+                            {"base_url": shop_url, "product": "wireless mouse", "brand": "Logitech", "qty": "2"}, use_llm=False)
+    assert not info["unparsed"] and info["parser"] == "rules"
+    s = run_test(test, RunConfig(record_video=False), tmp_path)
+    assert s.status.value == "passed", [r.error for r in s.results if r.error]
+    assert all(r.step.source == "rules" for r in s.results)
+    assert {r.picked_by for r in s.results if r.step.locator} <= {"heuristic", "ai"}

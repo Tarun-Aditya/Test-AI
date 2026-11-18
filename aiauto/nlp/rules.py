@@ -216,13 +216,29 @@ def _normalize_key(k: str) -> str:
 
 
 def parse(text: str) -> tuple[list[Step], list[str]]:
-    """Returns (steps, unparsed_sentences)."""
+    """Free-form English or step-per-line text -> (steps, unparsed clauses).
+
+    The text is split into single-action clauses (prose.clauses); natural intents such as
+    "search for X", "log in as U with P", "add it to the cart", "make sure it shows X" are
+    expanded into step sentences (prose.expand); each sentence is then matched by PATTERNS."""
+    from . import prose
     steps: list[Step] = []
     unparsed: list[str] = []
-    for sentence in _split_sentences(text):
-        step = parse_sentence(sentence)
-        if step:
-            steps.append(step)
-        else:
-            unparsed.append(sentence)
+    for clause in prose.clauses(text):
+        expanded = prose.expand(clause)
+        sentences = expanded or [clause]
+        parsed = [parse_sentence(s) for s in sentences]
+        if not all(parsed) and expanded:          # macro output failed: try the clause as written
+            parsed = [parse_sentence(clause)]
+        if not all(parsed):                       # short button-like phrase: click the control with that text
+            expanded = prose.guess(clause)
+            parsed = [parse_sentence(s) for s in expanded] if expanded else [None]
+        if not all(parsed):
+            unparsed.append(clause)
+            continue
+        for st in parsed:
+            st.source = "rules"
+            if expanded or st.raw != clause:
+                st.origin = clause
+            steps.append(st)
     return steps, unparsed

@@ -6,7 +6,7 @@ export const BROWSERS = [
 ];
 
 export const DEFAULT_FORM = {
-  text: "", name: "", srcMode: "text", libName: "",
+  text: "", name: "", steps: null, stepsText: null, stepsParser: null, srcMode: "text", libName: "",
   dataMode: "table", rows: [{ k: "", v: "", s: false }], iterCols: [], iterRows: [], json: "", sensKeys: "",
   engine: "playwright", agent: "local", headless: true,
   browser: "chromium", timeout: 10000, dialogs: "accept", slowmo: 0,
@@ -99,7 +99,25 @@ export function runConfig(f) {
 }
 
 export const EXAMPLES = {
-  "Shop: add to cart": 'Open ${base_url}/index.html\nClick Accept cookies if shown\nType "${product}" into the search box\nPress Enter\nVerify page contains "results for"\nClick the first result containing "${brand}"\nSelect "${qty}" from Quantity\nClick Add to Cart button\nVerify page contains "Added to Cart"\nClick Go to Cart\nVerify page contains "Subtotal (${qty} items)"',
+  "Shop (natural English)": "Go to ${base_url}/index.html, search for a ${product} and open the first ${brand} result. Add ${qty} of them to the cart, then go to the cart and make sure it shows ${brand}.",
+  "Login (natural English)": "Open https://example.com/login and log in as ${user.email} with ${user.password}. Make sure the page says Welcome, then sign out.",
+  "Shop: step by step": 'Open ${base_url}/index.html\nClick Accept cookies if shown\nType "${product}" into the search box\nPress Enter\nVerify page contains "results for"\nClick the first result containing "${brand}"\nSelect "${qty}" from Quantity\nClick Add to Cart button\nVerify page contains "Added to Cart"\nClick Go to Cart\nVerify page contains "Subtotal (${qty} items)"',
   "Login with a secret": 'Open https://example.com/login\nType "${user.email}" into Email\nType ${user.password} into Password\nClick Sign in button\nVerify page contains "Welcome"',
   "Capture SSO session": "Open https://intranet.example.com\nPause 90 seconds for SSO login\nVerify page contains \"Dashboard\"",
 };
+
+/** Fill ${key} / {{key}} placeholders for display, using the current test data (first iteration), secrets masked. */
+export function previewValues(f) {
+  let d;
+  try { d = dataPayload(f); } catch { return () => null; }
+  const data = d.iterations ? { ...(d.data || {}), ...d.iterations[0].data } : d.data || {};
+  const secret = new Set(d.sensitive);
+  const look = (path) => { let c = data; for (const k of path.split(".")) { if (c == null || typeof c !== "object") return undefined; c = c[k]; } return c; };
+  return (text) => {
+    if (!text || !/\$\{|\{\{/.test(text)) return null;
+    return text.replace(/\$\{\s*([\w.-]+)\s*\}|\{\{\s*([\w.-]+)\s*\}\}/g, (m, a, b) => {
+      const k = a || b, v = look(k);
+      return v === undefined ? `⟨no value for ${k}⟩` : secret.has(k) ? "••••••" : String(v);
+    });
+  };
+}

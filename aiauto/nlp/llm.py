@@ -45,7 +45,13 @@ STEP_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-PARSE_SYSTEM = """You convert plain-English browser test instructions into a precise list of browser steps.
+PARSE_SYSTEM = """You convert a tester's plain-English description of a browser test into a precise list of browser steps.
+
+The description is usually free-form prose ("go to the shop, find a wireless mouse, put the first Logitech one
+in the cart and check the cart total"), not one action per line. Break it into the individual browser actions a
+person would perform, including the implicit ones: searching means typing into the search box and pressing Enter,
+"log in as X" means typing the username, typing the password and clicking the sign-in button, "add it to the
+cart" means clicking the Add to Cart button, "make sure / I should see / check that" means an assertion.
 
 For each step output:
 - action: one of the allowed enum values.
@@ -71,7 +77,20 @@ Rules:
 - Use assert_text with target null when the text may be anywhere on the page.
 - optional: true only when the user says the step may not apply ("if present", "if a cookie banner shows").
 - Use pause (not wait) when a human must do something in the browser, e.g. SSO / MFA login.
-- Do not add steps the user did not ask for."""
+- Do not add steps the user did not ask for, and do not invent URLs, credentials or data values.
+
+Example
+Input: Open https://shop.example.com, search for a wireless mouse and open the first Logitech result. Add two to the
+cart, then go to the cart and make sure the subtotal shows 2 items.
+Output steps:
+  navigate  value=https://shop.example.com
+  type      target="Search box"           value="wireless mouse"
+  press     value=Enter
+  click     target="Logitech"              nth=0
+  select    target="Quantity"              value="2"
+  click     target="Add to Cart button"
+  click     target="Cart"
+  assert_text value="Subtotal (2 items)"  (target null)"""
 
 PICK_SYSTEM = """You pick which DOM element a browser test step refers to.
 You get a step (action + natural-language target) and a numbered list of candidate elements with their
@@ -167,10 +186,19 @@ def parse_steps(text: str, data_keys: list[str] | None = None) -> tuple[str, lis
     for s in out.get("steps", []):
         try:
             steps.append(Step(action=Action(s["action"]), target=s.get("target"), value=s.get("value"),
-                              nth=s.get("nth"), optional=bool(s.get("optional")), raw=s.get("raw", "")))
+                              nth=s.get("nth"), optional=bool(s.get("optional")), raw=_sentence(s), origin=s.get("raw") or None,
+                              source="ai"))
         except (ValueError, KeyError):
             continue
     return out.get("name") or "Untitled test", steps
+
+
+def _sentence(s: dict) -> str:
+    """Readable one-line form of an AI-produced step (the user's own words are kept in `origin`)."""
+    a, t, v, n = s["action"], s.get("target"), s.get("value"), s.get("nth")
+    ordw = {0: "first", 1: "second", 2: "third", -1: "last"}.get(n, f"#{(n or 0) + 1}") if n is not None else ""
+    tgt = f'{ordw + " " if ordw else ""}{t}' if t else ""
+    return " ".join(x for x in (a.replace("_", " "), tgt, f'"{v}"' if v else "") if x).strip()
 
 
 def pick_candidate(step: Step, candidates: list[dict]) -> int | None:
