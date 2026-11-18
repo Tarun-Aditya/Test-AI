@@ -177,7 +177,10 @@ def test_parallel_runs_on_several_machines_and_both_engines(cluster, shop_url):
     assert sorted((runs[i]["agent"], runs[i]["engine"]) for i in ids) == [
         ("box-a", "playwright"), ("box-a", "selenium"), ("box-b", "playwright"), ("box-b", "selenium")]
     assert all(" · " in runs[i]["test_name"] for i in ids)          # labels say which engine / machine
-    span = {i: (started[i], ended[i]) for i in ids}
+    from datetime import datetime
+    ts = lambda v: datetime.fromisoformat(v).timestamp()
+    # the hub's own record of when each run really started and finished (live events can be missed)
+    span = {i: (ts(runs[i]["started_at"]), ts(runs[i]["finished_at"])) for i in ids}
     on = lambda m: [i for i in ids if runs[i]["agent"] == m]
     a1, a2 = on("box-a")
     assert _overlap(span[a1], span[a2]), "box-a (2 slots) should run both of its tests at the same time"
