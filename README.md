@@ -111,6 +111,14 @@ The AI status chip at the bottom of the sidebar shows whether Claude is configur
 * Single run: key/value table (dotted keys for nesting) or JSON. Reference values as `${key}`.
 * **Iterations**: a grid where each enabled row is its own run with its own data and **browser**. Shared
   values apply to all rows. In JSON, use `{"rows": [{…, "__browser": "firefox"}, …]}`.
+  * **Columns from test** adds one column per `${…}` placeholder in the test (Single run has **Keys from test**).
+  * **Template (CSV)** downloads the grid (or a blank template built from the placeholders) and
+    **Upload CSV / JSON** loads it back. A CSV header row lists the keys. `password [secret]` (or `password*`)
+    marks a secret column, and the optional `run` (yes/no) and `browser` columns set each row. JSON is a list of rows
+    or `{"rows": [...]}`. Secret values are never written into downloaded templates.
+* **Replay** (run details) runs the generated script in Script mode with: the **same data** (secrets from the
+  hub's vault), **edited / new JSON** data, or **Studio's test data** (the Single-run values or every
+  Iterations row, each with its own browser). Secrets left empty keep the original run's secret.
 * **Sensitive values** (lock icon, `{"value": "…", "sensitive": true}`, or `--sensitive key`) are masked
   in live events, reports, videos (the field is rendered as dots), `summary.json`, `data.json`, `script.json`
   and generated scripts. Scripts read them from `AIAUTO_SECRET_<KEY>`. The hub keeps them in its local DB
@@ -207,9 +215,30 @@ streams live frames and step results, uploads artifacts when each run ends, and 
   and logged-in sites. Chrome must not already be open on that profile, and recent Chrome versions refuse
   automation of the *default* profile directory, so use a dedicated automation profile.
 
+## Generated scripts are self-sustained
+
+Every run writes `test_playwright.py`, `test_selenium.py` and `autopilot_runtime.py` (a small, standalone
+framework: no AI, no self-healing, no dependency on this tool or its server). Running a script produces the
+same kind of output as the original run:
+
+* a green **highlight box** on each located element (Playwright and Selenium), red on failure
+* a **screenshot per step**, a **video** (Playwright native, or frame capture for Selenium; `imageio-ffmpeg`)
+* **report.html** with the screenshots and the video embedded, plus `summary.json` and `junit.xml` for CI
+* masking of sensitive values (typed fields are rendered as dots, values hidden in the report and logs)
+
+```bash
+python test_selenium.py new_data.json          # new data; secrets from AIAUTO_SECRET_<KEY>
+RESULTS_DIR=out BROWSER=chrome HEADLESS=0 python test_playwright.py
+```
+`HIGHLIGHT=0`, `NO_VIDEO=1` and `STEP_TIMEOUT` are also honoured. Locators whose names carry live counts
+("Cart, 0 items") are recorded on the stable part ("Cart"), so scripts keep working when the data changes.
+
 ## Exported project
 
-**Export project** (run details) downloads a self-runnable project for the run, or for all iterations of its batch:
+**Export project** (run details) downloads a self-runnable project for the run, or for all iterations of its batch.
+It contains everything the first run used: the scripts and their runtime, `config.json`, each iteration's data file,
+`.env.example` for the secrets, and the original instructions. `run.py` writes `results/iteration_N/` (report, video,
+screenshots, summary, junit) and a `results/index.html` that links them all.
 
 ```bash
 cd my-test && pip install -r requirements.txt && python -m playwright install chromium

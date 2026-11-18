@@ -125,3 +125,20 @@ def test_names_are_readable_and_filled_per_run():
     assert named == 'Search "mouse" → first HP result → check "HP"'
     assert _iteration_labels([({"brand": "A", "pw": "1"}, RunConfig()), ({"brand": "B", "pw": "2"}, RunConfig(browser="chrome"))], ["pw"]) \
         == ["#1 A · chromium", "#2 B · chrome"]
+
+
+def test_short_secrets_are_masked_only_as_whole_tokens():
+    from aiauto.data import Masker
+    m = Masker({"qty": "2", "pw": "hunter22"}, ["qty", "pw"])
+    assert m("http://127.0.0.1:8765 qty 2, Cart (2), pw hunter22") == "http://127.0.0.1:8765 qty ••••••, Cart (••••••), pw ••••••"
+
+
+def test_count_tolerant_locators_for_live_counts():
+    from aiauto.models import Locator
+    from aiauto.runner import Runner
+    role = Locator(strategy="role", role="link", value="Cart, 0 items")
+    text = Locator(strategy="text", value="Inbox (12)")
+    out = Runner._count_tolerant([role, text], "Click the Cart link")
+    assert [l.strategy for l in out] == ["xpath", "xpath"]
+    assert 'starts-with(normalize-space(.), "Cart")' in out[0].value and '"Inbox"' in out[1].value
+    assert Runner._count_tolerant([Locator(strategy="text", value="Order 750")], "Open order 750") == []   # number was asked for

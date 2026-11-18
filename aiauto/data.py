@@ -154,6 +154,19 @@ def secret_values(data: dict[str, Any], sensitive: Iterable[str]) -> list[str]:
     return sorted(set(out), key=len, reverse=True)
 
 
+def mask_text(text: str, values: Iterable[str]) -> str:
+    """Hide secret values in text. Values of 4+ characters are hidden wherever they occur; shorter ones (a PIN
+    digit, a quantity "2") only as a standalone token, so "127.0.0.1" or "2026" are not mangled."""
+    for v in sorted(set(values), key=len, reverse=True):
+        if not v:
+            continue
+        if len(v) >= 4:
+            text = text.replace(v, MASK)
+        else:
+            text = re.sub(rf"(?<![\w.]){re.escape(v)}(?![\w.])", MASK, text)
+    return text
+
+
 class Masker:
     """Replaces sensitive values inside any text (errors, page text, typed values)."""
 
@@ -164,9 +177,7 @@ class Masker:
     def __call__(self, text: Any) -> Any:
         if not isinstance(text, str) or not self.values:
             return text
-        for v in self.values:
-            text = text.replace(v, MASK)
-        return text
+        return mask_text(text, self.values)
 
     def is_sensitive_template(self, template: str | None) -> bool:
         return any(k in self.sensitive for k in referenced_keys(template))

@@ -8,6 +8,10 @@
       data/iteration_N.json  the data each iteration used (sensitive values masked)
       .env.example         the AIAUTO_SECRET_* variables to fill for masked values
       tests/test_playwright.py, tests/test_selenium.py   plain native scripts (no AI, no self-healing)
+      tests/autopilot_runtime.py   the standalone framework the scripts use: browser setup, green highlight,
+                                   screenshot per step, video, masking, report.html, summary.json, junit.xml
+      results/iteration_N/     created by run.py: report.html, video.webm, shots/, summary.json, junit.xml
+      results/index.html       one page linking every iteration's report
       instructions.txt     the original plain-English test
       run.py, run.sh, run.bat
 
@@ -33,6 +37,7 @@ RUN_PY = r'''#!/usr/bin/env python3
   python run.py --only 2              # just iteration 2
 """
 import argparse
+import html
 import json
 import os
 import subprocess
@@ -76,19 +81,51 @@ def main():
                "STEP_TIMEOUT": str(cfg.get("timeout_ms", 15000))}
         if a.no_video or not cfg.get("record_video", True):
             env["NO_VIDEO"] = "1"
-        env["VIDEO_DIR"] = str(ROOT / "results" / f"iteration_{n}")
+        out = ROOT / "results" / f"iteration_{n}"
+        env["RESULTS_DIR"] = str(out)
         print(f"\n=== Iteration {n}/{len(its)}: {engine} / {browser} / {it['data']} ===", flush=True)
         t0 = time.time()
         rc = subprocess.call([sys.executable, str(ROOT / "tests" / f"test_{engine}.py"), str(ROOT / it["data"])],
                              cwd=ROOT, env=env)
-        results.append((n, engine, browser, rc == 0, time.time() - t0))
+        results.append((n, engine, browser, rc == 0, time.time() - t0, out))
 
     print("\nSummary")
-    for n, engine, browser, ok, dur in results:
-        print(f"  #{n:<3} {engine:<10} {browser:<9} {'PASSED' if ok else 'FAILED'}  {dur:5.1f}s")
+    for n, engine, browser, ok, dur, out in results:
+        print(f"  #{n:<3} {engine:<10} {browser:<9} {'PASSED' if ok else 'FAILED'}  {dur:5.1f}s  {out / 'report.html'}")
     failed = sum(1 for r in results if not r[3])
-    print(f"\n{len(results) - failed} passed, {failed} failed")
+    index = write_index(results)
+    print(f"\n{len(results) - failed} passed, {failed} failed  ->  {index}")
     sys.exit(1 if failed else 0)
+
+
+def write_index(results):
+    """results/index.html: one row per iteration with links to its report, video and junit."""
+    rows = []
+    for n, engine, browser, ok, dur, out in results:
+        rel = out.relative_to(ROOT / "results").as_posix()
+        steps = ""
+        try:
+            s = json.loads((out / "summary.json").read_text(encoding="utf-8"))["steps"]
+            steps = f"{sum(x['status'] == 'passed' for x in s)}/{len(s)}"
+        except Exception:
+            pass
+        links = [f'<a href="{rel}/report.html">report</a>']
+        if (out / "video.webm").exists():
+            links.append(f'<a href="{rel}/video.webm">video</a>')
+        if (out / "junit.xml").exists():
+            links.append(f'<a href="{rel}/junit.xml">junit</a>')
+        rows.append(f"<tr><td>#{n}</td><td class={'ok' if ok else 'bad'}>{'PASSED' if ok else 'FAILED'}</td>"
+                    f"<td>{html.escape(engine)}</td><td>{html.escape(browser)}</td><td>{steps}</td>"
+                    f"<td>{dur:.1f}s</td><td>{' · '.join(links)}</td></tr>")
+    page = ("<!doctype html><meta charset=utf-8><title>Test results</title><style>body{font:14px system-ui;margin:24px}"
+            "table{border-collapse:collapse}td,th{padding:6px 12px;border-bottom:1px solid #ddd;text-align:left}"
+            ".ok{color:#15803d;font-weight:600}.bad{color:#b91c1c;font-weight:600}</style>"
+            f"<h2>{html.escape(ROOT.name)}</h2><table><tr><th>Iteration</th><th>Result</th><th>Engine</th><th>Browser</th>"
+            "<th>Steps</th><th>Time</th><th>Artifacts</th></tr>" + "".join(rows) + "</table>")
+    path = ROOT / "results" / "index.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(page, encoding="utf-8")
+    return path
 
 
 if __name__ == "__main__":
@@ -100,6 +137,11 @@ README = """# {name}
 Exported from AI Test Automation (Autopilot). The test was written in plain English,
 executed with AI-identified locators, and this project contains the **generated scripts**
 (native Playwright / Selenium locators, no AI and no self-healing at run time).
+
+It is self-contained: it does not need the Autopilot tool, its server or an API key. The scripts use
+`tests/autopilot_runtime.py`, a small framework that gives every run the same output as the original run:
+a green highlight box on each located element, a screenshot per step, a video, sensitive values masked,
+and `report.html` (screenshots + embedded video), `summary.json` and `junit.xml` (for CI).
 
 ## Setup
 
@@ -119,8 +161,12 @@ python run.py --only 2             # a single iteration
 ```
 Or run one script directly: `python tests/test_playwright.py data/iteration_1.json`.
 
+Each iteration writes `results/iteration_N/` (report.html, video.webm, shots/, summary.json, junit.xml);
+`results/index.html` links them all. New data: edit `data/iteration_N.json` (or add files and rows to
+`iterations.json`). `run.py` exits non-zero if any iteration failed.
+
 Environment variables the scripts read: `BROWSER` (chromium | chrome | msedge | firefox | webkit),
-`HEADLESS=1`, `NO_VIDEO=1`, `STEP_TIMEOUT` (ms), `STORAGE_STATE` (saved session file),
+`HEADLESS=1`, `NO_VIDEO=1`, `HIGHLIGHT=0`, `STEP_TIMEOUT` (ms), `RESULTS_DIR`, `STORAGE_STATE` (saved session file),
 `CHROME_PROFILE_DIR` / `CHROME_PROFILE_NAME` (reuse a Chrome profile).
 
 ## Iterations
@@ -188,7 +234,7 @@ def build_project(artifacts: Path, run: dict, members: list[dict]) -> tuple[str,
     files.update({
         "README.md": README.format(name=base_name, secrets_section=secrets_section, iter_rows=iter_rows,
                                    config=json.dumps(config, indent=2), instructions=script.get("source_text", "").strip() or "(none)"),
-        "requirements.txt": "playwright>=1.45\nselenium>=4.20\n",
+        "requirements.txt": "playwright>=1.45\nselenium>=4.20\nimageio-ffmpeg>=0.5\n",
         "config.json": json.dumps(config, indent=2),
         "iterations.json": json.dumps(iters, indent=2),
         ".env.example": "\n".join(env_lines) + "\n",
@@ -200,6 +246,7 @@ def build_project(artifacts: Path, run: dict, members: list[dict]) -> tuple[str,
         "tests/test_playwright.py": (pdir / "test_playwright.py").read_text(),
         "tests/test_selenium.py": (pdir / "test_selenium.py").read_text(),
         "tests/script.json": json.dumps(script, indent=2),
+        "tests/autopilot_runtime.py": Path(__file__).with_name("script_runtime.py").read_text(),
     })
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

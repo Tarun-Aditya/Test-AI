@@ -20,6 +20,8 @@ const P = {
   trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />,
   x: <path d="M6 6l12 12M18 6L6 18" />,
   plus: <path d="M12 5v14M5 12h14" />,
+  download: <path d="M12 4v12M6 10l6 6 6-6M4 20h16" />,
+  upload: <path d="M12 16V4M6 10l6-6 6 6M4 20h16" />,
   layers: <path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />,
 };
 

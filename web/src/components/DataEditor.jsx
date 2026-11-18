@@ -1,11 +1,27 @@
 import { useApp } from "../App.jsx";
-import { fromJson, toJson } from "../form.js";
+import { fromJson, iterationsCsv, looksSecret, parseIterationsFile, placeholderKeys, toJson } from "../form.js";
 import Icon from "../icons.jsx";
 
 const ITER_BROWSERS = [["", "Default"], ["chromium", "Chromium"], ["chrome", "Chrome"], ["msedge", "Edge"], ["firefox", "Firefox"], ["webkit", "WebKit"]];
 
+function download(name, text, type = "text/csv") {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+}
+
 function SingleTable() {
-  const { form, setForm } = useApp();
+  const { form, setForm, toast } = useApp();
+  const fromTest = () => {
+    const have = new Set(form.rows.map((r) => r.k.trim()));
+    const add = placeholderKeys(form.text).filter((k) => !have.has(k));
+    if (!add.length) return toast(placeholderKeys(form.text).length ? "Every ${…} in the test already has a row" : "The test text has no ${…} placeholders");
+    setForm((f) => ({ rows: [...f.rows.filter((r) => r.k.trim() || r.v), ...add.map((k) => ({ k, v: "", s: looksSecret(k) }))] }));
+    toast(`Added ${add.join(", ")}`);
+  };
   const upd = (i, patch) => setForm((f) => ({ rows: f.rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   return (
     <>
@@ -23,13 +39,16 @@ function SingleTable() {
           ))}
         </tbody>
       </table>
-      <button className="btn sm" onClick={() => setForm((f) => ({ rows: [...f.rows, { k: "", v: "", s: false }] }))}><Icon name="plus" size={14} />Add value</button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="btn sm" onClick={() => setForm((f) => ({ rows: [...f.rows, { k: "", v: "", s: false }] }))}><Icon name="plus" size={14} />Add value</button>
+        <button className="btn sm" onClick={fromTest} title="Add a row for every ${…} placeholder used in the test">Keys from test</button>
+      </div>
     </>
   );
 }
 
 function Iterations() {
-  const { form, setForm } = useApp();
+  const { form, setForm, toast } = useApp();
   const { iterCols: cols, iterRows: rows } = form;
   const setRow = (i, patch) => setForm((f) => ({ iterRows: f.iterRows.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   const renameCol = (ci, key) => setForm((f) => {
@@ -47,8 +66,42 @@ function Iterations() {
   });
   const addCol = () => setForm((f) => ({ iterCols: [...f.iterCols, { key: `field${f.iterCols.length + 1}`, sensitive: false }],
     iterRows: f.iterRows.length ? f.iterRows : [{ on: true, browser: "", values: {} }] }));
+  const shared = new Set(form.rows.filter((r) => r.k.trim() && r.v !== "").map((r) => r.k.trim()));
+  const fromTest = () => {
+    const keys = placeholderKeys(form.text);
+    const have = new Set(cols.map((c) => c.key));
+    const add = keys.filter((k) => !have.has(k) && !shared.has(k));
+    if (!add.length) return toast(keys.length ? "Every ${…} in the test already has a column (or a shared Single-run value)" : "The test text has no ${…} placeholders");
+    setForm((f) => ({ iterCols: [...f.iterCols, ...add.map((k) => ({ key: k, sensitive: looksSecret(k) }))],
+      iterRows: f.iterRows.length ? f.iterRows : [{ on: true, browser: "", values: {} }] }));
+    toast(`Added column${add.length > 1 ? "s" : ""} ${add.join(", ")}`);
+  };
+  const template = () => {
+    let f = form;
+    if (!f.iterCols.length) {     // no grid yet: template straight from the test's placeholders
+      const keys = placeholderKeys(f.text).filter((k) => !shared.has(k));
+      if (!keys.length) return toast("Add columns, or use ${…} placeholders in the test first", true);
+      f = { ...f, iterCols: keys.map((k) => ({ key: k, sensitive: looksSecret(k) })), iterRows: [] };
+    }
+    download(`${(f.name || "test-data").replace(/[^\w.-]+/g, "_")}-iterations.csv`, iterationsCsv(f));
+  };
+  const upload = async (file) => {
+    try {
+      const parsed = parseIterationsFile(await file.text(), file.name);
+      setForm(parsed);
+      const secret = parsed.iterCols.filter((c) => c.sensitive).map((c) => c.key);
+      toast(`Loaded ${parsed.iterRows.length} iteration${parsed.iterRows.length > 1 ? "s" : ""} × ${parsed.iterCols.length} column${parsed.iterCols.length > 1 ? "s" : ""}`
+        + (secret.length ? ` · ${secret.join(", ")} marked secret` : ""));
+    } catch (e) { toast(e.message, true); }
+  };
   return (
     <>
+      <div className="iter-tools">
+        <button className="btn sm" onClick={fromTest} title="One column per ${…} placeholder in the test (skips keys set under Single run)">Columns from test</button>
+        <button className="btn sm" onClick={template} title="CSV with the current columns and rows; secret columns are left empty"><Icon name="download" size={14} />Template (CSV)</button>
+        <label className="btn sm" title="CSV (header row = keys, optional run / browser columns) or JSON list of rows"><Icon name="upload" size={14} />Upload CSV / JSON
+          <input type="file" accept=".csv,.tsv,.txt,.json" hidden onChange={(e) => { const f = e.target.files[0]; if (f) upload(f); e.target.value = ""; }} /></label>
+      </div>
       <div className="iter-wrap">
         <table className="it">
           <thead><tr><th>#</th><th>Run</th><th>Browser</th>
@@ -83,7 +136,9 @@ function Iterations() {
         <button className="btn sm" onClick={addCol}><Icon name="plus" size={14} />Add column</button>
       </div>
       <p className="hint">Each enabled row is a separate run with its own data and <b>browser</b>. Values under <b>Single run</b> are shared by every iteration,
-        and columns here override them. Click the lock icon on a column to mark it sensitive.</p>
+        and columns here override them. Click the lock icon on a column to mark it sensitive.
+        Templates: a CSV header row lists the keys (<code>password [secret]</code> marks a secret column), with optional <code>run</code> (yes/no)
+        and <code>browser</code> columns. Secret values are never written into downloaded templates.</p>
     </>
   );
 }

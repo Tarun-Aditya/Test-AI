@@ -86,8 +86,6 @@ def by_for(loc: Locator, in_shadow: bool):
         return (By.XPATH, f"//*[@id=//label[normalize-space(.)={xq(v)}]/@for] | "
                           f"//label[normalize-space(.)={xq(v)}]//*[self::input or self::select or self::textarea]")
     if s == "role":
-        if loc.role == "link":
-            return (By.LINK_TEXT, v)
         cond = ROLE_XPATH.get(loc.role or "", f'@role="{loc.role}"')
         name = (f"normalize-space(.)={xq(v)} or @aria-label={xq(v)} or @value={xq(v)} or @title={xq(v)} or @alt={xq(v)}"
                 f" or @id=//label[normalize-space(.)={xq(v)}]/@for or ancestor::label[normalize-space(.)={xq(v)}]")

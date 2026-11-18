@@ -226,6 +226,8 @@ input,select,textarea{font:inherit;color:var(--fg)}
 .drawer video{width:100%;border-radius:10px;background:#000;display:block}
 .drawer iframe{width:100%;height:calc(100vh - 190px);border:1px solid var(--line);border-radius:10px;background:#fff}
 /* iterations grid */
+.iter-tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.iter-tools label.btn{cursor:pointer}
 .iter-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}
 table.it{border-collapse:collapse;min-width:100%;font-size:12.5px}
 table.it th,table.it td{border-bottom:1px solid var(--line);padding:6px;white-space:nowrap}

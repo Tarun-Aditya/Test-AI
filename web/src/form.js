@@ -121,3 +121,88 @@ export function previewValues(f) {
     });
   };
 }
+
+/** ${key} / {{key}} names used by the test text, in order of first use. */
+export function placeholderKeys(text) {
+  const out = [];
+  for (const m of (text || "").matchAll(/\$\{\s*([\w.-]+)\s*\}|\{\{\s*([\w.-]+)\s*\}\}/g)) {
+    const k = m[1] || m[2];
+    if (!out.includes(k)) out.push(k);
+  }
+  return out;
+}
+export const looksSecret = (k) => /pass|pwd|secret|token|otp|pin\b|cvv|cvc|card|ssn|api.?key/i.test(k);
+
+const csvCell = (v) => (/[",\n\r]/.test(String(v ?? "")) ? `"${String(v).replace(/"/g, '""')}"` : String(v ?? ""));
+
+/** Iterations as a CSV template: run, browser, then one column per key; secret columns are marked and left empty. */
+export function iterationsCsv(f) {
+  const cols = f.iterCols.filter((c) => c.key.trim());
+  const head = ["run", "browser", ...cols.map((c) => (c.sensitive ? `${c.key} [secret]` : c.key))];
+  const rows = (f.iterRows.length ? f.iterRows : [{ on: true, browser: "", values: {} }]).map((r) =>
+    [r.on ? "yes" : "no", r.browser || "", ...cols.map((c) => (c.sensitive ? "" : r.values[c.key] ?? ""))]);
+  return [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [], cell = "", q = false;
+  const s = text.replace(/^﻿/, "");
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (q) {
+      if (ch === '"' && s[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') q = false;
+      else cell += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === "," || ch === ";" || ch === "\t") { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && s[i + 1] === "\n") i++;
+      row.push(cell); cell = "";
+      if (row.some((c) => c.trim() !== "")) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  row.push(cell);
+  if (row.some((c) => c.trim() !== "")) rows.push(row);
+  return rows;
+}
+
+const BROWSER_IDS = ["chromium", "chrome", "msedge", "firefox", "webkit"];
+const normBrowser = (b) => { const v = String(b || "").trim().toLowerCase().replace(/^edge$/, "msedge"); return BROWSER_IDS.includes(v) ? v : ""; };
+
+/** A CSV (header row = keys; optional "run" and "browser" columns; "key [secret]" or "key*" = sensitive)
+ *  or JSON ([{...}], or {"rows": [...]}, with "__browser") file -> iteration columns and rows. */
+export function parseIterationsFile(text, filename = "") {
+  let cols = [], rows = [];
+  if (/\.json$/i.test(filename) || /^\s*[[{]/.test(text)) {
+    let obj;
+    try { obj = JSON.parse(text); } catch (e) { throw new Error("Not valid JSON: " + e.message); }
+    const list = Array.isArray(obj) ? obj : Array.isArray(obj?.rows) ? obj.rows : null;
+    if (!list) throw new Error('JSON must be a list of rows, or {"rows": [...]}');
+    const keys = [...new Set(list.flatMap((r) => flatten(r).map((x) => x[0])))].filter((k) => !["__browser", "__run"].includes(k));
+    const sens = new Set(list.flatMap((r) => flatten(r).filter((x) => x[2]).map((x) => x[0])));
+    cols = keys.map((k) => ({ key: k, sensitive: sens.has(k) || looksSecret(k) }));
+    rows = list.map((r) => ({ on: r.__run !== false, browser: normBrowser(r.__browser), values: Object.fromEntries(flatten(r).map(([k, v]) => [k, String(v ?? "")])) }));
+  } else {
+    const t = parseCsv(text);
+    if (t.length < 1) throw new Error("The file is empty");
+    const head = t[0].map((h) => h.trim());
+    const idx = (n) => head.findIndex((h) => h.toLowerCase() === n);
+    const iRun = idx("run"), iBrowser = idx("browser");
+    head.forEach((h, i) => {
+      if (i === iRun || i === iBrowser || !h) return;
+      const secret = /\s*\[(secret|sensitive)\]$|\*$/i.test(h);
+      cols.push({ key: h.replace(/\s*\[(secret|sensitive)\]$|\*$/i, "").trim(), sensitive: secret || looksSecret(h), i });
+    });
+    rows = t.slice(1).map((r) => ({
+      on: iRun < 0 || !/^(no|n|false|0|off|skip)$/i.test((r[iRun] || "").trim()),
+      browser: iBrowser < 0 ? "" : normBrowser(r[iBrowser]),
+      values: Object.fromEntries(cols.map((c) => [c.key, (r[c.i] ?? "").trim()])),
+    }));
+    cols = cols.map(({ key, sensitive }) => ({ key, sensitive }));
+  }
+  if (!cols.length) throw new Error("No data columns found in the file");
+  if (!rows.length) throw new Error("The file has a header but no rows");
+  return { iterCols: cols, iterRows: rows };
+}

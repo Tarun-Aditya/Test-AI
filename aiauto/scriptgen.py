@@ -35,10 +35,17 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from autopilot_runtime import MASK, Run  # noqa: E402  (standalone runtime shipped next to this script)
+
+NAME = {name_lit}
+SOURCE = {source_lit}
 DATA = {data}
 SENSITIVE = {sensitive}
-# Makes closed shadow roots open before page scripts run, so locators can reach inside them (same as the recorder).
-OPEN_SHADOW_JS = {open_shadow}
+# The configuration of the recorded run (browser, headless, viewport, timeouts, video, highlight).
+# Environment variables override it: BROWSER, HEADLESS, NO_VIDEO, STEP_TIMEOUT, RESULTS_DIR, STORAGE_STATE, ...
+CONFIG = {config}
+STEPS = {steps}
 if len(sys.argv) > 1:
     with open(sys.argv[1], encoding="utf-8") as fh:
         DATA.update(json.load(fh))
@@ -66,6 +73,17 @@ def v(text):
     return re.sub(r"\\$\\{{\\s*([\\w.\\-\\[\\]]+)\\s*\\}}|\\{{\\{{\\s*([\\w.\\-\\[\\]]+)\\s*\\}}\\}}",
                   lambda m: look(m.group(1) or m.group(2)), text)
 
+
+def secret_values():
+    """Actual values of the sensitive data keys (masked in screenshots, report and logs)."""
+    out = []
+    for k in SENSITIVE:
+        try:
+            out.append(v("${{" + k + "}}"))
+        except KeyError:
+            pass
+    return out
+
 '''
 
 
@@ -79,30 +97,54 @@ def _val(s: str | None) -> str:
     return _q(s)
 
 
-def _body(st: Step, lines: list[str]) -> list[str]:
-    """Optional steps tolerate a missing element; steps whose element was never found are left as comments."""
-    from .models import ELEMENT_ACTIONS
-    if st.action in ELEMENT_ACTIONS and st.locator is None:
-        return [f"# (no element was identified for this step during recording{', it is optional' if st.optional else ''})"]
-    if st.optional:
-        return ["try:  # optional step"] + ["    " + l for l in lines] + ["except Exception:", "    pass"]
-    return lines
-
-
 def _comment(st: Step, i: int) -> str:
     raw = (st.raw or f"{st.action.value} {st.target or ''} {st.value or ''}").replace("\n", " ")
     origin = f'   (from: "{st.origin}")' if st.origin and st.origin != st.raw else ""
     return f"    # Step {i}: {raw}{origin}".replace("\n", " ")
 
 
-def _header(test: TestCase, fname: str, engine: str) -> str:
+CONFIG_KEYS = ("browser", "headless", "record_video", "timeout_ms", "viewport_width", "viewport_height", "highlight",
+               "highlight_ms", "dialogs")
+
+
+def _header(test: TestCase, fname: str, engine: str, config: dict | None = None) -> str:
     source = "\n".join("    " + l for l in (test.source_text or "").strip().splitlines()) or "    (none)"
     secrets = "".join(f"\n    {env_secret_name(k)}  ({k})" for k in test.sensitive) or " (none)"
+    cfg = {k: v for k, v in (config or {}).items() if k in CONFIG_KEYS}
+    if engine == "Selenium" and cfg.get("browser") == "chromium":
+        cfg["browser"] = "chrome"
     return HEADER.format(name=test.name.replace('"""', "'''"), fname=fname, source=source.replace('"""', "'''"),
                          engine=engine, secrets=secrets, mask=MASK,
-                         open_shadow=repr(OPEN_SHADOW_JS),
+                         name_lit=_q(test.name), source_lit=_q(test.source_text or ""),
+                         config=pprint.pformat(cfg, indent=4, sort_dicts=False),
+                         steps=pprint.pformat([_title(st) for st in test.steps], indent=4, width=120),
                          data=pprint.pformat(test.data, indent=4, sort_dicts=False) if test.data else "{}",
                          sensitive=repr(list(test.sensitive)))
+
+
+def _title(st: Step) -> str:
+    return (st.raw or f"{st.action.value} {st.target or ''} {st.value or ''}").replace("\n", " ").strip()
+
+
+def _secret(st: Step, sensitive: list[str]) -> bool:
+    from .data import referenced_keys
+    return any(k in sensitive for k in referenced_keys(st.value))
+
+
+def _step_block(i: int, st: Step, lines: list[str], target: str, sensitive: list[str], locator_desc: str) -> list[str]:
+    """with r.step(...): the runtime draws the boxes, screenshots the step and records pass/fail."""
+    from .models import ELEMENT_ACTIONS
+    if st.action in ELEMENT_ACTIONS and st.locator is None:
+        return [f"r.skip({i}, {_q(_title(st))}, 'no element was identified for this step during recording')"]
+    secret = _secret(st, sensitive)
+    shown = "MASK" if secret else (_val(st.value) if st.value else "None")
+    args = [str(i), _q(_title(st)), f"action={_q(st.action.value)}", f"value={shown}"]
+    if target != "None":
+        args += [f"target={target}", f"locator={_q(locator_desc)}"]
+    if st.optional:
+        args.append("optional=True")
+    body = ([f"r.mask({target})"] if secret and st.action in (Action.TYPE, Action.APPEND) and target != "None" else []) + lines
+    return [f"with r.step({', '.join(args)}):"] + ["    " + l for l in body]
 
 
 def embed_spec(test: TestCase) -> str:
@@ -148,50 +190,37 @@ def pw_locator(loc: Locator | None) -> str:
     return f"{expr}.{call}"
 
 
-def playwright_script(test: TestCase) -> str:
-    out = [_header(test, "test_playwright.py", "Playwright"),
-           "from playwright.sync_api import expect, sync_playwright\n\n",
-           "def run(page):",
-           "    answer = {'accept': True}",
+def playwright_script(test: TestCase, config: dict | None = None) -> str:
+    out = [_header(test, "test_playwright.py", "Playwright", config),
+           "from playwright.sync_api import expect  # noqa: E402\n\n",
+           "def run(r):",
+           "    page = r.page",
+           "    answer = {'accept': CONFIG.get('dialogs', 'accept') == 'accept'}",
            "    page.context.on('dialog', lambda d: (answer.update(last=d.message), d.accept() if answer['accept'] else d.dismiss()))"]
     for i, st in enumerate(test.steps, 1):
         out.append(_comment(st, i))
-        out.extend("    " + line for line in _body(st, _pw_lines(st)))
+        target = _pw_target(st)
+        desc = (st.locator.code or st.locator.label()) if st.locator and st.locator.strategy != "point" else ""
+        out.extend("    " + line for line in _step_block(i, st, _pw_lines(st), target, test.sensitive, desc))
     out.append('''
 
 if __name__ == "__main__":
-    headless = os.getenv("HEADLESS", "0") == "1"
-    browser_name = os.getenv("BROWSER", "chromium")      # chromium | chrome | msedge | firefox | webkit
-    with sync_playwright() as p:
-        btype = {"firefox": p.firefox, "webkit": p.webkit}.get(browser_name, p.chromium)
-        launch = {"headless": headless}
-        if browser_name in ("chrome", "msedge"):
-            launch["channel"] = browser_name
-        elif btype is p.chromium and os.getenv("AIAUTO_CHROME_BINARY"):
-            launch["executable_path"] = os.environ["AIAUTO_CHROME_BINARY"]
-        ctx_opts = {"viewport": {"width": 1366, "height": 900}}
-        if not os.getenv("NO_VIDEO"):
-            ctx_opts["record_video_dir"] = os.getenv("VIDEO_DIR", "videos")
-        if os.getenv("CHROME_PROFILE_DIR"):     # reuse a Chrome profile (saved passwords / SSO)
-            context = btype.launch_persistent_context(os.environ["CHROME_PROFILE_DIR"], **launch, **ctx_opts)
-            browser = None
-        else:
-            if os.getenv("STORAGE_STATE"):      # saved login session (cookies + localStorage)
-                ctx_opts["storage_state"] = os.environ["STORAGE_STATE"]
-            browser = btype.launch(**launch)
-            context = browser.new_context(**ctx_opts)
-        context.add_init_script(OPEN_SHADOW_JS)
-        context.set_default_timeout(int(os.getenv("STEP_TIMEOUT", "15000")))
-        page = context.pages[0] if context.pages else context.new_page()
-        try:
-            run(page)
-            print("PASSED")
-        finally:
-            context.close()
-            if browser:
-                browser.close()
+    with Run(NAME, "playwright", STEPS, CONFIG, source=SOURCE, secrets=secret_values()) as r:
+        run(r)
+    sys.exit(r.exit_code)
 ''')
     return "\n".join(out) + embed_spec(test)
+
+
+def _pw_target(st: Step) -> str:
+    if not st.locator:
+        return "None"
+    if st.locator.strategy == "point":
+        x, y = st.locator.value.split(",")
+        return f"('point', {x}, {y})"
+    if st.nth is not None and st.target:
+        return _pw_nth(st)
+    return pw_locator(st.locator)
 
 
 CLICKABLE_CSS = "a, button, [role=link], [role=button], input[type=submit], [role=option], [role=menuitem], li"
@@ -450,57 +479,44 @@ def follow_new_window(driver, known=[1]):
 '''
 
 
-def selenium_script(test: TestCase) -> str:
-    out = [_header(test, "test_selenium.py", "Selenium"), SE_HELPERS, "\ndef run(driver):", "    accept, dialog = True, None"]
+def selenium_script(test: TestCase, config: dict | None = None) -> str:
+    out = [_header(test, "test_selenium.py", "Selenium", config), SE_HELPERS, "\ndef run(r):", "    driver = r.driver",
+           "    accept, dialog = CONFIG.get('dialogs', 'accept') == 'accept', None"]
     for i, st in enumerate(test.steps, 1):
         out.append(_comment(st, i))
-        out.extend("    " + line for line in _body(st, _se_lines(st)))
-        if st.action not in (Action.DIALOG,):
-            out.append("    dialog = answer_alert(driver, accept) or dialog")
+        lines = _se_lines(st) + (["dialog = answer_alert(driver, accept) or dialog"] if st.action != Action.DIALOG else [])
+        loc = se_locator(st) if st.locator else None
+        desc = loc.label() if loc and loc.strategy != "point" else ""
+        out.extend("    " + line for line in _step_block(i, st, lines, _se_target(st), test.sensitive, desc))
     out.append('''
 
 if __name__ == "__main__":
-    headless = os.getenv("HEADLESS", "0") == "1"
-    browser_name = os.getenv("BROWSER", "chrome")         # chrome | chromium | msedge | firefox
-    if browser_name == "firefox":
-        options = webdriver.FirefoxOptions()
-        if headless:
-            options.add_argument("-headless")
-        options.set_capability("unhandledPromptBehavior", "ignore")
-        driver = webdriver.Firefox(options=options)
-    else:
-        edge = browser_name in ("msedge", "edge")
-        options = webdriver.EdgeOptions() if edge else webdriver.ChromeOptions()
-        options.add_argument("--window-size=1366,900")
-        options.set_capability("unhandledPromptBehavior", "ignore")
-        if headless:
-            options.add_argument("--headless=new")
-            options.add_argument("--no-sandbox")
-        if os.getenv("AIAUTO_CHROME_BINARY") and not edge:
-            options.binary_location = os.environ["AIAUTO_CHROME_BINARY"]
-        if os.getenv("CHROME_PROFILE_DIR"):     # reuse a Chrome profile (saved passwords / SSO)
-            options.add_argument("--user-data-dir=" + os.environ["CHROME_PROFILE_DIR"])
-            if os.getenv("CHROME_PROFILE_NAME"):
-                options.add_argument("--profile-directory=" + os.environ["CHROME_PROFILE_NAME"])
-        service = None
-        if os.getenv("AIAUTO_CHROMEDRIVER") and not edge:
-            from selenium.webdriver.chrome.service import Service
-            service = Service(os.environ["AIAUTO_CHROMEDRIVER"])
-        cls = webdriver.Edge if edge else webdriver.Chrome
-        driver = cls(options=options, service=service) if service else cls(options=options)
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": OPEN_SHADOW_JS})
-        if os.getenv("STORAGE_STATE"):          # saved login session (cookies + localStorage)
-            with open(os.environ["STORAGE_STATE"], encoding="utf-8") as fh:
-                state = json.load(fh)
-            driver.execute_cdp_cmd("Network.setCookies", {"cookies": [
-                {k: c[k] for k in ("name", "value", "domain", "path", "secure", "httpOnly") if k in c} for c in state.get("cookies", [])]})
-    try:
-        run(driver)
-        print("PASSED")
-    finally:
-        driver.quit()
+    with Run(NAME, "selenium", STEPS, CONFIG, source=SOURCE, secrets=secret_values()) as r:
+        run(r)
+    sys.exit(r.exit_code)
 ''')
     return "\n".join(out) + embed_spec(test)
+
+
+def _se_target(st: Step) -> str:
+    """(By, value, frames, shadow) for the runtime's highlight box - found without waiting."""
+    if not st.locator:
+        return "None"
+    if st.locator.strategy == "point":
+        x, y = st.locator.value.split(",")
+        return f"('point', {x}, {y})"
+    from .engines.selenium_engine import by_for
+    loc = se_locator(st)
+    if st.nth is not None and st.target and not loc.shadow:
+        call = _se_nth(st, False)                       # find(driver, By.XPATH, "<expr>", ...)
+        inner = call[len("find(driver, "):-1]
+        by, rest = inner.split(", ", 1)
+        xp = rest.split(", frames=")[0]
+        return f"({by}, {xp}, {loc.frames!r}, [])"
+    by = by_for(loc, bool(loc.shadow))
+    if by is None:
+        return "None"
+    return f"({BY_NAME.get(by[0], repr(by[0]))}, {_q(by[1])}, {loc.frames!r}, {loc.shadow!r})"
 
 
 def _se_nth(st: Step, clickable: bool) -> str:

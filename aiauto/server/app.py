@@ -243,7 +243,7 @@ async def api_run(req: RunRequest):
             row_data, row_sens = normalize(it.data, [])
             c = cfg.model_copy(update={k: v for k, v in (("browser", it.browser), ("engine", it.engine)) if v})
             c.session_state = cfg.session_state
-            plan.append(({**test.data, **row_data}, c, it.label or f"#{i}"))
+            plan.append((_merge(test.data, row_data), c, it.label or f"#{i}"))
             test.sensitive = sorted(set(test.sensitive) | set(row_sens))
     else:
         rows = iterations(test.data)
@@ -257,12 +257,13 @@ async def api_run(req: RunRequest):
     run_ids = []
     for (row, c, _), label in zip(plan, labels):
         name = _display_name(test.name, row, test.sensitive)
-        t = test.model_copy(update={"data": row, "name": f"{name} · {label}" if label else name})
-        rid = new_run_id(t.name)
+        title = f"{name} · {label}" if label else name
+        t = test.model_copy(update={"data": row, "title": title})      # name keeps its ${placeholders} for replays
+        rid = new_run_id(title)
         run_ids.append(rid)
         job = {"run_id": rid, "test": json.loads(t.model_dump_json()), "config": c.model_dump(),
                "session_state": c.session_state, "mode": mode, "agent": req.agent}
-        db.create_run({"run_id": rid, "test_name": t.name, "status": "queued", "engine": c.engine, "browser": c.browser,
+        db.create_run({"run_id": rid, "test_name": title, "status": "queued", "engine": c.engine, "browser": c.browser,
                        "agent": req.agent, "mode": mode, "started_at": now_iso(), "total": len(t.steps),
                        "iteration": label, "batch_id": batch, "config_json": c.model_dump_json(),
                        "data_json": json.dumps(masked_data(row, t.sensitive)), "sensitive_json": json.dumps(t.sensitive),

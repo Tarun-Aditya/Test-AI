@@ -77,10 +77,27 @@ def test_generated_scripts_run(demo_page, tmp_path, monkeypatch):
     test, _ = parse_text(TEXT.format(url=demo_page.as_uri()), DATA)
     s = run_test(test, RunConfig(record_video=False), tmp_path / "art")
     run_dir = tmp_path / "art" / s.run_id
+    assert (run_dir / "autopilot_runtime.py").exists()          # the scripts' own framework ships with them
     env = {**__import__("os").environ, "HEADLESS": "1", "NO_VIDEO": "1"}
     for script in ("test_playwright.py", "test_selenium.py"):
-        r = subprocess.run([sys.executable, run_dir / script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+        out = tmp_path / f"res_{script[:-3]}"
+        # copied elsewhere, run without this package on the path: independent of the tool
+        alone = tmp_path / f"alone_{script[:-3]}"
+        alone.mkdir()
+        for f in (script, "autopilot_runtime.py"):
+            (alone / f).write_text((run_dir / f).read_text())
+        r = subprocess.run([sys.executable, "-I", alone / script], cwd=alone,
+                           env={**env, "RESULTS_DIR": str(out), "NO_VIDEO": "0" if "selenium" in script else "1"},
+                           capture_output=True, text=True, timeout=120)
         assert r.returncode == 0 and "PASSED" in r.stdout, r.stderr[-2000:]
+        summary = json.loads((out / "summary.json").read_text())
+        assert summary["status"] == "passed" and all(st["status"] == "passed" for st in summary["steps"])
+        assert all((out / st["shot"]).exists() for st in summary["steps"])            # screenshot per step
+        assert "testcase" in (out / "junit.xml").read_text()
+        report = (out / "report.html").read_text()
+        assert "data:image/png;base64" in report                                      # screenshots embedded
+        if "selenium" in script:
+            assert summary["video"] and (out / "video.webm").stat().st_size > 1000 and "<video" in report
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"user": {"name": "z", "password": "nope"}}))
     r = subprocess.run([sys.executable, run_dir / "test_selenium.py", bad], cwd=tmp_path, env=env, capture_output=True, timeout=120)

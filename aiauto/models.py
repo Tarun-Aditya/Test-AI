@@ -92,7 +92,8 @@ class Step(BaseModel):
 
 
 class TestCase(BaseModel):
-    name: str = "Untitled test"
+    name: str = "Untitled test"                   # may keep ${placeholders}: the reusable name scripts are saved under
+    title: Optional[str] = None                   # this run's display name (placeholders filled, iteration label)
     base_url: Optional[str] = None
     steps: list[Step]
     data: dict[str, Any] = Field(default_factory=dict)

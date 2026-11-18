@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
-import { BROWSERS } from "../form.js";
+import { BROWSERS, dataPayload } from "../form.js";
 import Icon from "../icons.jsx";
 import CodeExplorer from "./CodeExplorer.jsx";
 import { ModeBadge, Prov, Status } from "../views/Dashboard.jsx";
@@ -63,14 +63,34 @@ function Replay({ r, onDone }) {
   const [heal, setHeal] = useState(true);
   const [busy, setBusy] = useState(false);
   const online = machines.filter((m) => m.online);
+  /** Studio's Test data (single run or iterations). Empty secrets are dropped so the run's stored secret is used. */
+  const studioData = () => {
+    let p;
+    try { p = dataPayload(form); } catch (e) { return { error: e.message }; }
+    const secret = new Set(p.sensitive);
+    const prune = (o, pre = "") => Object.fromEntries(Object.entries(o || {}).flatMap(([k, v]) => {
+      const key = pre + k;
+      if (v && typeof v === "object" && !Array.isArray(v)) return [[k, prune(v, key + ".")]];
+      return secret.has(key) && (v === "" || v == null) ? [] : [[k, v]];
+    }));
+    return { data: prune(p.data), sensitive: p.sensitive,
+      iterations: p.iterations?.map((it) => ({ ...it, data: prune(it.data), engine: null })) };
+  };
+  const studio = mode === "studio" ? studioData() : null;
   const go = async () => {
     setBusy(true);
     try {
-      let data = null;
+      let data = null, sensitive = r.sensitive, iterations;
       if (mode === "new") { try { data = JSON.parse(json); } catch (e) { throw new Error("Data is not valid JSON: " + e.message); } }
+      if (mode === "studio") {
+        const p = studioData();
+        if (p.error) throw new Error(p.error);
+        ({ data, iterations } = p);
+        sensitive = [...new Set([...r.sensitive, ...p.sensitive])];
+      }
       const config = { ...(r.config || {}), engine, browser, headless, self_heal: heal, live_view: true, session: r.config?.session || null, save_session: null };
-      const res = await api("/api/runs", { method: "POST", body: { replay_run_id: r.run_id, data, sensitive: r.sensitive, config, agent, reuse_secrets: true } });
-      onDone(); nav("studio", res.run_ids[0]); toast("Replay started");
+      const res = await api("/api/runs", { method: "POST", body: { replay_run_id: r.run_id, data, sensitive, iterations, config, agent, reuse_secrets: true } });
+      onDone(); nav("studio", res.run_ids[0]); toast(res.run_ids.length > 1 ? `Replay started: ${res.run_ids.length} iterations` : "Replay started");
     } catch (e) { toast(e.message, true); } finally { setBusy(false); }
   };
   return <div style={{ maxWidth: 720 }}>
@@ -78,8 +98,14 @@ function Replay({ r, onDone }) {
       If a locator no longer matches, the engine self-heals and the new run generates a fresh script.</p>
     <div className="field"><span>Test data</span>
       <div className="seg"><button className={mode === "same" ? "on" : ""} onClick={() => setMode("same")}>Same data as this run</button>
-        <button className={mode === "new" ? "on" : ""} onClick={() => setMode("new")}>Edit / new data</button></div>
-      {mode === "same" ? <small>{r.has_secrets ? "Sensitive values are reused from the hub's vault for this run." : r.sensitive.length ? "Sensitive values were not kept. They come from AIAUTO_SECRET_* variables on the machine." : "Exactly the values shown under Data & config."}</small>
+        <button className={mode === "new" ? "on" : ""} onClick={() => setMode("new")}>Edit / new data</button>
+        <button className={mode === "studio" ? "on" : ""} onClick={() => setMode("studio")}>Studio's test data</button></div>
+      {mode === "studio" ? <small>{studio.error ? <span style={{ color: "var(--bad)" }}>{studio.error}</span>
+        : studio.iterations ? <>Runs <b>{studio.iterations.length} iteration{studio.iterations.length > 1 ? "s" : ""}</b> from the Studio's Iterations grid
+          ({studio.iterations.map((it) => it.browser || browser).join(", ")}), each replaying this script. Edit them under Studio → Test data.</>
+        : <>Uses the Studio's <b>Single run</b> values ({Object.keys(studio.data || {}).join(", ") || "none"}). Keys you don't set keep this run's values.</>}
+        {" "}Secrets left empty there reuse this run's stored secret.</small>
+      : mode === "same" ? <small>{r.has_secrets ? "Sensitive values are reused from the hub's vault for this run." : r.sensitive.length ? "Sensitive values were not kept. They come from AIAUTO_SECRET_* variables on the machine." : "Exactly the values shown under Data & config."}</small>
         : <><textarea className="mono" rows={10} value={json} onChange={(e) => setJson(e.target.value)} />
           <small>Values left as •••••• keep the original secret. Add a "rows" list to replay several iterations.</small></>}
     </div>
@@ -95,7 +121,6 @@ function Replay({ r, onDone }) {
         <label className="toggle"><input type="checkbox" checked={heal} onChange={(e) => setHeal(e.target.checked)} /><span className="sw" />Self-heal</label></div></div>
     </div>
     <button className="btn primary" disabled={busy} onClick={go}><Icon name="play" size={14} />Replay script</button>
-    {form && null}
   </div>;
 }
 

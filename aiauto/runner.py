@@ -54,10 +54,10 @@ class Runner:
     # ---------------------------------------------------------------- public
     def run(self) -> RunSummary:
         started = time.time()
-        summary = RunSummary(run_id=self.run_id, test_name=self.test.name, engine=self.config.engine,
+        summary = RunSummary(run_id=self.run_id, test_name=self.test.title or self.test.name, engine=self.config.engine,
                              status=StepStatus.PASSED, started_at=_now(), agent=self.agent, mode=self.mode)
         resolved_steps: list[Step] = [s.model_copy(deep=True) for s in self.test.steps]
-        self._emit("run_started", total=len(resolved_steps), test=self.test.name, engine=self.config.engine)
+        self._emit("run_started", total=len(resolved_steps), test=self.test.title or self.test.name, engine=self.config.engine)
         failed = False
         try:
             self.engine = make_engine(self.config, self.run_dir)
@@ -257,7 +257,7 @@ class Runner:
                 self._timing("rank", t0)
                 if winner:
                     t0 = time.perf_counter()
-                    verified = self._verify(winner)
+                    verified = self._verify(winner, target)
                     self._timing("verify", t0)
                     if verified:
                         self._picked = winner.get("picked_by") or "heuristic"
@@ -360,7 +360,7 @@ class Runner:
             if problem and "match equally well" in problem:
                 raise StepError(self.mask(f"Ambiguous '{target}': {problem}"))
             if winner:
-                verified = self._verify(winner)
+                verified = self._verify(winner, target)
                 if verified:
                     self._picked = winner.get("picked_by") or "heuristic"
                     if attr == "locator":
@@ -432,7 +432,35 @@ class Runner:
     def _timing(self, what: str, t0: float) -> None:
         self.timings.setdefault(what, []).append((time.perf_counter() - t0) * 1000)
 
-    def _verify(self, cand: dict) -> list[Locator]:
+    @staticmethod
+    def _count_tolerant(locs: list[Locator], target: str) -> list[Locator]:
+        """Names like "Cart, 0 items" / "Inbox (12)" carry live counts the step never mentioned; a locator that
+        bakes the number in breaks once the data changes. Add XPath variants on the stable prefix ("Cart"), which
+        both engines and the generated scripts run; they are only kept if they still match exactly one element."""
+        from .engines.selenium_engine import ROLE_XPATH, xq
+        asked = set(re.findall(r"\d+", target or ""))
+        out, seen = [], set()
+        for l in locs:
+            if l.strategy not in ("role", "text") or not l.value or l.shadow:
+                continue
+            nums = re.findall(r"\d+", l.value)
+            if not nums or asked & set(nums):
+                continue
+            prefix = re.split(r"\d", l.value, maxsplit=1)[0].rstrip(" ,:;([{#-–·|/").strip()
+            if len(prefix) < 2 or not re.search(r"[^\W\d_]", prefix):
+                continue
+            P = xq(prefix)
+            if l.strategy == "role":
+                cond = ROLE_XPATH.get(l.role or "", f'@role="{l.role}"')
+                xp = f"//*[({cond}) and (starts-with(normalize-space(.), {P}) or starts-with(normalize-space(@aria-label), {P}))]"
+            else:
+                xp = f"//*[starts-with(normalize-space(.), {P}) and not(.//*[starts-with(normalize-space(.), {P})])]"
+            if xp not in seen:
+                seen.add(xp)
+                out.append(l.model_copy(update={"strategy": "xpath", "value": xp, "role": None, "code": None}))
+        return out
+
+    def _verify(self, cand: dict, target: str = "") -> list[Locator]:
         """Keep only locators that the engine itself resolves to exactly this one element."""
         e = self.engine
         good: list[Locator] = []
@@ -442,6 +470,7 @@ class Runner:
             info["name"] = desc["name"]
         cand = info
         all_locs = L.to_locators(cand)
+        all_locs = self._count_tolerant(all_locs, target) + all_locs
         if hasattr(e, "verify_locators"):
             # one in-page check of every locator, then a native find_elements confirmation of the winners
             try:
@@ -620,8 +649,11 @@ class Runner:
         resolved = self.test.model_copy(update={"steps": resolved_steps, "data": safe_data, "engine": self.config.engine})
         d = self.run_dir
         (d / "script.json").write_text(resolved.model_dump_json(indent=2))
-        (d / "test_playwright.py").write_text(scriptgen.playwright_script(resolved))
-        (d / "test_selenium.py").write_text(scriptgen.selenium_script(resolved))
+        cfg = self.config.model_dump()
+        (d / "test_playwright.py").write_text(scriptgen.playwright_script(resolved, cfg))
+        (d / "test_selenium.py").write_text(scriptgen.selenium_script(resolved, cfg))
+        # the standalone runtime the scripts use (report, video, screenshots, highlight) - no dependency on this tool
+        (d / "autopilot_runtime.py").write_text(Path(__file__).with_name("script_runtime.py").read_text())
         (d / "data.json").write_text(json.dumps(safe_data, indent=2))
         summary.artifacts = {
             "report": "report.html", "script": "script.json", "playwright": "test_playwright.py",

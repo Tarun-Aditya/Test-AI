@@ -55,7 +55,10 @@ def test_hub_flow(hub, shop_url):
     z = zipfile.ZipFile(io.BytesIO(c.get(f"/api/runs/{ids[0]}/export").content))
     names = z.namelist()
     root = names[0].split("/")[0]
-    assert {f"{root}/run.py", f"{root}/tests/test_selenium.py", f"{root}/data/iteration_2.json", f"{root}/.env.example"} <= set(names)
+    assert {f"{root}/run.py", f"{root}/tests/test_selenium.py", f"{root}/tests/autopilot_runtime.py",
+            f"{root}/data/iteration_2.json", f"{root}/.env.example"} <= set(names)
+    assert "imageio-ffmpeg" in z.read(f"{root}/requirements.txt").decode()
+    assert "RESULTS_DIR" in z.read(f"{root}/run.py").decode()
     assert "AIAUTO_SECRET_TOKEN=" in z.read(f"{root}/.env.example").decode()
     assert "tok-1" not in b"".join(z.read(n) for n in names).decode(errors="ignore")
 
