@@ -520,6 +520,16 @@ python -m aiauto parse "Open example.com then click More information"
 | `AIAUTO_CHROME_BINARY` / `AIAUTO_CHROMEDRIVER` | – | Specific browser binary / driver |
 | `AIAUTO_SECRET_<KEY>` | – | Value for a sensitive data key on the executing machine |
 
+### Real-site check
+
+`examples/real_sites/` holds eight scenarios on public practice sites built for automation (SauceDemo,
+the-internet, UI Testing Playground, DemoQA, Selenium's shadow-root page, Books to Scrape, TodoMVC): iframes,
+nested frames, shadow DOM, alerts and confirms, dynamic loading, AJAX waits, hovers, drag and drop, tables,
+custom-skinned selects, unlabelled checkboxes, shuffled look-alike buttons, non-breaking spaces and data-driven
+iterations. `python tools/real_sites.py` runs each on Playwright and Selenium through a hub, replays every
+generated script, runs every exported project on its own, and writes `REPORT.md` with the timings, element-finding
+times, video sizes, screenshots and live-view frames per run.
+
 ## Examples and tests
 
 * `examples/playground.html`: every element type (nested shadow roots, nested iframes, random ids,

@@ -89,7 +89,7 @@ def facts(art: Path, rid: str, ev: Counter) -> dict:
         "artifacts": {"report": (d / "report.html").exists(), "script_json": (d / "script.json").exists(),
                       "test_playwright": (d / "test_playwright.py").exists(), "test_selenium": (d / "test_selenium.py").exists(),
                       "video_kb": round(video.stat().st_size / 1024) if video.exists() else 0,
-                      "screenshots": len(list(d.glob("*.png"))) + len(list((d / "shots").glob("*.png")) if (d / "shots").exists() else [])},
+                      "screenshots": len(list(d.rglob("*.png")))},
         "live": {"frames": ev.get("live_frame", 0), "step_shots": ev.get("step_shot", 0), "step_events": ev.get("step_finished", 0)},
     }
 

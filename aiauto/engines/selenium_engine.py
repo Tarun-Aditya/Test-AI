@@ -60,6 +60,10 @@ ROLE_XPATH = {
 }
 
 
+# text as the user sees it: a non-breaking space ("My&nbsp;Button") is a space, which XPath's normalize-space ignores
+NS = "normalize-space(translate(., '\u00a0', ' '))"
+
+
 def by_for(loc: Locator, in_shadow: bool):
     """Native Selenium (By, value) for a Locator. Inside shadow roots only CSS is allowed by WebDriver."""
     from selenium.webdriver.common.by import By
@@ -81,14 +85,14 @@ def by_for(loc: Locator, in_shadow: bool):
     if s == "xpath":
         return (By.XPATH, v)
     if s == "text":
-        return (By.XPATH, f"//*[normalize-space(.)={xq(v)} and not(.//*[normalize-space(.)={xq(v)}])]")
+        return (By.XPATH, f"//*[{NS}={xq(v)} and not(.//*[{NS}={xq(v)}])]")
     if s == "label":
-        return (By.XPATH, f"//*[@id=//label[normalize-space(.)={xq(v)}]/@for] | "
-                          f"//label[normalize-space(.)={xq(v)}]//*[self::input or self::select or self::textarea]")
+        return (By.XPATH, f"//*[@id=//label[{NS}={xq(v)}]/@for] | "
+                          f"//label[{NS}={xq(v)}]//*[self::input or self::select or self::textarea]")
     if s == "role":
         cond = ROLE_XPATH.get(loc.role or "", f'@role="{loc.role}"')
-        name = (f"normalize-space(.)={xq(v)} or @aria-label={xq(v)} or @value={xq(v)} or @title={xq(v)} or @alt={xq(v)}"
-                f" or @id=//label[normalize-space(.)={xq(v)}]/@for or ancestor::label[normalize-space(.)={xq(v)}]")
+        name = (f"{NS}={xq(v)} or @aria-label={xq(v)} or @value={xq(v)} or @title={xq(v)} or @alt={xq(v)}"
+                f" or @id=//label[{NS}={xq(v)}]/@for or ancestor::label[{NS}={xq(v)}]")
         return (By.XPATH, f"//*[({cond}) and ({name})]")
     return (By.CSS_SELECTOR, v)
 
