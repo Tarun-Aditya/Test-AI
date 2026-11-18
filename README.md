@@ -126,6 +126,13 @@ The AI status chip at the bottom of the sidebar shows whether Claude is configur
 3. Each candidate locator is **verified natively by the engine** (it must match exactly one element, and the
    right one). The first verified one becomes the step's locator, and up to 3 more are kept as fallbacks.
 
+**Selenium on Chrome / Chromium / Edge** also reads the browser's own accessibility tree over CDP
+(`Accessibility.getFullAXTree`, mapped to candidates via `DOM.getDocument` backend node ids, including shadow
+roots and same-origin iframes). The roles and accessible names Chrome computes (aria-labelledby chains, labels,
+placeholders, alt/title…) replace the snapshot's JavaScript approximation for scoring and for role locators.
+Chrome-internal roles (Date, ColorWell…) are ignored. Firefox, or any CDP error, falls back to the JavaScript
+values. Turn it off with `config.use_ax_tree = false`.
+
 Order of preference: test-id › stable id › role + name › label › placeholder › name › text › alt/title ›
 attribute CSS › structural CSS › XPath. Selenium can't evaluate role, label or text inside shadow roots,
 so it uses CSS there.

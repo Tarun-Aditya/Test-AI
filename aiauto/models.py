@@ -136,6 +136,7 @@ class RunConfig(BaseModel):
     slow_mo_ms: int = 0
     live_view: bool = True                # stream live frames + per-step screenshots to the web UI
     live_fps: float = 1.5
+    use_ax_tree: bool = True              # Selenium on Chrome/Edge: take roles + accessible names from the CDP accessibility tree
     # --- logged-in sessions ---------------------------------------------------
     profile_dir: Optional[str] = None     # Chrome user-data-dir to reuse (saved passwords, SSO cookies)
     profile_name: Optional[str] = None    # e.g. "Default", "Profile 1"

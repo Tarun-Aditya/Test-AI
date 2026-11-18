@@ -24,7 +24,7 @@ from .models import Action, Locator, Step
 SNAPSHOT_JS = r"""
 return (function(){
   const MAX = 4000;
-  const out = []; let uid = 0; const TOK = Math.random().toString(36).slice(2, 10);
+  const out = []; const ELS = []; let uid = 0; const TOK = Math.random().toString(36).slice(2, 10);
   const q = s => String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"');
   const norm = s => (s||'').replace(/\s+/g,' ').trim();
   // auto-generated ids/classes: long digit runs, hashes, framework prefixes, random letter+digit segments
@@ -166,9 +166,11 @@ return (function(){
       el.__aiautoMark = [TOK, info.uid]; info.anc = anc;
       info.locators = candidates(el, info, shadow.length > 0);
       out.push(info);
+      ELS.push(el);
     }
   }
   walk(document, [], []);
+  try { window.__aiautoEls = ELS; } catch (e) {}   // lets an engine map candidates to browser-internal node ids (CDP)
   return out;
 })();
 """
@@ -379,6 +381,8 @@ def describe(c: dict) -> str:
         if c.get(k):
             bits.append(f'"{c[k][:50]}"')
             break
+    if c.get("ax"):
+        bits.append("(role/name from Chrome accessibility tree)")
     if c.get("frames"):
         bits.append(f"(in iframe x{len(c['frames'])})")
     if c.get("shadow"):

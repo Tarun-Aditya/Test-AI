@@ -44,7 +44,8 @@ def test_hub_flow(hub, shop_url):
     ids = r.json()["run_ids"]
     assert len(ids) == 2 and r.json()["batch_id"]
     runs = _wait(c, ids)
-    assert all(runs[i]["status"] == "passed" and runs[i]["mode"] == "ai" for i in ids)
+    assert all(runs[i]["status"] == "passed" and runs[i]["mode"] == "ai" for i in ids), \
+        [(runs[i]["status"], runs[i].get("error"), [(st["idx"], st["error"]) for st in c.get(f"/api/runs/{i}").json()["steps"] if st["error"]]) for i in ids]
 
     d = c.get(f"/api/runs/{ids[0]}").json()
     assert d["data"]["token"] == "••••••" and d["has_secrets"] and len(d["batch"]) == 2 and d["steps"]

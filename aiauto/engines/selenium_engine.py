@@ -134,6 +134,7 @@ class SeleniumEngine(Engine):
             self.driver = cls(options=opts, service=service) if service else cls(options=opts)
         self.driver.set_window_size(c.viewport_width, c.viewport_height)
         self.driver.set_page_load_timeout(max(30, c.timeout_ms // 1000 * 3))
+        self._chromium = b != "firefox" and hasattr(self.driver, "execute_cdp_cmd")
         self._apply_session(c.session_state)
         # serialise all WebDriver commands so the video thread never interleaves mid-command
         self._lock = threading.RLock()
@@ -270,7 +271,15 @@ class SeleniumEngine(Engine):
     def snapshot(self):
         self._follow_new_window()
         self._top()
-        return self.driver.execute_script(SNAPSHOT_JS)
+        cands = self.driver.execute_script(SNAPSHOT_JS)
+        if self.config.use_ax_tree and getattr(self, "_chromium", False):
+            try:   # real roles + accessible names from Chrome's accessibility tree (CDP)
+                from .ax import enrich
+                self.ax_hits = enrich(self._cdp, self.driver.execute_script, cands)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug("AX tree enrichment skipped: %s", e)
+        return cands
 
     def screenshot(self, path, full_page=False):
         self.driver.save_screenshot(str(path))

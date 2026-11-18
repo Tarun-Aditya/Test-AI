@@ -61,3 +61,24 @@ def test_cross_engine_replay_self_heals(tmp_path):
                   RunConfig(engine="selenium", timeout_ms=5000, record_video=False), tmp_path / "a", mode="replay")
     assert s2.status.value == "passed", [(r.index + 1, r.error) for r in s2.results if r.error]
     assert s2.healed_steps > 0
+
+
+def test_selenium_uses_chrome_accessibility_tree(tmp_path):
+    """On Chrome, Selenium candidates take role + accessible name from the CDP accessibility tree."""
+    import time
+    from aiauto.engines.selenium_engine import SeleniumEngine
+    e = SeleniumEngine(RunConfig(engine="selenium", record_video=False), tmp_path)
+    e.start()
+    try:
+        e.goto((EXAMPLES / "playground.html").as_uri())
+        time.sleep(1.7)
+        cands = e.snapshot()
+        assert e.ax_hits > len(cands) * 0.8
+        size = next(c for c in cands if c.get("role") == "combobox" and c["tag"] == "div")
+        assert size["name"] == "Size" and size["js_name"] == "Pick a size"           # aria-labelledby, as Chrome computes it
+        assert {"strategy": "role", "value": "Size", "role": "combobox"} in size["locators"]
+        assert any(c.get("ax") and c["shadow"] for c in cands) and any(c.get("ax") and c["frames"] for c in cands)
+        assert not any(c["role"] in ("Date", "ColorWell", "Legend") for c in cands)
+        assert e.driver.execute_script("return document.querySelectorAll('[data-aiauto-uid]').length") == 0
+    finally:
+        e.stop()
