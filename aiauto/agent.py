@@ -173,7 +173,9 @@ def _do_job(link: _Link, job: dict, server: str, token: str | None, out: Path, a
     cfg.session_state = job.get("session_state")
     if job.get("ai") is not None:        # the hub's AI choice; this machine's own CLIs / env keys still apply
         from .nlp import providers
-        providers.configure({**job["ai"], **_local_ai()})
+        # without a usable provider here, AI calls go to the hub, which answers with its own (e.g. your
+        # subscription logged in on the hub's computer)
+        providers.configure({**job["ai"], **_local_ai(), "hub_url": server, "hub_token": token})
     final = {}
 
     def on_event(ev: dict) -> None:

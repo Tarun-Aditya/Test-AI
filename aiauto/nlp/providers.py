@@ -5,6 +5,8 @@
     copilot       GitHub Copilot subscription through the Copilot CLI (`copilot -p`)
     anthropic     Anthropic API key (ANTHROPIC_API_KEY / `ant auth login`), Anthropic SDK with structured outputs
     litellm       any model LiteLLM supports (OpenAI, Gemini, Azure, Bedrock, Mistral, Ollama, a LiteLLM proxy, ...)
+    hub           (agents only) ask the hub, which answers with ITS provider - e.g. the Claude / Cursor / Copilot
+                  subscription logged in on the hub's computer, so agents in Docker need no CLI, login or key
 
 `auto` (the default) tries them in that order: subscriptions first, then a key, then LiteLLM. A provider that
 fails because it is not logged in / has no credits / is not installed is skipped for the rest of the process
@@ -29,7 +31,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-ORDER = ["claude-code", "cursor", "copilot", "anthropic", "litellm"]
+ORDER = ["claude-code", "cursor", "copilot", "anthropic", "litellm", "hub"]
 LABELS = {
     "auto": "Auto (your subscription first, then API key, then LiteLLM)",
     "claude-code": "Claude subscription (Claude Code CLI)",
@@ -37,6 +39,7 @@ LABELS = {
     "copilot": "GitHub Copilot subscription (Copilot CLI)",
     "anthropic": "Anthropic API key",
     "litellm": "Any model via LiteLLM (OpenAI, Gemini, Azure, Bedrock, Ollama, proxy ...)",
+    "hub": "The hub's AI (remote machines ask the hub, which uses its subscription)",
 }
 DEFAULT_MODEL = "claude-opus-5-5"
 CLI_TIMEOUT = int(os.getenv("AIAUTO_AI_TIMEOUT", "180"))
@@ -84,6 +87,8 @@ def model_for(name: str) -> str | None:
         return setting("litellm_model", "AIAUTO_LITELLM_MODEL") or (m if m and "/" in m else None)
     if name == "claude-code":
         return m or DEFAULT_MODEL
+    if name == "hub":
+        return None
     return m          # cursor / copilot: their own default unless one is set ("gpt-5", "sonnet-4.5", ...)
 
 
@@ -99,8 +104,10 @@ def _cli(name: str) -> list[str] | None:
         if os.path.exists(raw):
             return _unshim(raw)
         import shlex
-        parts = shlex.split(raw, posix=os.name != "nt")
-        return [p.strip('"') for p in parts] or None
+        parts = [p.strip('"') for p in shlex.split(raw, posix=os.name != "nt")]
+        if not parts or not (os.path.exists(parts[0]) or shutil.which(parts[0])):
+            return None                     # configured, but not on this machine
+        return parts
     found = shutil.which(exe)
     return _unshim(found) if found else None
 
@@ -143,6 +150,8 @@ def detect(name: str) -> tuple[bool, str]:
         except ImportError:
             return False, "anthropic package not installed"
         return (True, "API key / profile found") if _anthropic_cred() or _anthropic_client else (False, "no API key")
+    if name == "hub":
+        return (True, f"via {setting('hub_url')}") if setting("hub_url") else (False, "only used by remote machines")
     if name == "litellm":
         try:
             import litellm  # noqa: F401
@@ -154,8 +163,8 @@ def detect(name: str) -> tuple[bool, str]:
 
 def candidates() -> list[str]:
     c = chosen()
-    names = ORDER if c == "auto" else [c]
-    return [n for n in names if detect(n)[0]]
+    names = ORDER if c == "auto" else [c, "hub"]      # a machine without the chosen provider asks the hub
+    return [n for n in dict.fromkeys(names) if detect(n)[0]]
 
 
 def available() -> bool:
@@ -425,4 +434,23 @@ def _litellm(system, user, schema, png, max_tokens, effort):
     return _first_json(resp.choices[0].message.content or "")
 
 
-_CALLS = {"claude-code": _claude_code, "cursor": _cursor, "copilot": _copilot, "anthropic": _anthropic, "litellm": _litellm}
+# -- remote machines: the hub answers with its own provider (POST /api/ai/call, agent token)
+def _hub(system, user, schema, png, max_tokens, effort):
+    import base64
+    import httpx
+    url = setting("hub_url").rstrip("/") + "/api/ai/call"
+    headers = {"x-agent-token": setting("hub_token")} if setting("hub_token") else {}
+    body = {"system": system, "user": user, "schema": schema, "max_tokens": max_tokens, "effort": effort,
+            "image_png": base64.b64encode(png).decode() if png else None}
+    try:
+        r = httpx.post(url, json=body, headers=headers, timeout=CLI_TIMEOUT + 60)
+    except httpx.HTTPError as e:
+        raise ProviderError(f"hub unreachable: {e}") from e
+    if r.status_code in (401, 403, 404):
+        raise ProviderError(f"hub refused AI call ({r.status_code})", fatal=True)
+    if r.status_code >= 400:
+        raise ProviderError(f"hub AI error {r.status_code}: {r.text[:200]}")
+    return r.json().get("answer")
+
+
+_CALLS = {"hub": _hub, "claude-code": _claude_code, "cursor": _cursor, "copilot": _copilot, "anthropic": _anthropic, "litellm": _litellm}

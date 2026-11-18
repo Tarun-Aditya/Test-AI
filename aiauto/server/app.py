@@ -571,6 +571,27 @@ async def api_ai_put(req: AISettings):
     return _ai_public(cfg)
 
 
+class AICall(BaseModel):
+    system: str
+    user: str
+    schema_: dict = Field(alias="schema")
+    image_png: Optional[str] = None
+    max_tokens: int = 16000
+    effort: str = "low"
+
+
+@app.post("/api/ai/call")
+async def api_ai_call(req: AICall, x_agent_token: Optional[str] = Header(None)):
+    """For remote machines: one structured AI call answered with the hub's provider (its subscription CLI,
+    key or LiteLLM), so agents in Docker or on other computers need no AI setup of their own."""
+    if AGENT_TOKEN and x_agent_token != AGENT_TOKEN:
+        raise HTTPException(401)
+    import base64
+    png = base64.b64decode(req.image_png) if req.image_png else None
+    answer = await asyncio.to_thread(providers.call_json, req.system, req.user, req.schema_, png, req.max_tokens, req.effort)
+    return {"answer": answer, "provider": providers.active()}
+
+
 @app.post("/api/ai/test")
 async def api_ai_test():
     """One small real call through the active provider: proves the subscription / key / model works."""

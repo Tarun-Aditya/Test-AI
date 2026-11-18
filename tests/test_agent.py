@@ -62,11 +62,14 @@ def cluster(tmp_path):
            "AIAUTO_AGENT_TOKEN": "t0k", "ANTHROPIC_API_KEY": "", "AIAUTO_LOCAL_WORKERS": "1",
            "PYTHONPATH": os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])}
 
-    def start(agents):
-        base = _start_hub(tmp_path, procs, env)
+    def start(agents, hub_env=None, agent_env=None):
+        def merged(extra):
+            e = {**env, **(extra or {})}
+            return {k: v for k, v in e.items() if v is not None}       # None = remove the variable
+        base = _start_hub(tmp_path, procs, merged(hub_env))
         screen = False
         for name, slots in agents.items():
-            screen = _start_agent(base, tmp_path, procs, env, name, slots)
+            screen = _start_agent(base, tmp_path, procs, merged(agent_env), name, slots)
         _wait_agents(base, len(agents))
         return base, screen
     try:
@@ -304,3 +307,36 @@ def test_remote_grids_appear_as_machines_and_run(cluster, remote_browsers, shop_
         assert runs[rid]["status"] == "passed", (runs[rid]["agent"], runs[rid].get("error"))
         assert runs[rid]["video"] and frames.get(rid, 0) >= 2
     assert {runs[i]["agent"] for i in ids} == {"win-chrome", "mac-cdp"}
+
+
+def test_agent_without_ai_uses_the_hubs_subscription(cluster, tmp_path):
+    """An agent with no AI of its own (like a Docker container) asks the hub, which answers with its provider -
+    here a stand-in for the Claude Code CLI logged into your subscription on the hub's computer. The canvas
+    button needs the AI to read a screenshot, on the agent."""
+    log = tmp_path / "hub-cli.log"
+    fake = tmp_path / "fake_claude.py"
+    answer = {"found": True, "x": 230, "y": 205, "reason": "green Buy now button"}
+    fake.write_text("import json, sys\n"
+                    f"open({str(log)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                    f"print(json.dumps({{'type': 'result', 'is_error': False, 'structured_output': {answer!r}}}))\n", encoding="utf-8")
+    hub_cli = f'"{sys.executable}" "{fake}"' if os.name == "nt" else f"{sys.executable} {fake}"
+    nowhere = str(tmp_path / "not-installed")
+    no_ai = {"AIAUTO_DISABLE_LLM": None, "AIAUTO_CLAUDE_CLI": nowhere, "AIAUTO_CURSOR_CLI": nowhere,
+             "AIAUTO_COPILOT_CLI": nowhere, "AIAUTO_LITELLM_MODEL": None, "ANTHROPIC_API_KEY": None}
+    base, _ = cluster({"docker-like": 1}, hub_env={**no_ai, "AIAUTO_CLAUDE_CLI": hub_cli, "AIAUTO_AI_PROVIDER": "claude-code"},
+                      agent_env=no_ai)
+    assert "Claude subscription" in httpx.get(base + "/api/health").json()["llm"]
+    steps = [{"action": "navigate", "value": (EXAMPLES / "canvas.html").as_uri()},
+             {"action": "click", "target": "Buy now"},
+             {"action": "assert_text", "value": "Clicked Buy now"}]
+
+    def submit():
+        r = httpx.post(base + "/api/runs", timeout=30, json={"steps": steps, "name": "canvas via hub AI", "agent": "docker-like",
+                       "config": {"engine": "playwright", "use_llm": True, "record_video": False, "timeout_ms": 3000}})
+        assert r.status_code == 200, r.text
+        return r.json()["run_ids"]
+    ids, *_ = _collect(base, submit)
+    run = httpx.get(base + f"/api/runs/{ids[0]}").json()
+    assert run["status"] == "passed", [(st["idx"], st["error"]) for st in run["steps"] if st["error"]]
+    assert run["agent"] == "docker-like"
+    assert log.exists() and "--json-schema" in log.read_text(encoding="utf-8")     # answered by the hub's CLI

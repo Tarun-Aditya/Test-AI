@@ -297,8 +297,23 @@ docker compose up --build --scale agent=3      # hub + 3 agents with 2 slots eac
   has no monitor, so the window is drawn on a virtual screen (Xvfb, started by the entrypoint). You watch it
   through the live view, screenshots and video. To watch a headed browser on your own monitor, run an agent on
   your own computer instead.
-* **AI inside Docker**: the subscription CLIs aren't in the image. Use an API key or LiteLLM (Settings → AI, or
-  `-e ANTHROPIC_API_KEY=…`). The hub's choice of AI is sent to agents with each job; keys are sent only if you allow it.
+* **Your subscription inside Docker.** Two ways:
+  1. **Agents use the hub's AI (no setup).** An agent without AI of its own, such as any Docker agent, sends its
+     AI calls to the hub. The hub answers them with its own provider, for example the Claude / Cursor / Copilot
+     CLI you are logged into on the computer the hub runs on. Tie-breaks between elements and canvas
+     screenshots go over the agent's existing connection and token, and English → steps already runs on the hub.
+     A machine that has its own logged-in CLI or key uses that first.
+  2. **The CLIs in the image (hub in Docker).** Build with `--build-arg AI_CLIS=1` (adds Node, Claude Code and the
+     Copilot CLI), then log in with a token instead of a browser:
+     * Claude: run `claude setup-token` once on your computer (needs a Claude subscription) and pass the token
+       as `-e CLAUDE_CODE_OAUTH_TOKEN=…`.
+     * Copilot: pass a GitHub token that is allowed to use Copilot as `-e COPILOT_GITHUB_TOKEN=…` (or `GH_TOKEN`).
+     * Cursor: install its CLI in your own image layer (`curl https://cursor.com/install -fsS | bash`) and pass a
+       Cursor API key as `-e CURSOR_API_KEY=…`.
+     Or mount an existing Linux login: `-v ~/.claude:/root/.claude` (on macOS the Claude login is in the Keychain,
+     so use the token).
+  An API key or LiteLLM also works (Settings → AI, or `-e ANTHROPIC_API_KEY=…`). Keys are sent to agents with
+  jobs only if you allow it.
 * The hub keeps its SQLite DB and artifacts in the `/data` volume, so history survives container restarts.
 * `--shm-size` matters: Chromium crashes with Docker's default 64 MB `/dev/shm` (about 1 GB per slot).
 * Inside Docker the agent has no access to your desktop Chrome profile. Use **saved sessions** for SSO

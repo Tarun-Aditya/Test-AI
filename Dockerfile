@@ -50,6 +50,20 @@ assert not missing, f"could not set up Selenium for {missing}"
 PY
 RUN if [ -f /usr/local/share/ca-certificates/build-ca.crt ]; then rm /usr/local/share/ca-certificates/build-ca.crt && update-ca-certificates --fresh >/dev/null; fi
 
+# Optional: the subscription CLIs (Claude Code, GitHub Copilot) for a hub running in Docker.
+#   docker build --build-arg AI_CLIS=1 -t autopilot .
+# Log in without a browser through environment variables (see README "Your subscription inside Docker").
+ARG AI_CLIS=0
+ARG NODE_VERSION=v22.20.0
+ENV PATH=/opt/node/bin:$PATH
+RUN --mount=type=secret,id=ca,required=false \
+    if [ "$AI_CLIS" = "1" ]; then set -e; \
+      if [ -s /run/secrets/ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca SSL_CERT_FILE=/run/secrets/ca; fi; \
+      mkdir -p /opt/node && curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-x64.tar.gz" | tar -xz -C /opt/node --strip-components=1; \
+      npm install -g @anthropic-ai/claude-code @github/copilot; \
+      claude --version; copilot --version; \
+    fi
+
 COPY aiauto ./aiauto
 COPY examples ./examples
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
