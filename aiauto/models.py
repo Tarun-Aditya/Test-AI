@@ -68,6 +68,7 @@ class Locator(BaseModel):
     score: float = 0.0
     description: str = ""
     picked_by: Optional[str] = None   # how the element was identified: ai | heuristic
+    code: Optional[str] = None        # strategy "playwright": the Python locator code Playwright generated
 
     def label(self) -> str:
         where = "".join(f"iframe[{f}] » " for f in self.frames) + "".join(f"shadow[{s}] » " for s in self.shadow)
@@ -118,6 +119,7 @@ class StepResult(BaseModel):
     url: str = ""
     shown_value: Optional[str] = None     # value after data substitution, masked if sensitive
     dialog: Optional[str] = None          # text of a dialog that appeared during this step
+    locate_ms: Optional[int] = None       # time spent finding the element (snapshot + ranking + verification)
 
 
 class RunConfig(BaseModel):
@@ -136,7 +138,9 @@ class RunConfig(BaseModel):
     slow_mo_ms: int = 0
     live_view: bool = True                # stream live frames + per-step screenshots to the web UI
     live_fps: float = 1.5
-    use_ax_tree: bool = True              # Selenium on Chrome/Edge: take roles + accessible names from the CDP accessibility tree
+    use_ax_tree: bool = True
+    use_playwright_snapshot: bool = True  # Playwright: candidates from page.aria_snapshot + Playwright's locator generator
+    on_ambiguous: str = "fail"            # two different elements tie and nothing settles it: "fail" (say which) | "best"              # Selenium on Chrome/Edge: take roles + accessible names from the CDP accessibility tree
     # --- logged-in sessions ---------------------------------------------------
     profile_dir: Optional[str] = None     # Chrome user-data-dir to reuse (saved passwords, SSO cookies)
     profile_name: Optional[str] = None    # e.g. "Default", "Profile 1"
@@ -161,4 +165,5 @@ class RunSummary(BaseModel):
     agent: str = "local"
     mode: str = "ai"                      # ai (from English) | replay (from script.json)
     healed_steps: int = 0
+    timings: dict = Field(default_factory=dict)   # snapshot / rank / verify / locate_step: count, avg_ms, max_ms
     session_saved: Optional[str] = None

@@ -168,7 +168,16 @@ class Engine(ABC):
     def page_text(self) -> str:
         """Visible text of the page, including open shadow roots and same-origin iframes."""
     @abstractmethod
-    def snapshot(self) -> list[dict]: ...
+    def snapshot(self) -> list[dict]:
+        """Candidate elements for the current page (engine's best source)."""
+
+    def snapshot_dom(self) -> list[dict]:
+        """Fallback candidates from the DOM walk (SNAPSHOT_JS). Same as snapshot() unless overridden."""
+        return self.snapshot()
+
+    @abstractmethod
+    def describe(self, cand: dict) -> dict | None:
+        """Full info + unique locators (most robust first) for ONE chosen candidate."""
     @abstractmethod
     def screenshot(self, path: Path, full_page: bool = False) -> None: ...
     @abstractmethod

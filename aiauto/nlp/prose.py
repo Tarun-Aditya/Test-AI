@@ -94,7 +94,7 @@ def _add_cart(m):
 
 @macro(r"^(?:go\s+to|open|view|check|show)\s+(?:the\s+|my\s+)?(?:shopping\s+)?(?:cart|basket|bag|trolley)$")
 def _cart(m):
-    return ["Click Cart"]
+    return ["Click the Cart link"]
 
 
 @macro(r"^(?:accept|allow|agree\s+to)\s+(?:all\s+)?(?:the\s+)?cookies?(?:\s+(?:banner|popup|prompt))?(?:\s+if\s+\w+)?$")

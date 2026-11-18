@@ -54,7 +54,12 @@ def test_run_and_replay(engine, demo_page, tmp_path):
     demo_page.write_text(html)
     s3 = run_test(script, cfg, tmp_path / "art", mode="replay")
     assert s3.status.value == "passed", [r.error for r in s3.results if r.error]
-    assert any(r.healed for r in s3.results)
+    # ids / names / placeholders changed: Playwright's role-based locators don't depend on them (no healing
+    # needed); Selenium's stored id locators break and self-heal
+    if engine == "selenium":
+        assert any(r.healed for r in s3.results)
+    else:
+        assert script.steps[1].locator.strategy == "playwright"
 
 
 def test_failure_is_reported(demo_page, tmp_path):

@@ -5,7 +5,10 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from ..locators import SNAPSHOT_JS
+import logging
+import uuid
+
+from ..locators import DESCRIBE_EL_JS, SNAPSHOT_JS
 from ..models import Locator
 from .base import (INFO_JS, JS_VALUE_TYPES, PAGE_TEXT_JS, SET_VALUE_JS, Engine, chrome_binary,
                    localstorage_init_script)
@@ -17,6 +20,10 @@ def css_str(v: str) -> str:
 
 class PlaywrightEngine(Engine):
     name = "playwright"
+
+    @property
+    def has_dom_fallback(self) -> bool:      # ARIA snapshot first, DOM walk for elements it doesn't expose
+        return self.config.use_playwright_snapshot
 
     def start(self) -> None:
         from playwright.sync_api import sync_playwright
@@ -136,7 +143,38 @@ class PlaywrightEngine(Engine):
     def url(self): return self.page.url
     def title(self): return self.page.title()
     def page_text(self): return self.page.evaluate(PAGE_TEXT_JS)
-    def snapshot(self): return self.page.evaluate("() => {" + SNAPSHOT_JS + "}")
+    def snapshot(self):
+        """Playwright's own accessibility snapshot (roles/names per the ARIA spec, shadow DOM + iframes)."""
+        if self.config.use_playwright_snapshot:
+            try:
+                from .aria import parse
+                return parse(self.page.aria_snapshot(mode="ai"))
+            except Exception as e:
+                logging.getLogger(__name__).debug("aria snapshot failed, using DOM snapshot: %s", e)
+        return self.snapshot_dom()
+
+    def snapshot_dom(self):
+        return self.page.evaluate("() => {" + SNAPSHOT_JS + "}")
+
+    def describe(self, cand):
+        marker = cand.get("marker") or f"pw{uuid.uuid4().hex[:8]}:{cand['uid']}"
+        if cand.get("ref"):
+            loc = self.page.get_by_ref(cand["ref"])
+            d = loc.evaluate(DESCRIBE_EL_JS, marker, timeout=5000)
+            try:   # Playwright's own locator generator (as in codegen): unique by construction
+                n = loc.normalize()
+                impl = getattr(n, "_impl_obj", n)
+                d["locators"].insert(0, {"strategy": "playwright", "value": impl._selector,
+                                         "code": getattr(impl, "_locator_code", None)})
+            except Exception as e:
+                logging.getLogger(__name__).debug("normalize failed: %s", e)
+            # Playwright's ARIA role/name are authoritative for the role locator
+            if cand.get("role") and cand.get("name"):
+                d["role"], d["name"] = cand["role"], cand["name"]
+            return d
+        return self.page.evaluate(
+            "([uid, marker]) => { const el = (window.__aiautoEls || [])[uid - 1]; return el ? (" + DESCRIBE_EL_JS + ")(el, marker) : null; }",
+            [cand["uid"], marker])
 
     def screenshot(self, path, full_page=False):
         self.page.screenshot(path=str(path), full_page=full_page, timeout=15000)
@@ -179,6 +217,8 @@ class PlaywrightEngine(Engine):
         for host in loc.shadow:          # Playwright CSS pierces open shadow roots; chain through hosts
             base = base.locator(host)
         s, v = loc.strategy, loc.value
+        if s == "playwright":          # selector from Playwright's generator; frames/shadow are encoded in it
+            return self.page.locator(v)
         if s == "testid":
             return base.get_by_test_id(v)
         if s == "id":

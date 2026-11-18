@@ -100,7 +100,7 @@ def test_natural_paragraph_is_split_into_steps():
         (Action.TYPE, "search box", "wireless mouse"), (Action.PRESS, None, "Enter"),
         (Action.CLICK, "Logitech", None),
         (Action.SELECT, "Quantity", "2"), (Action.CLICK, "Add to Cart button", None),
-        (Action.CLICK, "Cart", None),
+        (Action.CLICK, "Cart link", None),
         (Action.ASSERT_TEXT, None, "Logitech"),
     ]
     s, _ = rules.parse(text)

@@ -118,24 +118,31 @@ The AI status chip at the bottom of the sidebar shows whether Claude is configur
 
 ## How elements are found
 
-1. A DOM snapshot walks the page, **open shadow roots at any depth** and **same-origin iframes at any depth**,
-   and lists candidates with their text, ARIA role and accessible name, label, placeholder, test-id and so on.
-   Auto-generated ids and classes (`css-8f3k2`, `el-x7p1…`) are ignored.
-2. Candidates are scored against the step's words and the action (you type into inputs, select from
-   dropdowns…). Ordinals pick the nth match in document order. Claude breaks close ties.
-3. Each candidate locator is **verified natively by the engine** (it must match exactly one element, and the
-   right one). The first verified one becomes the step's locator, and up to 3 more are kept as fallbacks.
+For every step that targets an element, at the moment the step runs (the page changes after each action):
 
-**Selenium on Chrome / Chromium / Edge** also reads the browser's own accessibility tree over CDP
-(`Accessibility.getFullAXTree`, mapped to candidates via `DOM.getDocument` backend node ids, including shadow
-roots and same-origin iframes). The roles and accessible names Chrome computes (aria-labelledby chains, labels,
-placeholders, alt/title…) replace the snapshot's JavaScript approximation for scoring and for role locators.
-Chrome-internal roles (Date, ColorWell…) are ignored. Firefox, or any CDP error, falls back to the JavaScript
-values. Turn it off with `config.use_ax_tree = false`.
+| | Playwright | Selenium |
+|---|---|---|
+| **Candidates** | Playwright's own accessibility snapshot, `page.aria_snapshot(mode="ai")`: roles and names per the ARIA spec, shadow DOM, iframes, each element with a ref and its surrounding context (row, list, section…). A DOM walk is the fallback for elements without an accessible role | DOM walk (`SNAPSHOT_JS` via `execute_script`): shadow roots and same-origin iframes at any depth, dynamic ids and classes ignored |
+| **Ranking** | Scores each candidate against the step's words, the action (you type into textboxes…), exact/prefix name matches and context words ("the View button for order 1002"). Ordinals ("the second …") pick by document order | same, then **Chrome's real role and accessible name** (CDP `Accessibility.getPartialAXTree`) for the top 12, and re-rank |
+| **Tie** | Two different elements score within 0.12: Claude decides if configured. Otherwise the step **fails and lists both** instead of guessing (`on_ambiguous`, default `fail`) | same |
+| **Locator** | `get_by_ref(ref).normalize()`: Playwright's own locator generator (as in codegen), unique by construction, e.g. `get_by_role("button", name="Pay now")` inside `frame_locator` chains. Plus verified engine-neutral fallbacks | Most robust of test-id › id › role+name › label › placeholder › name › text › CSS › XPath, mapped to `By.*` |
+| **Verification** | The engine must find exactly one element and it must be the chosen one (primary + 2 fallbacks kept) | same |
 
-Order of preference: test-id › stable id › role + name › label › placeholder › name › text › alt/title ›
-attribute CSS › structural CSS › XPath. Selenium can't evaluate role, label or text inside shadow roots,
-so it uses CSS there.
+### Time to locate (measured)
+
+Per element step; non-element steps (open, press, wait, page-text checks) don't locate anything.
+
+| Page | Engine | First run (AI mode) | Replay (Script mode) |
+|---|---|---|---|
+| Small form/app page (~100 DOM nodes) | Playwright | ~0.1 s | ~0.01 s |
+|  | Selenium | ~0.15 s | ~0.03 s |
+| Very large page (Wikipedia article, ~9,000 DOM nodes) | Playwright | ~0.9 s | ~0.15 s |
+|  | Selenium | ~1.25 s | ~0.5 s |
+
+A 600-step test with ~420 element steps adds roughly **40 s – 9 min** of locating on the first run, depending on page size,
+and **~5 s – 4 min** when replaying the generated script; the browser actions and page loads themselves come on top.
+Claude tie-breaks (only for genuinely close candidates) add the API's response time per call. Every report and
+`summary.json` records `locate_ms` per step and snapshot / rank / verify timings per run.
 
 ### Self-healing (engine only)
 

@@ -64,7 +64,7 @@ def test_cross_engine_replay_self_heals(tmp_path):
 
 
 def test_selenium_uses_chrome_accessibility_tree(tmp_path):
-    """On Chrome, Selenium candidates take role + accessible name from the CDP accessibility tree."""
+    """On Chrome, the top-ranked Selenium candidates take role + accessible name from the CDP accessibility tree."""
     import time
     from aiauto.engines.selenium_engine import SeleniumEngine
     e = SeleniumEngine(RunConfig(engine="selenium", record_video=False), tmp_path)
@@ -73,12 +73,19 @@ def test_selenium_uses_chrome_accessibility_tree(tmp_path):
         e.goto((EXAMPLES / "playground.html").as_uri())
         time.sleep(1.7)
         cands = e.snapshot()
-        assert e.ax_hits > len(cands) * 0.8
-        size = next(c for c in cands if c.get("role") == "combobox" and c["tag"] == "div")
-        assert size["name"] == "Size" and size["js_name"] == "Pick a size"           # aria-labelledby, as Chrome computes it
-        assert {"strategy": "role", "value": "Size", "role": "combobox"} in size["locators"]
-        assert any(c.get("ax") and c["shadow"] for c in cands) and any(c.get("ax") and c["frames"] for c in cands)
-        assert not any(c["role"] in ("Date", "ColorWell", "Legend") for c in cands)
-        assert e.driver.execute_script("return document.querySelectorAll('[data-aiauto-uid]').length") == 0
+        combo = next(c for c in cands if c.get("role") == "combobox" and c["tag"] == "div")
+        shadow = next(c for c in cands if c["shadow"] and c["tag"] == "input")
+        framed = next(c for c in cands if c["frames"] and c["tag"] == "button")
+        assert e.refine([combo, shadow, framed]) == 3
+        assert combo["name"] == "Size" and combo["js_name"] == "Pick a size"     # aria-labelledby, as Chrome computes it
+        assert all(c.get("ax") for c in (combo, shadow, framed))
+        d = e.describe(combo)
+        assert {"strategy": "role", "value": "Size", "role": "combobox"} in d["locators"]
     finally:
         e.stop()
+
+
+def test_ambiguous_target_fails_instead_of_guessing(tmp_path):
+    test, _ = parse_text(f"Open {(EXAMPLES / 'playground.html').as_uri()}\nClick View", {})
+    s = run_test(test, RunConfig(timeout_ms=3000, record_video=False), tmp_path)
+    assert s.status.value == "failed" and "Ambiguous" in s.results[1].error and "match equally well" in s.results[1].error

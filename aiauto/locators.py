@@ -21,10 +21,8 @@ from difflib import SequenceMatcher
 
 from .models import Action, Locator, Step
 
-SNAPSHOT_JS = r"""
-return (function(){
-  const MAX = 4000;
-  const out = []; const ELS = []; let uid = 0; const TOK = Math.random().toString(36).slice(2, 10);
+# Shared JavaScript helpers (used by the page snapshot and by the per-element locator builder).
+JS_LIB = r"""
   const q = s => String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"');
   const norm = s => (s||'').replace(/\s+/g,' ').trim();
   // auto-generated ids/classes: long digit runs, hashes, framework prefixes, random letter+digit segments
@@ -52,9 +50,15 @@ return (function(){
     if (t==='li' && el.parentElement && /^(ul|ol)$/i.test(el.parentElement.tagName)) return 'listitem';
     return '';
   }
+  const LABELS = new Map();   // root -> {for-id: label text}, built once per document / shadow root
+  function labelFor(root, id){
+    let m = LABELS.get(root);
+    if (!m) { m = {}; try { for (const l of root.querySelectorAll('label[for]')) { const k = l.getAttribute('for'); if (!(k in m)) m[k] = norm(l.innerText||l.textContent); } } catch(e) {} LABELS.set(root, m); }
+    return m[id];
+  }
   function labelOf(el){
     const root = el.getRootNode();
-    if (el.id) { try { const l = root.querySelector('label[for="'+q(el.id)+'"]'); if (l) return norm(l.innerText||l.textContent); } catch(e){} }
+    if (el.id) { const t = labelFor(root, el.id); if (t) return t; }
     const p = el.closest('label'); if (p) return norm(p.innerText||p.textContent);
     const lb = el.getAttribute('aria-labelledby');
     if (lb) { const t = lb.split(/\s+/).map(i=>root.getElementById ? root.getElementById(i) : document.getElementById(i)).filter(Boolean).map(e=>e.innerText||e.textContent).join(' '); if (norm(t)) return norm(t); }
@@ -97,31 +101,66 @@ return (function(){
     }
     return '/'+parts.join('/');
   }
-  function candidates(el, info, inShadow){
-    const c = []; const tag = info.tag;
+  function visible(el){
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    const st = (el.ownerDocument.defaultView||window).getComputedStyle(el);
+    return st.visibility !== 'hidden' && st.display !== 'none' && parseFloat(st.opacity||'1') > 0.05;
+  }
+  function info(el){
+    const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type')||'').toLowerCase();
+    const text = norm(el.innerText || el.textContent || '');
+    const i = {
+      tag, type, text: text.slice(0,200), id: el.id||'', nameattr: el.getAttribute('name')||'',
+      aria_label: norm(el.getAttribute('aria-label')), placeholder: el.getAttribute('placeholder')||'',
+      title: el.getAttribute('title')||'', alt: el.getAttribute('alt')||'',
+      value: (tag==='input' && ['submit','button','reset'].includes(type)) ? (el.value||'') : '',
+      href: el.getAttribute('href')||'', label: labelOf(el),
+      testid: el.getAttribute('data-testid')||el.getAttribute('data-test')||el.getAttribute('data-qa')||'',
+      editable: !!el.isContentEditable, role: el.getAttribute('role') || implicitRole(el),
+      draggable: el.getAttribute('draggable')==='true',
+      options: tag==='select' ? Array.from(el.options).slice(0,50).map(o=>norm(o.text)) : [],
+      longtext: text.length > 300,
+    };
+    i.name = norm(accName(el, i));
+    return i;
+  }
+  // Unique locators for ONE element, most robust first (built only for the element a step picked).
+  function locatorsFor(el, i, inShadow){
+    const c = []; const tag = i.tag;
     const add = (strategy, value, extra) => { if (value && String(value).length <= 120) c.push(Object.assign({strategy, value:String(value)}, extra||{})); };
     if (el.getAttribute('data-testid')) add('testid', el.getAttribute('data-testid'));
     for (const a of ['data-test','data-qa','data-cy','data-test-id']) if (el.getAttribute(a)) add('css', '['+a+'="'+q(el.getAttribute(a))+'"]');
     if (el.id && !dyn(el.id)) add('id', el.id);
-    if (info.role && info.name && info.name.length <= 80) add('role', info.name, {role: info.role});
-    if (FORM.has(tag) && info.label) add('label', info.label);
-    if (info.placeholder) add('placeholder', info.placeholder);
-    if (info.nameattr && !dyn(info.nameattr)) add('name', info.nameattr);
-    if (info.text && info.text.length <= 80 && !FORM.has(tag)) add('text', info.text);
-    if (info.alt) add('alt', info.alt);
-    if (info.title) add('title', info.title);
-    if (info.aria_label) add('css', tag+'[aria-label="'+q(info.aria_label)+'"]');
-    if (tag==='input' && info.value && ['submit','button','reset'].includes(info.type)) add('css', 'input[type="'+info.type+'"][value="'+q(info.value)+'"]');
-    if (tag==='a' && info.href && info.href.length < 100 && !/[?&]|\d{5,}/.test(info.href)) add('css', 'a[href="'+q(el.getAttribute('href'))+'"]');
+    if (i.role && i.name && i.name.length <= 80) add('role', i.name, {role: i.role});
+    if (FORM.has(tag) && i.label) add('label', i.label);
+    if (i.placeholder) add('placeholder', i.placeholder);
+    if (i.nameattr && !dyn(i.nameattr)) add('name', i.nameattr);
+    if (i.text && i.text.length <= 80 && !FORM.has(tag)) add('text', i.text);
+    if (i.alt) add('alt', i.alt);
+    if (i.title) add('title', i.title);
+    if (i.aria_label) add('css', tag+'[aria-label="'+q(i.aria_label)+'"]');
+    if (tag==='input' && i.value && ['submit','button','reset'].includes(i.type)) add('css', 'input[type="'+i.type+'"][value="'+q(i.value)+'"]');
+    if (tag==='a' && i.href && i.href.length < 100 && !/[?&]|\d{5,}/.test(i.href)) add('css', 'a[href="'+q(el.getAttribute('href'))+'"]');
     add('css', cssPathIn(el));
     if (!inShadow) add('xpath', xpathPath(el));
     return c;
   }
-  function visible(el){
-    const r = el.getBoundingClientRect();
-    const st = (el.ownerDocument.defaultView||window).getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none' && parseFloat(st.opacity||'1') > 0.05;
+  // Where an element lives: iframe chain (outermost first) and shadow-host chain inside its own document.
+  function chains(el){
+    const shadow = []; let root = el.getRootNode();
+    while (root && root.host) { shadow.unshift(cssPathIn(root.host)); root = root.host.getRootNode(); }
+    const frames = []; let win = el.ownerDocument.defaultView;
+    try { while (win && win.frameElement) { frames.unshift(cssPathIn(win.frameElement)); win = win.parent; } } catch(e) {}
+    return {frames, shadow};
   }
+"""
+
+SNAPSHOT_JS = r"""
+return (function(){
+""" + JS_LIB + r"""
+  const MAX = 25000;
+  const out = []; const ELS = []; let uid = 0; const TOK = Math.random().toString(36).slice(2, 10);
   function ownText(el){ let t=''; for (const n of el.childNodes) if (n.nodeType===3) t += n.nodeValue; return norm(t); }
   function interesting(el, tag){
     if (FORM.has(tag) || ['button','a','summary','option','label','img','svg','iframe'].includes(tag)) return true;
@@ -130,6 +169,7 @@ return (function(){
     if (TEXTY.has(tag) && ownText(el)) return true;
     return false;
   }
+  const SKIP = new Set(['script','style','noscript','template','head','meta','link','html','body','br','path','g']);
   function walk(root, frames, shadow){
     let list; try { list = root.querySelectorAll('*'); } catch(e) { return; }
     for (const el of list) {
@@ -139,41 +179,35 @@ return (function(){
       if (tag==='iframe' || tag==='frame') {
         try { const d = el.contentDocument; if (d && d.documentElement) walk(d, frames.concat([cssPathIn(el)]), []); } catch(e) {}
       }
-      if (['script','style','noscript','template','head','meta','link','html','body','br','path','g'].includes(tag)) continue;
-      if (!interesting(el, tag)) continue;
+      if (SKIP.has(tag) || !interesting(el, tag)) continue;
       const type = (el.getAttribute('type')||'').toLowerCase();
       const vis = visible(el);
       if (!vis && !(tag==='input' && ['checkbox','radio','file'].includes(type))) continue;
-      let text = norm(el.innerText || el.textContent || '');
-      if (text.length > 300) continue;  // big containers are never what the user means
-      const r = el.getBoundingClientRect();
-      const info = {
-        uid: ++uid, tag, type, text: text.slice(0,200), id: el.id||'', nameattr: el.getAttribute('name')||'',
-        aria_label: norm(el.getAttribute('aria-label')), placeholder: el.getAttribute('placeholder')||'',
-        title: el.getAttribute('title')||'', alt: el.getAttribute('alt')||'',
-        value: (tag==='input' && ['submit','button','reset'].includes(type)) ? (el.value||'') : '',
-        href: el.getAttribute('href')||'', label: labelOf(el), visible: vis,
-        testid: el.getAttribute('data-testid')||el.getAttribute('data-test')||el.getAttribute('data-qa')||'',
-        editable: !!el.isContentEditable, role: el.getAttribute('role') || implicitRole(el),
-        draggable: el.getAttribute('draggable')==='true',
-        options: tag==='select' ? Array.from(el.options).slice(0,50).map(o=>norm(o.text)) : [],
-        frames, shadow, rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-      };
-      info.name = norm(accName(el, info));
-      info.marker = TOK + ':' + info.uid;
-      el.__aiautoId = info.marker;
-      const anc = []; for (let p = el.parentElement, i = 0; p && i < 8; p = p.parentElement, i++) if (p.__aiautoMark && p.__aiautoMark[0] === TOK) anc.push(p.__aiautoMark[1]);
-      el.__aiautoMark = [TOK, info.uid]; info.anc = anc;
-      info.locators = candidates(el, info, shadow.length > 0);
-      out.push(info);
-      ELS.push(el);
+      const i = info(el);
+      if (i.longtext) continue;  // big containers are never what the user means
+      i.uid = ++uid; i.visible = vis; i.frames = frames; i.shadow = shadow;
+      i.marker = TOK + ':' + i.uid;
+      el.__aiautoId = i.marker;
+      const anc = []; for (let p = el.parentElement, k = 0; p && k < 8; p = p.parentElement, k++) if (p.__aiautoMark && p.__aiautoMark[0] === TOK) anc.push(p.__aiautoMark[1]);
+      el.__aiautoMark = [TOK, i.uid]; i.anc = anc;
+      out.push(i); ELS.push(el);
     }
   }
   walk(document, [], []);
-  try { window.__aiautoEls = ELS; } catch (e) {}   // lets an engine map candidates to browser-internal node ids (CDP)
+  try { window.__aiautoEls = ELS; } catch (e) {}   // the chosen element is looked up by uid afterwards
   return out;
 })();
 """
+
+# Builds the full description + unique locators of a single element (the one a step picked).
+# Called as a function of the element: (el, marker) => {...}
+DESCRIBE_EL_JS = "(el, marker) => {" + JS_LIB + r"""
+  const i = info(el); const ch = chains(el);
+  i.frames = ch.frames; i.shadow = ch.shadow; i.visible = visible(el);
+  if (marker) { el.__aiautoId = marker; i.marker = marker; } else { i.marker = el.__aiautoId || null; }
+  i.locators = locatorsFor(el, i, ch.shadow.length > 0);
+  return i;
+}"""
 
 ROLE_WORDS = {
     "button": {"button", "input:submit", "input:button", "input:reset", "role:button"},
@@ -219,7 +253,10 @@ def _tokens(s: str) -> list[str]:
 
 
 def _content_tokens(target: str) -> list[str]:
-    return [w for w in _tokens(target) if w not in STOP] or _tokens(target)
+    toks = _tokens(target)
+    # "a"/"an"/"the" are articles only at the start ("the Login button"); "Card A", "Plan B" keep them
+    keep = [w for i, w in enumerate(toks) if w not in STOP or (i > 0 and len(w) == 1)]
+    return keep or toks
 
 
 def _sim(target: str, text: str) -> float:
@@ -236,6 +273,8 @@ def _sim(target: str, text: str) -> float:
     if " ".join(tt) == " ".join(_tokens(x)):
         return 0.97
     overlap = sum(1 for w in tt if w in xt or any((w in y or y in w) and min(len(w), len(y)) > 2 for y in xt)) / len(tt)
+    if overlap == 0:
+        return 0.0          # no shared words: not worth the (comparatively slow) fuzzy comparison
     ratio = SequenceMatcher(None, " ".join(tt), x[:120]).ratio()
     contains = 0.15 if " ".join(tt) in x else 0.0
     length_pen = min(0.3, max(0, len(x) - 3 * len(t)) / 400)
@@ -284,11 +323,24 @@ def score(step: Step, c: dict, target: str | None = None) -> float:
     target = target if target is not None else (step.target or "")
     best = max((w * _sim(target, _norm_attr(f, c.get(f) or "")) for f, w in FIELD_WEIGHTS.items()), default=0.0)
     s = best * 3.0
+    # an element whose visible name/text/label is exactly what the user wrote beats near-matches
+    core = " ".join(_content_tokens(target))
+    if core and any(" ".join(_tokens(c.get(f) or "")) == core for f in ("name", "text", "label", "aria_label", "placeholder", "value", "alt", "title")):
+        s += 0.3
+    elif core and any(" ".join(_tokens(c.get(f) or "")).startswith(core + " ") for f in ("name", "text", "label", "aria_label")):
+        s += 0.15         # "Cart" -> "Cart, 2 items" rather than "Add to Cart"
     s += _action_fit(step.action, c)
     kinds = _kinds(c)
     for w in _tokens(target):
         if w in ROLE_WORDS and kinds & ROLE_WORDS[w]:
             s += 0.4
+    # words the user gave that match where the element sits ("the View button for order 1002")
+    ctx = c.get("context")
+    if ctx and best < 0.999:
+        own = set(_tokens(" ".join(str(c.get(f) or "") for f in ("name", "text", "label"))))
+        extra = [w for w in _content_tokens(target) if w not in own]
+        if extra and all(w in set(_tokens(ctx)) for w in extra):
+            s += 0.6
     if step.action == Action.SELECT and step.value and any(step.value.split("|")[0].lower() == o.lower() for o in c.get("options", [])):
         s += 0.8
     if c.get("visible"):
@@ -302,7 +354,18 @@ def _contains_all(target: str, c: dict) -> bool:
     return bool(toks) and all(t in hay for t in toks)
 
 
+_HAY = ("name", "text", "label", "aria_label", "placeholder", "value", "alt", "title", "testid", "id", "nameattr", "context")
+
+
 def rank(step: Step, candidates: list[dict], target: str | None = None, top: int = 8) -> list[dict]:
+    target = target if target is not None else (step.target or "")
+    words = [w for w in _content_tokens(target) if len(w) > 2 or w.isdigit()]
+    if words and len(candidates) > 200:
+        # large pages: only score elements that share at least one word (or word part) with the step
+        def shares(c):
+            hay = " ".join(str(c.get(f) or "") for f in _HAY).lower().replace("_", " ").replace("-", " ")
+            return any(w in hay for w in words)
+        candidates = [c for c in candidates if shares(c)] or candidates
     scored = []
     for c in candidates:
         c = dict(c)
@@ -351,17 +414,30 @@ def nth_match(step: Step, candidates: list[dict], target: str, n: int) -> tuple[
     return win, kept[:8]
 
 
-def choose(step: Step, candidates: list[dict], target: str | None = None, use_llm: bool = True) -> tuple[dict | None, list[dict]]:
-    """Pick the element for this step. Returns (winner, ranked_candidates)."""
+TIE = 0.12      # top two closer than this (and genuinely different elements) = a real tie
+
+
+def _related(a: dict, b: dict) -> bool:
+    return a["uid"] in b.get("anc", []) or b["uid"] in a.get("anc", [])
+
+
+def choose(step: Step, candidates: list[dict], target: str | None = None, use_llm: bool = True,
+           on_ambiguous: str = "fail") -> tuple[dict | None, list[dict], str | None]:
+    """Pick the element for this step. Returns (winner, ranked_candidates, problem).
+
+    problem is None, or an explanation when no element can be chosen safely:
+    nothing matched, or two different elements tie and neither Claude nor an ordinal settles it
+    (with on_ambiguous="fail" the step then fails instead of guessing)."""
     target = target if target is not None else (step.target or "")
     if step.nth is not None:
-        return nth_match(step, candidates, target, step.nth)
+        w, ranked = nth_match(step, candidates, target, step.nth)
+        return w, ranked, None if w else "no match for that position"
     ranked = rank(step, candidates, target)
     winner = ranked[0] if ranked and ranked[0]["score"] >= 1.0 else None
     if winner:
         winner["picked_by"] = "heuristic"
-    ambiguous = len(ranked) > 1 and (winner is None or ranked[0]["score"] - ranked[1]["score"] < 0.35)
-    if use_llm and ambiguous and ranked:
+    close = len(ranked) > 1 and (winner is None or ranked[0]["score"] - ranked[1]["score"] < 0.35)
+    if use_llm and close and ranked:
         from .nlp import llm
         if llm.available():
             probe = step.model_copy(update={"target": target})
@@ -369,7 +445,15 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
             if idx is not None:
                 winner = ranked[idx]
                 winner["picked_by"] = "ai"
-    return winner, ranked
+                return winner, ranked, None
+    if winner is None:
+        return None, ranked, "nothing on the page matches well enough"
+    rivals = [c for c in ranked[1:4] if winner["score"] - c["score"] < TIE and not _related(winner, c)]
+    if rivals and on_ambiguous == "fail":
+        names = "; ".join(describe(c) + (f" in {c['context']}" if c.get("context") else "") for c in [winner] + rivals)
+        return None, ranked, (f"{len(rivals) + 1} different elements match equally well ({names}). "
+                              "Say which one: e.g. 'the first …', 'the … in <section>', or use more of its text")
+    return winner, ranked, None
 
 
 def describe(c: dict) -> str:
@@ -383,6 +467,8 @@ def describe(c: dict) -> str:
             break
     if c.get("ax"):
         bits.append("(role/name from Chrome accessibility tree)")
+    if c.get("source") == "playwright-aria":
+        bits.append("(Playwright snapshot)")
     if c.get("frames"):
         bits.append(f"(in iframe x{len(c['frames'])})")
     if c.get("shadow"):
@@ -393,5 +479,6 @@ def describe(c: dict) -> str:
 def to_locators(c: dict) -> list[Locator]:
     desc = describe(c)
     return [Locator(strategy=l["strategy"], value=l["value"], role=l.get("role"), frames=c.get("frames", []),
-                    shadow=c.get("shadow", []), score=c.get("score", 0), description=desc, picked_by=c.get("picked_by"))
+                    shadow=c.get("shadow", []), score=c.get("score", 0), description=desc, picked_by=c.get("picked_by"),
+                    code=l.get("code"))
             for l in c.get("locators", [])]

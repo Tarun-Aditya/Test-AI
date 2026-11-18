@@ -49,6 +49,7 @@ class Runner:
         self.mask = Masker(test.data, test.sensitive)
         self.saved_session: dict | None = None
         self._picked: str | None = None
+        self.timings: dict[str, list[float]] = {}
 
     # ---------------------------------------------------------------- public
     def run(self) -> RunSummary:
@@ -76,7 +77,7 @@ class Runner:
                            screenshot=res.screenshot, raw=template_step.raw, action=template_step.action.value,
                            locator=template_step.locator.label() if template_step.locator else None,
                            parsed_by=template_step.source, picked_by=res.picked_by, origin=self.mask(template_step.origin),
-                           url=res.url, duration_ms=res.duration_ms, dialog=res.dialog)
+                           url=res.url, duration_ms=res.duration_ms, dialog=res.dialog, locate_ms=res.locate_ms)
             if self.config.save_session and not failed:
                 self.saved_session = self.engine.storage_state()
                 summary.session_saved = self.config.save_session if self.saved_session else None
@@ -96,6 +97,12 @@ class Runner:
         summary.finished_at = _now()
         summary.duration_ms = int((time.time() - started) * 1000)
         summary.healed_steps = sum(1 for r in summary.results if r.healed)
+        summary.timings = {k: {"count": len(v), "avg_ms": round(sum(v) / len(v), 1), "max_ms": round(max(v), 1),
+                               "total_ms": round(sum(v))} for k, v in self.timings.items() if v}
+        located = [r.locate_ms for r in summary.results if r.locate_ms is not None]
+        if located:
+            summary.timings["locate_step"] = {"count": len(located), "avg_ms": round(sum(located) / len(located), 1),
+                                              "max_ms": max(located), "total_ms": sum(located)}
         self._write_artifacts(summary, resolved_steps)
         self._emit("run_finished", status=summary.status.value, healed=summary.healed_steps)
         return summary
@@ -126,7 +133,9 @@ class Runner:
             needs_el = step.action in ELEMENT_ACTIONS or (step.target and step.action in (
                 Action.PRESS, Action.WAIT, Action.SCROLL, Action.ASSERT_TEXT))
             if needs_el:
+                t_loc = time.perf_counter()
                 loc, healed = self._resolve(live, step, target)
+                res.locate_ms = int((time.perf_counter() - t_loc) * 1000)
                 res.healed = healed
                 res.picked_by = self._picked
                 if self.config.screenshot_each_step:
@@ -194,23 +203,45 @@ class Runner:
         wait_ms = min(self.config.timeout_ms, 4000) if template.optional else self.config.timeout_ms
         deadline = time.time() + wait_ms / 1000
         ranked: list[dict] = []
+        problem = None
+        # sources, best first: the engine's snapshot (Playwright: its own ARIA snapshot), then the DOM walk
+        # (reaches elements without an accessible role, e.g. plain-text <div>s with click handlers)
+        sources = [e.snapshot] + ([e.snapshot_dom] if getattr(e, "has_dom_fallback", False) else [])
         while True:
             e.after_action()
-            try:
-                candidates = e.snapshot()
-            except Exception as ex:
-                log.debug("snapshot failed: %s", ex)
-                candidates = []
-            winner, ranked = L.choose(probe, candidates, target=target, use_llm=self.config.use_llm)
-            if winner:
-                verified = self._verify(winner)
-                if verified:
-                    self._picked = winner.get("picked_by") or "heuristic"
-                    if attr == "locator":
-                        template.locator, template.fallbacks = verified[0], verified[1:4]
-                    else:
-                        template.target_locator = verified[0]
-                    return verified[0], bool(stored)
+            for source in sources:
+                try:
+                    t0 = time.perf_counter()
+                    candidates = source()
+                    self._timing("snapshot", t0)
+                except Exception as ex:
+                    log.debug("snapshot failed: %s", ex)
+                    candidates = []
+                t0 = time.perf_counter()
+                winner, ranked, problem = L.choose(probe, candidates, target=target, use_llm=self.config.use_llm and not hasattr(e, "refine"),
+                                                   on_ambiguous=self.config.on_ambiguous)
+                if hasattr(e, "refine") and ranked and probe.nth is None:
+                    # Selenium/Chrome: real accessible names for the front-runners, then decide among them
+                    top = [c for c in candidates if c["uid"] in {r["uid"] for r in ranked[:12]}]
+                    if e.refine(top):
+                        winner, ranked, problem = L.choose(probe, top, target=target, use_llm=self.config.use_llm,
+                                                           on_ambiguous=self.config.on_ambiguous)
+                self._timing("rank", t0)
+                if winner:
+                    t0 = time.perf_counter()
+                    verified = self._verify(winner)
+                    self._timing("verify", t0)
+                    if verified:
+                        self._picked = winner.get("picked_by") or "heuristic"
+                        if attr == "locator":
+                            template.locator, template.fallbacks = verified[0], verified[1:4]
+                        else:
+                            template.target_locator = verified[0]
+                        return verified[0], bool(stored)
+                if problem and "match equally well" in problem:
+                    break                    # a real tie: don't let a weaker source pick one of them silently
+            if problem and "match equally well" in problem:
+                raise StepError(self.mask(f"Ambiguous '{target}': {problem}"))
             if time.time() > deadline:
                 break
             e.live_tick()
@@ -218,22 +249,32 @@ class Runner:
         near = "; ".join(f'{L.describe(c)} (score {c.get("score")})' for c in ranked[:3])
         raise StepError(self.mask(f"Could not identify element for '{target}'. Closest: {near or 'none'}"))
 
+    def _timing(self, what: str, t0: float) -> None:
+        self.timings.setdefault(what, []).append((time.perf_counter() - t0) * 1000)
+
     def _verify(self, cand: dict) -> list[Locator]:
         """Keep only locators that the engine itself resolves to exactly this one element."""
         e = self.engine
         good: list[Locator] = []
+        desc = e.describe(cand) or {}
+        info = {**cand, **{k: v for k, v in desc.items() if k in ("locators", "frames", "shadow", "marker", "tag", "type")}}
+        if desc.get("role") and desc.get("name") and not cand.get("name"):
+            info["name"] = desc["name"]
+        cand = info
         all_locs = L.to_locators(cand)
         for loc in all_locs:
             try:
                 if e.count(loc) != 1:
                     continue
-                m = e.marker(loc)
-                if m is not None and m != cand.get("marker"):
-                    continue
+                if loc.strategy != "playwright":     # Playwright's generator already targets this exact element
+                    m = e.marker(loc)
+                    if m is not None and m != cand.get("marker"):
+                        continue
                 good.append(loc)
             except Exception as ex:
                 log.debug("verify %s failed: %s", loc.label(), ex)
-            if len(good) >= 4:
+            # primary + 2 verified fallbacks (at least one engine-neutral, so the other engine can replay)
+            if len(good) >= 3:
                 break
         if not good:
             good = [l for l in all_locs if l.strategy in ("css", "xpath")][:1]
@@ -330,14 +371,18 @@ class Runner:
             end = time.time() + timeout
             actual = ""
             while True:
-                if a == Action.ASSERT_URL:
-                    actual = e.url()
-                elif a == Action.ASSERT_TITLE:
-                    actual = e.title()
-                elif a == Action.ASSERT_DIALOG:
-                    actual = e.last_dialog or getattr(self, "_prev_dialog", "") or ""
-                else:
-                    actual = e.text_of(loc) if loc else e.page_text()
+                try:
+                    if a == Action.ASSERT_URL:
+                        actual = e.url()
+                    elif a == Action.ASSERT_TITLE:
+                        actual = e.title()
+                    elif a == Action.ASSERT_DIALOG:
+                        actual = e.last_dialog or getattr(self, "_prev_dialog", "") or ""
+                    else:
+                        actual = e.text_of(loc) if loc else e.page_text()
+                except Exception as ex:      # page navigating mid-check: try again until the timeout
+                    log.debug("assertion read failed (%s); retrying", ex)
+                    actual = actual or ""
                 if _norm(expected) in _norm(actual):
                     return
                 if time.time() > end:

@@ -67,7 +67,50 @@ def _val(prop: dict | None) -> str:
     return str((prop or {}).get("value") or "")
 
 
+def refine(cdp, candidates: list[dict]) -> int:
+    """Chrome's role + accessible name for just these (top-ranked) candidates.
+
+    One Runtime.evaluate (element -> remote object) and one Accessibility.getPartialAXTree per candidate:
+    a few ms each, independent of page size (the full tree costs seconds on large pages)."""
+    hits = 0
+    group = "aiauto-ax"
+    try:
+        for c in candidates:
+            try:
+                res = cdp("Runtime.evaluate", {"expression": f"(window.__aiautoEls || [])[{int(c['uid']) - 1}]", "objectGroup": group})
+                oid = (res.get("result") or {}).get("objectId")
+                if not oid:
+                    continue
+                nodes = cdp("Accessibility.getPartialAXTree", {"objectId": oid, "fetchRelatives": False}).get("nodes", [])
+            except Exception as e:
+                log.debug("AX lookup failed for %s: %s", c.get("uid"), e)
+                continue
+            node = next((n for n in nodes if not n.get("ignored")), None)
+            if not node:
+                continue
+            _apply(c, _val(node.get("role")), " ".join(_val(node.get("name")).split()))
+            hits += 1
+    finally:
+        try:
+            cdp("Runtime.releaseObjectGroup", {"objectGroup": group})
+        except Exception:
+            pass
+    return hits
+
+
+def _apply(c: dict, role: str, name: str) -> None:
+    role = ROLE_MAP.get(role, role)
+    if role not in ARIA_ROLES or (c["tag"] == "input" and c.get("type") == "file"):
+        role = None                     # keep the snapshot's role; still use Chrome's accessible name
+    if role and role != c.get("role"):
+        c["js_role"], c["role"] = c.get("role"), role
+    if name and name != c.get("name"):
+        c["js_name"], c["name"] = c.get("name"), name[:200]
+    c["ax"] = True
+
+
 def enrich(cdp, run_js, candidates: list[dict]) -> int:
+    """Whole-page variant (full accessibility tree). Kept for diagnostics; refine() is used per step."""
     """cdp(cmd, params) -> dict and run_js(script) -> value are the engine's CDP / execute_script calls.
     Returns how many candidates got their role/name from the accessibility tree."""
     if not candidates:

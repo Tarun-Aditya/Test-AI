@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..locators import SNAPSHOT_JS
+from ..locators import DESCRIBE_EL_JS, SNAPSHOT_JS
 from ..models import Locator
 from .base import (DND_JS, INFO_JS, JS_VALUE_TYPES, PAGE_TEXT_JS, SET_VALUE_JS, Engine, chrome_binary,
                    localstorage_init_script)
@@ -74,6 +74,8 @@ def by_for(loc: Locator, in_shadow: bool):
         return (By.CSS_SELECTOR, f'[{s}="{cq(v)}"]')
     if s == "css":
         return (By.CSS_SELECTOR, v)
+    if s == "playwright":
+        return None                      # Playwright-only selector; Selenium uses the fallbacks
     if in_shadow:
         return None                      # role / label / text / xpath can't be evaluated inside shadow roots
     if s == "xpath":
@@ -271,15 +273,26 @@ class SeleniumEngine(Engine):
     def snapshot(self):
         self._follow_new_window()
         self._top()
-        cands = self.driver.execute_script(SNAPSHOT_JS)
-        if self.config.use_ax_tree and getattr(self, "_chromium", False):
-            try:   # real roles + accessible names from Chrome's accessibility tree (CDP)
-                from .ax import enrich
-                self.ax_hits = enrich(self._cdp, self.driver.execute_script, cands)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).debug("AX tree enrichment skipped: %s", e)
-        return cands
+        return self.driver.execute_script(SNAPSHOT_JS)
+
+    def refine(self, cands):
+        """After a first ranking: Chrome's real role + accessible name (CDP) for the top candidates."""
+        if not (self.config.use_ax_tree and getattr(self, "_chromium", False)):
+            return 0
+        from .ax import refine
+        self.ax_hits = refine(self._cdp, cands)
+        return self.ax_hits
+
+    def describe(self, cand):
+        self._top()
+        d = self.driver.execute_script(
+            "const el = (window.__aiautoEls || [])[arguments[0] - 1]; if (!el) return null; return (" + DESCRIBE_EL_JS + ")(el, arguments[1]);",
+            cand["uid"], cand.get("marker"))
+        if d and cand.get("ax"):        # keep Chrome's accessible role/name (CDP) for the role locator
+            from .ax import _rebuild_role_locator
+            d["role"], d["name"] = cand.get("role"), cand.get("name")
+            _rebuild_role_locator(d)
+        return d
 
     def screenshot(self, path, full_page=False):
         self.driver.save_screenshot(str(path))

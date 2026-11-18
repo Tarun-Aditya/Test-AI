@@ -121,6 +121,8 @@ def extract_spec(text: str) -> TestCase:
 def pw_locator(loc: Locator | None) -> str:
     if not loc:
         return "None"
+    if loc.strategy == "playwright" and loc.code:
+        return "page." + loc.code               # exactly what Playwright's locator generator produced
     expr = "page"
     for f in loc.frames:
         expr += f".frame_locator({_q(f)})"
@@ -281,6 +283,14 @@ BY_NAME = {"id": "By.ID", "name": "By.NAME", "xpath": "By.XPATH", "link text": "
 def _sel_key(k: str | None) -> str:
     parts = (k or "Enter").split("+")
     return " + ".join(f"Keys.{SEL_KEYS[p]}" if p in SEL_KEYS else _q(p.lower()) for p in parts)
+
+
+def se_locator(st: Step, attr: str = "locator") -> Locator | None:
+    """First of the step's verified locators that Selenium can execute (Playwright-generated ones can't)."""
+    from .engines.selenium_engine import by_for
+    primary = getattr(st, attr)
+    pool = [primary] + (st.fallbacks if attr == "locator" else [])
+    return next((l for l in pool if l and by_for(l, bool(l.shadow))), primary)
 
 
 def se_find(loc: Locator | None, clickable: bool = False) -> str:
@@ -466,7 +476,7 @@ def _se_nth(st: Step, clickable: bool) -> str:
 
 def _se_lines(st: Step) -> list[str]:
     a, val = st.action, _val(st.value)
-    F, FC = se_find(st.locator), se_find(st.locator, clickable=True)
+    F, FC = se_find(se_locator(st)), se_find(se_locator(st), clickable=True)
     if st.locator and st.nth is not None and st.target and not st.locator.shadow:
         F, FC = _se_nth(st, False), _se_nth(st, True)
     tab = _tab(st)
@@ -488,7 +498,7 @@ def _se_lines(st: Step) -> list[str]:
         Action.CHECK: [f"el = {F}", "if not el.is_selected():", "    driver.execute_script('arguments[0].click()', el)"],
         Action.UNCHECK: [f"el = {F}", "if el.is_selected():", "    driver.execute_script('arguments[0].click()', el)"],
         Action.UPLOAD: [f"{F}.send_keys(os.path.abspath({val}))"],
-        Action.DRAG: [f"src = {F}", f"dst = {se_find(st.target_locator)}",
+        Action.DRAG: [f"src = {F}", f"dst = {se_find(se_locator(st, 'target_locator'))}",
                       "if src.get_attribute('draggable') == 'true':", "    html5_drag(driver, src, dst)",
                       "else:", "    ActionChains(driver).drag_and_drop(src, dst).perform()"],
         Action.ASSERT_VISIBLE: [f"assert {F}.is_displayed()"],
