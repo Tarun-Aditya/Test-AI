@@ -290,6 +290,19 @@ the top bar. When they finish:
 Everything sent is listed in the design's **sync log**. **Re-check story** says when the story, its pages or its code changed after the
 cases were written.
 
+### No tracker yet? Paste the story, work locally, Publish later
+
+- **Paste a story** (Requirements): Markdown, Jira wiki markup or plain text — criteria under an "Acceptance criteria" heading, as
+  bullets, or as Given/When/Then; bugs with "Steps to reproduce" / "Expected result". Add its key if it has one, and any spec text.
+- **Local Git repository** (Admin → Integrations) as the code source instead of the GitHub API: the folder of a clone **on the hub
+  machine** (in Docker, mount it: `-v /home/me/src/shop:/repos/shop`). No token is stored: `git` uses the credentials that clone
+  already has (credential helper, SSH key), and only when *git fetch before reading* is on. Autopilot reads the commits on any branch
+  that mention the key, their diffs and the UI files they touch — or, without a key, the UI files that best match the story's words.
+- Design, approve, run: a pasted story's results **stay on the hub** (the design shows *local · N results not published*).
+- When the tools are connected: **Link** the design to the story's Jira key (optional; needed for the Jira comment, status and bugs),
+  then **Publish** — the approved cases go to Zephyr Scale, the latest result of each becomes one test cycle, and the story gets its
+  comment, transition and bugs. Publish can be pressed again later to send newer results.
+
 ### Connecting (tokens only)
 
 Admin → **Integrations**, per project. Every tool is connected with a token; there is no OAuth app to register.
@@ -299,6 +312,7 @@ Admin → **Integrations**, per project. Every tool is connected with a token; t
 | Jira / Confluence **Cloud** | your Atlassian e-mail + an **API token** (id.atlassian.com → Security → API tokens), sent as Basic auth |
 | Jira / Confluence **Data Center** | a **personal access token** (profile → Personal access tokens), sent as Bearer |
 | GitHub (or Enterprise) | a fine-grained **personal access token**: read access to Contents and Pull requests |
+| Local Git repository | none stored — the clone's own git credentials, used only for an optional fetch |
 | Zephyr Scale (Cloud) | a Zephyr **API access token** (Jira → Apps → Zephyr → API Access Tokens), sent as Bearer |
 | Xray Cloud | an **API key** (client id + client secret, Xray → Global Settings → API Keys); exchanged for a 24-hour token automatically |
 | Azure DevOps *(under development)* | a **personal access token** (Work Items read/write, Test Management read/write) |

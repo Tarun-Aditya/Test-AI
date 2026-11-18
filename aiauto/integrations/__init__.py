@@ -7,10 +7,11 @@ from .confluence import Confluence
 from .custom import Custom
 from .github import GitHub
 from .jira import Jira
+from .local import LocalRepo
 from .xray import Xray
 from .zephyr import ZephyrScale
 
-IMPLEMENTED = {c.kind: c for c in (Jira, Confluence, GitHub, ZephyrScale, Xray, AzureDevOps, Custom)}
+IMPLEMENTED = {c.kind: c for c in (Jira, Confluence, GitHub, LocalRepo, ZephyrScale, Xray, AzureDevOps, Custom)}
 
 # what each tool needs; `secret` fields are stored encrypted and never shown again
 F = lambda key, label, **kw: {"key": key, "label": label, **kw}
@@ -37,6 +38,12 @@ CATALOG = [
      "help": "A fine-grained personal access token with read access to Contents and Pull requests on these repositories.",
      "fields": [F("base_url", "API URL", placeholder="https://api.github.com (Enterprise: https://host/api/v3)"),
                 F("token", "Personal access token", secret=True), F("repos", "Repositories (owner/name, comma separated)")]},
+    {"kind": "local_repo", "label": "Local Git repository", "roles": ["code"], "status": "standard",
+     "help": "A clone on the machine the hub runs on (in Docker: mount it into the hub container). No token here: git uses the "
+             "credentials that clone already has (credential helper or SSH key), and only to fetch when you turn that on.",
+     "fields": [F("path", "Folder of the clone (on the hub machine)", placeholder="/home/me/src/shop  or  C:\\src\\shop"),
+                F("ui_paths", "UI files to consider (globs, optional)", placeholder="web/src/**/*.tsx, templates/*.html"),
+                F("fetch", "git fetch before reading", options=["no", "yes"])]},
     {"kind": "zephyr_scale", "label": "Zephyr Scale", "roles": ["tests"], "status": "standard",
      "help": "A Zephyr Scale API access token (Jira > Apps > Zephyr API Access Tokens).",
      "fields": [F("base_url", "API URL", placeholder="https://api.zephyrscale.smartbear.com/v2"),

@@ -241,3 +241,78 @@ I should not see "Age must be 18-99"'''
     bad, _ = parse_text(f'Open {page}\nClick Create account\nVerify page does not contain "Email is required"', {}, use_llm=False)
     s = run_test(bad, cfg, tmp_path / "art")
     assert s.status.value == "failed" and "NOT to contain" in s.results[-1].error
+
+
+# ------------------------------------------------------------------------------- local work first, publish later
+STORY_MD = """# Sign up form
+
+As a visitor I want to create an account.
+
+## Acceptance criteria
+- Given I am on the sign up page, when I fill valid details and click Create account then I see "Account created"
+- Email is required and must be a valid email address; shows "Enter a valid email"
+- Age must be between 18 and 99; shows "Age must be 18-99"
+"""
+
+
+def _git_repo(tmp_path):
+    repo = tmp_path / "shop"
+    (repo / "web").mkdir(parents=True)
+    (repo / "web" / "signup.html").write_text((EXAMPLES / "signup" / "signup.html").read_text(encoding="utf-8"), encoding="utf-8")
+    (repo / "web" / "about.html").write_text("<h1>About us</h1><button>Contact</button>", encoding="utf-8")
+    g = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(g + ["add", "web/about.html"], check=True)
+    subprocess.run(g + ["commit", "-q", "-m", "about page"], check=True)
+    subprocess.run(g + ["add", "web/signup.html"], check=True)
+    subprocess.run(g + ["commit", "-q", "-m", "SHOP-1: sign up form"], check=True)
+    return repo
+
+
+def test_pasted_story_and_local_repo(tmp_path):
+    repo = _git_repo(tmp_path)
+    local = make("local_repo", {"path": str(repo)}, {})
+    assert "SHOP-1: sign up form" in local.test()
+    issue = context.issue_from_text(STORY_MD, key="shop-1")
+    assert issue.key == "SHOP-1" and issue.title == "Sign up form" and len(issue.acceptance) == 3
+    pack = context.build_for(issue, [], [local], notes="Usernames are unique.")
+    assert [p["number"] for p in pack["code"]["prs"]] and pack["code"]["pages"] == ["signup.html"]   # found by the commit
+    assert pack["docs"][0]["pasted"] and pack["meta"] == {"source": "pasted", "auto_sync": False}
+    # no key: the UI file that shares the story's words
+    pack2 = context.build_for(context.issue_from_text(STORY_MD), [], [local])
+    assert pack2["code"]["pages"][0] == "signup.html" and "No commit mentions" in pack2["warnings"][0]
+    cases = design.design(pack)["cases"]
+    assert any(c["title"] == "SHOP-1 · Rejects Age = 100 (above the maximum)" for c in cases)
+    with pytest.raises(IntegrationError, match="not a folder"):
+        make("local_repo", {"path": str(tmp_path / "nope")}, {})
+
+
+def test_local_first_then_publish(fresh, hub, signup_url, tmp_path):
+    url, state = fresh
+    repo = _git_repo(tmp_path)
+    c = httpx.Client(base_url=hub, timeout=60, headers={"X-Requested-With": "autopilot"})
+    assert c.put("/api/connections/local_repo", json={"settings": {"path": str(repo)}}).status_code == 200
+    # no tracker, no test tool: paste the story, design, run — all local
+    d = c.post("/api/designs", json={"story": {"text": STORY_MD}}).json()
+    assert d["issue_key"] == "LOCAL" and d["auto_sync"] is False and not d["linked"]
+    pick = [x["id"] for x in d["cases"] if "Age = 100" in x["title"] or "valid details" in x["title"]]
+    c.post(f"/api/designs/{d['id']}/status", json={"case_ids": pick, "status": "approved"})
+    r = c.post(f"/api/designs/{d['id']}/run", json={"base_url": signup_url, "config": {"record_video": False, "live_view": False}})
+    assert r.status_code == 200, r.text
+    _wait(lambda: c.get(f"/api/designs/{d['id']}").json()["unpublished"] == 2)
+    assert not state.cases and not state.comments          # nothing left the hub
+
+    # the tools are connected later: link the pasted story to its Jira key, then Publish
+    c.put("/api/connections/jira", json={"settings": {"base_url": url + "/site", "deployment": "cloud", "email": ft.EMAIL,
+                                                      "project_key": "SHOP"}, "secrets": {"token": ft.JIRA_TOKEN}})
+    c.put("/api/connections/zephyr_scale", json={"settings": {"base_url": url + "/zephyr/v2", "project_key": "SHOP"},
+                                                 "secrets": {"token": ft.ZEPHYR_TOKEN}})
+    linked = c.post(f"/api/designs/{d['id']}/link", json={"issue_key": "SHOP-1"}).json()
+    assert linked["issue_key"] == "SHOP-1" and linked["linked"] and all(x["title"].startswith("SHOP-1 · ") for x in linked["cases"])
+    pub = c.post(f"/api/designs/{d['id']}/publish")
+    assert pub.status_code == 200, pub.text
+    assert pub.json()["results"] == 2 and pub.json()["design"]["unpublished"] == 0
+    assert len(state.cases) == 2 and {i for _, i in state.case_links} == {10001}
+    assert sorted(e["statusName"] for e in state.executions) == ["Fail", "Pass"]
+    assert state.comments["SHOP-1"][0].startswith("Autopilot ran 2 test case(s) for SHOP-1: 1 passed, 1 failed")
+    assert len(state.bugs) == 1

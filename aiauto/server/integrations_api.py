@@ -34,9 +34,22 @@ class ConnectionBody(BaseModel):
     secrets: dict[str, Optional[str]] = Field(default_factory=dict)    # blank / masked = keep the saved one
 
 
+class PastedStory(BaseModel):
+    text: str                                   # Markdown, Jira wiki markup or plain text
+    title: str = ""
+    key: str = ""                               # its tracker key if it has one (finds commits that mention it)
+    type: str = "Story"                         # Story | Bug
+    notes: str = ""                             # spec / wiki page text pasted next to it
+
+
 class DesignRequest(BaseModel):
-    issue_key: str
+    issue_key: Optional[str] = None             # from the tracker
+    story: Optional[PastedStory] = None         # or pasted by hand (works with no tracker connected)
     use_ai: bool = False
+
+
+class LinkRequest(BaseModel):
+    issue_key: str
 
 
 class DesignUpdate(BaseModel):
@@ -179,9 +192,19 @@ def make_router(app_mod) -> APIRouter:
     # ------------------------------------------------------------------ designs
     @r.post("/api/designs")
     async def design_create(body: DesignRequest, request: Request):
-        need(request, "tracker")
         proj, owner = project(request), app_mod._owner_of(request)
-        pack = await run_io(build_pack, proj, body.issue_key.strip())
+        if body.story:
+            st = body.story
+            if not st.text.strip():
+                raise HTTPException(400, "Paste the story first")
+            issue = ctx.issue_from_text(st.text, st.title, st.key, st.type)
+            pack = await run_io(lambda: ctx.build_for(issue, sync.for_role(db, proj, "docs", all_=True),
+                                                      sync.for_role(db, proj, "code", all_=True), st.notes))
+        elif body.issue_key:
+            need(request, "tracker")
+            pack = await run_io(build_pack, proj, body.issue_key.strip())
+        else:
+            raise HTTPException(400, "Give an issue key or paste a story")
         out = await asyncio.get_running_loop().run_in_executor(
             io_pool, app_mod._as_user, owner, designer.design, pack, body.use_ai)
         d = {"id": uuid.uuid4().hex[:12], "project": proj, "issue_key": pack["issue"]["key"], "issue_title": pack["issue"]["title"],
@@ -192,7 +215,9 @@ def make_router(app_mod) -> APIRouter:
         return view(db.design_get(d["id"]))
 
     def view(d: dict) -> dict:
-        return {**d, "coverage": designer.coverage(d["pack"], d["cases"]), "latest": sync.latest_by_case(db, d)}
+        unpublished = sum(1 for x in db.design_runs(d["id"]) if not x["synced"] and x.get("status") in sync.FINAL)
+        return {**d, "coverage": designer.coverage(d["pack"], d["cases"]), "latest": sync.latest_by_case(db, d),
+                "auto_sync": sync.auto_sync(d), "linked": sync.linked(d), "unpublished": unpublished}
 
     @r.get("/api/designs")
     def designs(request: Request, issue_key: Optional[str] = None):
@@ -256,7 +281,15 @@ def make_router(app_mod) -> APIRouter:
     async def design_refresh(design_id: str, request: Request):
         """Re-read the story/docs/code: says whether anything changed since the cases were written."""
         d = design_of(request, design_id)
-        pack = await run_io(build_pack, d["project"], d["issue_key"])
+        meta = d["pack"].get("meta") or {}
+        if d["pack"]["issue"].get("source") == "pasted" or meta.get("linked_from") == "pasted":
+            # the pasted text is the story: re-read only its docs and code
+            notes = next((x["text"] for x in d["pack"].get("docs") or [] if x.get("pasted")), "")
+            proj = d["project"]
+            pack = await run_io(lambda: ctx.build_for(ctx.issue_of(d["pack"]), sync.for_role(db, proj, "docs", all_=True),
+                                                      sync.for_role(db, proj, "code", all_=True), notes, meta))
+        else:
+            pack = await run_io(build_pack, d["project"], d["issue_key"])
         changed = pack["fingerprint"] != d["pack"].get("fingerprint")
         if changed:
             d["pack"], d["notes"] = pack, list(dict.fromkeys((d.get("notes") or []) +
@@ -285,7 +318,7 @@ def make_router(app_mod) -> APIRouter:
         if not body.base_url.strip():
             raise HTTPException(400, "Set the URL of the app under test")
         tool = sync.for_role(db, d["project"], "tests")
-        if tool and tool.kind == "zephyr_scale" and any(not (c.get("external") or {}).get(tool.kind) for c in cases):
+        if tool and sync.auto_sync(d) and tool.kind == "zephyr_scale" and any(not (c.get("external") or {}).get(tool.kind) for c in cases):
             await asyncio.get_running_loop().run_in_executor(sync_pool, sync.push_design, db, d, [c["id"] for c in cases])
             d = db.design_get(design_id)
             cases = [c for c in d["cases"] if c.get("status") == "approved" and (not want or c["id"] in want)]
@@ -305,6 +338,25 @@ def make_router(app_mod) -> APIRouter:
             raise HTTPException(422, {"message": "None of the cases could be run", "skipped": skipped})
         launch = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.start_launch, db, d, run_case)
         return {"launch": launch, "run_ids": list(run_case), "skipped": skipped}
+
+    @r.post("/api/designs/{design_id}/publish")
+    async def design_publish(design_id: str, request: Request):
+        """Local work -> the tools: cases, the latest result of each, the story comment / transition / bugs."""
+        d = design_of(request, design_id)
+        try:
+            out = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.publish, db, d, app_mod.ARTIFACTS)
+        except IntegrationError as e:
+            raise HTTPException(e.status if e.status in (400, 401, 403, 404) else 502, str(e))
+        return {**out, "design": view(db.design_get(design_id))}
+
+    @r.post("/api/designs/{design_id}/link")
+    async def design_link(design_id: str, body: LinkRequest, request: Request):
+        d = design_of(request, design_id)
+        try:
+            await asyncio.get_running_loop().run_in_executor(sync_pool, sync.link_story, db, d, body.issue_key)
+        except IntegrationError as e:
+            raise HTTPException(e.status if e.status in (400, 401, 403, 404) else 502, str(e))
+        return view(db.design_get(design_id))
 
     @r.get("/api/designs/{design_id}/runs")
     def design_runs(design_id: str, request: Request):

@@ -12,14 +12,17 @@ function Pack({ pack }) {
   const i = pack.issue, code = pack.code || {};
   return (
     <div className="panel-b">
-      <div className="mut"><a href={i.url} target="_blank" rel="noreferrer">{i.key}</a> · {i.type} · {i.status}{i.labels?.length ? " · " + i.labels.join(", ") : ""}</div>
+      <div className="mut">{i.url ? <a href={i.url} target="_blank" rel="noreferrer">{i.key}</a> : <span>{i.key} (pasted)</span>} · {i.type} · {i.status}{i.labels?.length ? " · " + i.labels.join(", ") : ""}</div>
       {i.acceptance?.length > 0 && <><b>Acceptance criteria</b><ol style={{ margin: "4px 0 10px 18px", padding: 0 }}>{i.acceptance.map((a, n) => <li key={n}>{a}</li>)}</ol></>}
       {i.steps_to_reproduce?.length > 0 && <><b>Steps to reproduce</b><ol style={{ margin: "4px 0 10px 18px", padding: 0 }}>{i.steps_to_reproduce.map((a, n) => <li key={n}>{a}</li>)}</ol>
         {i.expected_result && <div className="mut">Expected: {i.expected_result}</div>}</>}
       {!i.acceptance?.length && !i.steps_to_reproduce?.length && <div className="hint">No acceptance criteria found. Add an “Acceptance criteria” section (or field) to the story for better cases.</div>}
       <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
         {(pack.docs || []).map((d) => <a key={d.url} className="pill" href={d.url} target="_blank" rel="noreferrer"><Icon name="doc" size={12} /> {d.title}</a>)}
-        {(code.prs || []).map((p) => <a key={p.url} className="pill" href={p.url} target="_blank" rel="noreferrer">PR #{p.number} {p.repo}</a>)}
+        {(code.prs || []).map((p) => p.kind === "commit"
+          ? <span key={p.number} className="pill" title={(p.files || []).join(", ")}>commit {p.number} · {p.title}</span>
+          : <a key={p.url} className="pill" href={p.url} target="_blank" rel="noreferrer">PR #{p.number} {p.repo}</a>)}
+        {(code.files || []).length > 0 && !(code.prs || []).length && <span className="pill">{code.files.map((f) => f.path).join(", ")}</span>}
       </div>
       {code.fields?.length > 0 && <div className="mut" style={{ marginTop: 6 }}>Form in the code: {code.fields.map((f) =>
         `${f.name}${f.required ? "*" : ""}${f.maxlength ? ` ≤${f.maxlength}` : ""}${f.minlength ? ` ≥${f.minlength}` : ""}${f.min || f.max ? ` [${f.min ?? ""}–${f.max ?? ""}]` : ""}`).join(", ")}
@@ -61,13 +64,14 @@ function CaseRow({ c, latest, selected, onSelect, onChange, openRun }) {
   );
 }
 
-function Design({ id, onClose }) {
+function Design({ id, onClose, onChanged = () => {} }) {
   const { toast, form, openRun, subscribe } = useApp();
   const [d, setD] = useState(null);
   const [log, setLog] = useState([]);
   const [sel, setSel] = useState(new Set());
   const [baseUrl, setBaseUrl] = useState(() => store.get("designBaseUrl", ""));
   const [busy, setBusy] = useState(false);
+  const [linkKey, setLinkKey] = useState("");
   const load = async () => { const [x, l] = await Promise.all([api(`/api/designs/${id}`), api(`/api/designs/${id}/log`)]); setD(x); setLog(l); };
   useEffect(() => { load().catch((e) => toast(e.message, true)); }, [id]);
   useEffect(() => subscribe?.((ev) => { if (ev.type === "runs_changed") setTimeout(() => load().catch(() => {}), 1500); }), [id]);
@@ -78,6 +82,10 @@ function Design({ id, onClose }) {
     if (r.blocked?.length) toast(`Fix these first: ${r.blocked.join(", ")}`, true); setSel(new Set()); return r; });
   const saveCase = (c) => act(() => api(`/api/designs/${id}`, { method: "PUT", body: { cases: d.cases.map((x) => (x.id === c.id ? c : x)) } }), "Case saved");
   const push = () => act(() => api(`/api/designs/${id}/push`, { method: "POST" }), (r) => `Pushed ${Object.values(r.pushed).filter(Boolean).length} case(s)`);
+  const publish = () => act(() => api(`/api/designs/${id}/publish`, { method: "POST" }),
+    (r) => `Published ${Object.values(r.pushed || {}).filter(Boolean).length} case(s) and ${r.results} result(s)`);
+  const link = () => act(async () => { if (!linkKey.trim()) throw new Error("Type the story's key, e.g. SHOP-123");
+    const r = await api(`/api/designs/${id}/link`, { method: "POST", body: { issue_key: linkKey.trim() } }); onChanged(r); return r; }, (r) => r && `Linked to ${r.issue_key}`);
   const refresh = () => act(() => api(`/api/designs/${id}/refresh`, { method: "POST" }), (r) => (r.changed ? "The story or its code changed: review the cases" : "Nothing changed"));
   const del = () => act(async () => { if (!confirm("Delete this design (its sync log too)?")) return; await api(`/api/designs/${id}`, { method: "DELETE" }); onClose(); });
   const run = () => act(async () => {
@@ -95,6 +103,7 @@ function Design({ id, onClose }) {
   return (
     <div className="panel">
       <div className="panel-h"><h3>Test cases · {d.issue_key}</h3><span className="mut">&nbsp;{d.cases.length} cases, {approved} approved · {d.status}</span>
+        {!d.auto_sync && <span className="pill" title="Results stay on the hub until you press Publish">local{d.unpublished ? ` · ${d.unpublished} result(s) not published` : ""}</span>}
         <span className="spacer" /><button className="btn sm ghost" onClick={onClose}><Icon name="x" size={12} /></button></div>
       <div className="panel-b">
         {d.notes?.length > 0 && <div className="hint" style={{ color: "var(--warn)" }}>{d.notes.join(" · ")}</div>}
@@ -102,10 +111,16 @@ function Design({ id, onClose }) {
           <button className="btn sm" disabled={busy || !sel.size} onClick={() => status("approved")}>Approve{sel.size ? ` (${sel.size})` : ""}</button>
           <button className="btn sm" disabled={busy || !sel.size} onClick={() => status("rejected")}>Reject</button>
           <button className="btn sm" disabled={busy || !sel.size} onClick={() => status("draft")}>Back to draft</button>
-          <button className="btn sm" disabled={busy || !approved} onClick={push} title="Create / update the approved cases in Zephyr Scale (or the connected test tool)">Push to test tool</button>
+          <button className="btn sm" disabled={busy || !approved} onClick={push} title="Create / update the approved cases in Zephyr Scale (or the connected test tool)">Push cases</button>
+          <button className="btn sm" disabled={busy || !approved} onClick={publish} title="Send the approved cases and the latest result of each: test tool (cases, cycle, executions) and, for a linked story, the Jira comment, status and bugs"><Icon name="upload" size={12} />Publish</button>
           <button className="btn sm ghost" disabled={busy} onClick={refresh} title="Re-read the story, docs and code">Re-check story</button>
           <span className="spacer" /><button className="btn sm ghost danger" disabled={busy} onClick={del}>Delete</button>
         </div>
+        {!d.linked && <div className="row" style={{ gap: 6, marginTop: 8 }}>
+          <span className="mut">Pasted story. In the tracker as</span>
+          <input style={{ width: 140 }} placeholder="SHOP-123" value={linkKey} onChange={(e) => setLinkKey(e.target.value)} />
+          <button className="btn sm" disabled={busy} onClick={link} title="Link this design to the Jira story: Publish then comments on it, moves it and links bugs">Link</button>
+          <span className="mut">(optional — needed for the Jira comment, status and bugs)</span></div>}
         <div className="row" style={{ gap: 6, marginTop: 8 }}>
           <input style={{ flex: 1, minWidth: 0, width: "100%" }} placeholder="URL of the app under test (fills ${base_url}), e.g. https://staging.shop.example" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
           <button className="btn primary sm" disabled={busy || !approved} onClick={run}><Icon name="play" size={12} />Run {ids.length ? "selected" : "approved"}</button>
@@ -142,19 +157,35 @@ export default function Requirements() {
   const [open, setOpen] = useState(null);
   const [useAi, setUseAi] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState([]);
+  const [paste, setPaste] = useState(null);         // the "paste a story" form, when open
   const search = async () => {
     setErr(null); store.set("reqQuery", q);
     try { setList(await api(`/api/requirements?q=${encodeURIComponent(q)}`)); } catch (e) { setErr(e.message); setList([]); }
   };
-  useEffect(() => { search(); setKey(null); setPack(null); setOpen(null); }, [project]);
+  const loadSaved = () => api("/api/designs").then(setSaved).catch(() => {});
+  useEffect(() => { search(); loadSaved(); setKey(null); setPack(null); setOpen(null); }, [project]);
+  const openSaved = async (id) => {
+    setPaste(null); setBusy(true);
+    try { const d = await api(`/api/designs/${id}`); setKey(d.issue_key); setPack(d.pack); setDesigns([d]); setOpen(d.id); }
+    catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  };
+  const designPasted = async () => {
+    setBusy(true);
+    try {
+      const d = await api("/api/designs", { method: "POST", body: { story: paste, use_ai: useAi } });
+      setPaste(null); setKey(d.issue_key); setPack(d.pack); setDesigns([d]); setOpen(d.id); loadSaved();
+      toast(`${d.cases.length} test cases written. Review and approve them`);
+    } catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  };
   const pick = async (k) => {
-    setKey(k); setPack(null); setOpen(null); setBusy(true);
+    setPaste(null); setKey(k); setPack(null); setOpen(null); setBusy(true);
     try { const r = await api(`/api/requirements/${encodeURIComponent(k)}`); setPack(r.pack); setDesigns(r.designs); if (r.designs[0]) setOpen(r.designs[0].id); }
     catch (e) { toast(e.message, true); } finally { setBusy(false); }
   };
   const design = async () => {
     setBusy(true);
-    try { const d = await api("/api/designs", { method: "POST", body: { issue_key: key, use_ai: useAi } }); setDesigns((x) => [d, ...x]); setOpen(d.id); toast(`${d.cases.length} test cases written. Review and approve them`); }
+    try { const d = await api("/api/designs", { method: "POST", body: { issue_key: key, use_ai: useAi } }); setDesigns((x) => [d, ...x]); setOpen(d.id); loadSaved(); toast(`${d.cases.length} test cases written. Review and approve them`); }
     catch (e) { toast(e.message, true); } finally { setBusy(false); }
   };
   const admin = !me || me.role === "admin";
@@ -162,12 +193,15 @@ export default function Requirements() {
     <section className="view on">
       <div className="grid2" style={{ gridTemplateColumns: "minmax(260px, 1fr) 2.4fr", alignItems: "start" }}>
         <div className="panel">
-          <div className="panel-h"><h3>Stories &amp; bugs</h3></div>
+          <div className="panel-h"><h3>Stories &amp; bugs</h3><span className="spacer" />
+            <button className="btn sm" onClick={() => { setPaste({ text: "", title: "", key: "", type: "Story", notes: "" }); setOpen(null); setKey(null); }}>
+              <Icon name="plus" size={12} />Paste a story</button></div>
           <div className="panel-b">
             <form className="row" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); search(); }}>
               <input style={{ flex: 1 }} placeholder="Key, text, or JQL" value={q} onChange={(e) => setQ(e.target.value)} />
               <button className="btn sm"><Icon name="search" size={12} /></button></form>
-            {err && <div className="hint" style={{ color: "var(--warn)" }}>{err}{admin && <> — <button className="linkish" onClick={() => nav("settings")}>open Integrations</button></>}</div>}
+            {err && <div className="hint" style={{ color: "var(--warn)" }}>{err.startsWith("Connect ") ? "No tracker connected yet: paste a story instead" : err}
+              {admin && <> — <button className="linkish" onClick={() => nav("settings")}>Integrations</button></>}</div>}
             <div className="prov-list" style={{ marginTop: 8 }}>
               {(list || []).map((i) => (
                 <button key={i.key} className={"mrow" + (key === i.key ? " on" : "")} onClick={() => pick(i.key)} style={{ textAlign: "left" }}>
@@ -176,20 +210,47 @@ export default function Requirements() {
                 </button>))}
               {list && !list.length && !err && <div className="mut">No matches.</div>}
             </div>
+            {saved.length > 0 && <>
+              <h4 style={{ margin: "14px 0 6px" }}>Test designs</h4>
+              <div className="prov-list">{saved.slice(0, 30).map((d) => (
+                <button key={d.id} className={"mrow" + (open === d.id ? " on" : "")} onClick={() => openSaved(d.id)} style={{ textAlign: "left" }}>
+                  <div className="grow"><b>{d.issue_key}</b> {d.issue_title}<small>{d.cases} cases, {d.approved} approved · {ago(new Date(d.updated * 1000).toISOString())}</small></div>
+                </button>))}</div></>}
           </div>
         </div>
         <div>
-          {!key && <div className="empty-state">Pick a story or bug. Autopilot reads it with its acceptance criteria, the linked Confluence pages and the
-            pull requests that mention it, then writes positive, negative and boundary test cases — no AI needed.</div>}
-          {key && <div className="panel">
+          {paste && <div className="panel">
+            <div className="panel-h"><h3>Paste a story or bug</h3><span className="spacer" />
+              <label className="toggle" title="Also ask the AI for more cases. The rule-based cases are always written."><input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} /><span className="sw" />AI ideas</label>
+              <button className="btn primary sm" disabled={busy || !paste.text.trim()} onClick={designPasted}><Icon name="spark" size={12} />Design test cases</button>
+              <button className="btn sm ghost" onClick={() => setPaste(null)}><Icon name="x" size={12} /></button></div>
+            <div className="panel-b">
+              <div className="row" style={{ gap: 8 }}>
+                <label className="field" style={{ flex: 2 }}><span>Title (optional: first line otherwise)</span><input value={paste.title} onChange={(e) => setPaste({ ...paste, title: e.target.value })} /></label>
+                <label className="field" style={{ flex: 1 }}><span>Key (optional)</span><input placeholder="SHOP-123" value={paste.key} onChange={(e) => setPaste({ ...paste, key: e.target.value })} /></label>
+                <label className="field" style={{ flex: 1 }}><span>Type</span><select value={paste.type} onChange={(e) => setPaste({ ...paste, type: e.target.value })}><option>Story</option><option>Bug</option></select></label>
+              </div>
+              <label className="field"><span>Story text — Markdown, Jira wiki markup or plain text. Put the criteria under an “Acceptance criteria” heading,
+                as bullets, or as Given / When / Then; for a bug, “Steps to reproduce” and “Expected result”.</span>
+                <textarea rows={14} value={paste.text} onChange={(e) => setPaste({ ...paste, text: e.target.value })} style={{ fontFamily: "var(--mono)" }}
+                  placeholder={"Sign up form\n\n## Acceptance criteria\n- Email is required and must be a valid email address; shows \"Enter a valid email\"\n- Age must be between 18 and 99\n- Given I am on the sign up page, when I fill valid details and click Create account then I see \"Account created\""} /></label>
+              <label className="field"><span>Extra notes (optional): a spec or wiki page, pasted</span>
+                <textarea rows={4} value={paste.notes} onChange={(e) => setPaste({ ...paste, notes: e.target.value })} /></label>
+              <div className="hint">Code context comes from the connected GitHub or <b>local Git repository</b> (Admin → Integrations): commits that mention the key,
+                or the UI files that match the story. Everything stays on the hub until you press <b>Publish</b>.</div>
+            </div></div>}
+          {!key && !paste && <div className="empty-state">Pick a story or bug. Autopilot reads it with its acceptance criteria, the linked Confluence pages and the
+            pull requests that mention it, then writes positive, negative and boundary test cases — no AI needed. No tracker yet? <b>Paste a story</b>.</div>}
+          {key && !paste && <div className="panel">
             <div className="panel-h"><h3>{pack ? pack.issue.title : key}</h3><span className="spacer" />
               <label className="toggle" title="Also ask the AI for more cases (business rules, edge cases). The rule-based cases are always written."><input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} /><span className="sw" />AI ideas</label>
-              <button className="btn primary sm" disabled={busy || !pack} onClick={design}><Icon name="spark" size={12} />Design test cases</button></div>
+              <button className="btn primary sm" disabled={busy || !pack || pack.issue.source === "pasted"} title={pack?.issue.source === "pasted" ? "Pasted story: paste it again to write a new set" : ""} onClick={design}><Icon name="spark" size={12} />Design test cases</button></div>
             {pack ? <Pack pack={pack} /> : <div className="panel-b mut">{busy ? "Reading the story, its docs and its code…" : ""}</div>}
             {designs.length > 1 && <div className="panel-b row" style={{ gap: 6, flexWrap: "wrap" }}>{designs.map((d) =>
               <button key={d.id} className={"btn sm " + (open === d.id ? "" : "ghost")} onClick={() => setOpen(d.id)}>{new Date(d.created * 1000).toLocaleString()} · {d.cases?.length ?? d.cases} cases</button>)}</div>}
           </div>}
-          {open && <div style={{ marginTop: 16 }}><Design key={open} id={open} onClose={() => setOpen(null)} /></div>}
+          {open && !paste && <div style={{ marginTop: 16 }}><Design key={open} id={open} onClose={() => setOpen(null)}
+            onChanged={(d) => { setKey(d.issue_key); setPack(d.pack); loadSaved(); }} /></div>}
         </div>
       </div>
     </section>

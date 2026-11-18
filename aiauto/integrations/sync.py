@@ -17,7 +17,7 @@ from .context import issue_of
 log = logging.getLogger("aiauto.sync")
 
 # which connection serves each role when a project has several (first configured wins)
-PREFER = {"tracker": ("jira", "azure_devops", "custom"), "docs": ("confluence",), "code": ("github",),
+PREFER = {"tracker": ("jira", "azure_devops", "custom"), "docs": ("confluence",), "code": ("github", "local_repo"),
           "tests": ("zephyr_scale", "xray", "azure_devops", "custom")}
 FINAL = ("passed", "failed", "cancelled", "interrupted")
 
@@ -54,6 +54,16 @@ def for_role(db, project: str, role: str, all_: bool = False):
             if not all_:
                 break
     return out if all_ else (out[0] if out else None)
+
+
+def auto_sync(design: dict) -> bool:
+    """Tracker stories write back after every run; pasted ones wait for Publish."""
+    return bool((design["pack"].get("meta") or {}).get("auto_sync", True))
+
+
+def linked(design: dict) -> bool:
+    """The story exists in the tracker (pulled from it, or a pasted one linked to its key)."""
+    return design["pack"]["issue"].get("source") != "pasted"
 
 
 def _log(db, design: dict, kind: str, action: str, ok: bool, detail: str, ref: str | None = None) -> None:
@@ -94,15 +104,15 @@ def push_design(db, design: dict, only: list[str] | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------------- a launch (one cycle)
-def start_launch(db, design: dict, run_case: dict[str, str]) -> str:
+def start_launch(db, design: dict, run_case: dict[str, str], publishing: bool = False) -> str:
     """Record a launch: which run ran which case; opens a test cycle (one per launch) in the tool."""
     launch = uuid.uuid4().hex[:8]
     for rid, cid in run_case.items():
         db.design_run_add(rid, design["id"], cid, launch)
-    entry = {"started": time.time(), "runs": list(run_case), "cycle": {}, "done": False}
+    entry = {"started": time.time(), "runs": list(run_case), "cycle": {}, "done": False, "published": publishing}
     tool = None
     try:
-        tool = for_role(db, design["project"], "tests")
+        tool = for_role(db, design["project"], "tests") if (publishing or auto_sync(design)) else None
     except IntegrationError:
         pass
     if tool:
@@ -130,12 +140,15 @@ def _result(summary: dict, run_id: str) -> dict:
             "steps": [{"status": r.get("status"), "error": r.get("error")} for r in res], "failed": bad}
 
 
-def record_run(db, run_id: str, artifacts: Path) -> None:
-    """Called once a run that belongs to a design has finished: execution, bug, and maybe the story update."""
+def record_run(db, run_id: str, artifacts: Path, force: bool = False) -> None:
+    """Called once a run that belongs to a design has finished: execution, bug, and maybe the story update.
+    Local (pasted) designs keep their results here until Publish (force=True)."""
     link = db.design_run(run_id)
     if not link or link["synced"]:
         return
     design = db.design_get(link["design_id"])
+    if design and not force and not auto_sync(design):
+        return
     p = Path(artifacts) / run_id / "summary.json"
     if not design or not p.exists():
         db.design_run_synced(run_id)
@@ -164,7 +177,7 @@ def record_run(db, run_id: str, artifacts: Path) -> None:
         except IntegrationError as e:
             _log(db, design, tool.kind, "record execution", False, f"{case['title']}: {e}")
 
-    tracker = for_role(db, design["project"], "tracker")
+    tracker = for_role(db, design["project"], "tracker") if linked(design) else None
     if tracker and result["status"] == "failed":
         _bug(db, design, tracker, case, result, issue, run_id, Path(artifacts) / run_id)
 
@@ -255,3 +268,51 @@ def _finish_launch(db, design, runs, entry, tool, tracker, issue) -> None:
             _log(db, design, tracker.kind, "transition", True, f"{issue.key} → {got}", issue.key)
         except (IntegrationError, NotImplementedError) as e:
             _log(db, design, tracker.kind, "transition", False, str(e))
+
+
+# ---------------------------------------------------------------------------------- Publish (local -> tools)
+def publish(db, design: dict, artifacts: Path) -> dict:
+    """Push the approved cases, then the latest finished result of each as one new cycle, the story comment,
+    transition and bugs. For work done locally before the tools were connected, or to send it all again."""
+    tests = for_role(db, design["project"], "tests")
+    tracker = for_role(db, design["project"], "tracker") if linked(design) else None
+    if not tests and not tracker:
+        raise IntegrationError("Connect a test tool (Zephyr Scale) or link the story to a Jira key first", 400)
+    approved = [c for c in design["cases"] if c.get("status") == "approved"]
+    if not approved:
+        raise IntegrationError("Approve some cases first", 400)
+    pushed = push_design(db, design) if tests else {}
+    design = db.design_get(design["id"]) or design
+    latest = latest_by_case(db, design)
+    runs = {latest[c["id"]]["run_id"]: c["id"] for c in approved if c["id"] in latest
+            and latest[c["id"]]["status"] in ("passed", "failed", "interrupted")}
+    if not runs:
+        _log(db, design, "autopilot", "publish", True, f"{len(pushed)} case(s) pushed; no finished runs to report yet")
+        return {"pushed": pushed, "results": 0}
+    launch = start_launch(db, design, runs, publishing=True)
+    for rid in runs:
+        record_run(db, rid, artifacts, force=True)
+    _log(db, design, "autopilot", "publish", True, f"{len(pushed)} case(s), {len(runs)} result(s)")
+    return {"pushed": pushed, "results": len(runs), "launch": launch}
+
+
+def link_story(db, design: dict, key: str) -> dict:
+    """Tie a pasted story to its tracker issue: ids and links from the tracker, the pasted text stays."""
+    tracker = for_role(db, design["project"], "tracker")
+    if not tracker:
+        raise IntegrationError("No tracker connected for this project", 400)
+    real = tracker.get_issue(key.strip())
+    i = design["pack"]["issue"]
+    old_key = i.get("key")
+    i.update(key=real.key, id=real.id, url=real.url, status=real.status, type=real.type or i.get("type"),
+             title=i.get("title") or real.title, source=real.source or tracker.kind)
+    if not i.get("acceptance"):
+        i["acceptance"] = real.acceptance
+    design["pack"]["meta"] = {**(design["pack"].get("meta") or {}), "linked_from": "pasted"}
+    design["issue_key"], design["issue_title"] = real.key, i["title"]
+    for c in design["cases"]:
+        if old_key and c["title"].startswith(old_key + " · "):
+            c["title"] = real.key + c["title"][len(old_key):]
+    db.design_put(design)
+    _log(db, design, tracker.kind, "link story", True, f"{old_key} → {real.key}", real.key)
+    return design
