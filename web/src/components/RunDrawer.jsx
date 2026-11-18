@@ -88,8 +88,9 @@ function Replay({ r, onDone }) {
         ({ data, iterations } = p);
         sensitive = [...new Set([...r.sensitive, ...p.sensitive])];
       }
-      const config = { ...(r.config || {}), engine, browser, headless, self_heal: heal, live_view: true, session: r.config?.session || null, save_session: null };
-      const res = await api("/api/runs", { method: "POST", body: { replay_run_id: r.run_id, data, sensitive, iterations, config, agent, reuse_secrets: true } });
+      const config = { ...(r.config || {}), engine: engine === "both" ? "playwright" : engine, browser, headless, self_heal: heal, live_view: true, session: r.config?.session || null, save_session: null };
+      const res = await api("/api/runs", { method: "POST", body: { replay_run_id: r.run_id, data, sensitive, iterations, config, agent, reuse_secrets: true,
+        engines: engine === "both" ? ["playwright", "selenium"] : null } });
       onDone(); nav("studio", res.run_ids[0]); toast(res.run_ids.length > 1 ? `Replay started: ${res.run_ids.length} iterations` : "Replay started");
     } catch (e) { toast(e.message, true); } finally { setBusy(false); }
   };
@@ -113,8 +114,8 @@ function Replay({ r, onDone }) {
       <div className="field"><span>Machine</span><select value={agent} onChange={(e) => setAgent(e.target.value)}>
         <option value="local">{health.local_name} (this server)</option>{online.length > 0 && <option value="any">Any free machine</option>}
         {online.map((m) => <option key={m.name} value={m.name}>{m.name}{m.busy ? " · busy" : ""}</option>)}</select></div>
-      <div className="field"><span>Engine</span><div className="seg">{["playwright", "selenium"].map((e) =>
-        <button key={e} className={engine === e ? "on" : ""} onClick={() => setEngine(e)}>{e === "playwright" ? "Playwright" : "Selenium"}</button>)}</div></div>
+      <div className="field"><span>Engine</span><div className="seg">{[["playwright", "Playwright"], ["selenium", "Selenium"], ["both", "Both"]].map(([e, l]) =>
+        <button key={e} className={engine === e ? "on" : ""} onClick={() => setEngine(e)}>{l}</button>)}</div></div>
       <div className="field"><span>Browser</span><select value={browser} onChange={(e) => setBrowser(e.target.value)}>{BROWSERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
       <div className="field"><span>Options</span><div style={{ display: "flex", gap: 16, paddingTop: 6 }}>
         <label className="toggle"><input type="checkbox" checked={headless} onChange={(e) => setHeadless(e.target.checked)} /><span className="sw" />Headless</label>

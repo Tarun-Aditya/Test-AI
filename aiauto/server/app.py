@@ -20,7 +20,7 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional, Union
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -60,7 +60,9 @@ db_writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="db-writer")
 class Hub:
     def __init__(self):
         self.ui: set[WebSocket] = set()
-        self.agents: dict[str, dict[str, Any]] = {}      # connected agents: name -> {ws, info, busy, queue}
+        self.agents: dict[str, dict[str, Any]] = {}      # connected agents: name -> {ws, info, slots, running, send_lock}
+        self.pending: list[dict] = []                    # jobs waiting for a free slot on one of their machines
+        self.local_running: set[str] = set()             # run ids executing on the hub itself
         self.events: dict[str, list[dict]] = {}          # run_id -> events of in-flight runs (for late viewers)
         self.loop: asyncio.AbstractEventLoop | None = None
 
@@ -149,7 +151,9 @@ class RunRequest(BaseModel):
     sensitive: list[str] = Field(default_factory=list)
     iterations: Optional[list[Iteration]] = None
     config: RunConfig = Field(default_factory=RunConfig)
-    agent: str = "local"                       # "local", "any", or a machine name
+    agent: Union[str, list[str]] = "local"     # "local", "any", a machine name, or several machine names
+    spread: Literal["each", "pool"] = "each"   # several machines: run everything on EACH, or share the runs as a POOL
+    engines: Optional[list[Literal["playwright", "selenium"]]] = None   # e.g. both: every run once per engine
     reuse_secrets: bool = True                 # replay: fill sensitive values from the original run (kept on the hub)
 
 
@@ -182,6 +186,7 @@ async def ws_ui(ws: WebSocket):
 @app.get("/api/health")
 def health():
     return {"ok": True, "llm": llm.status(), "llm_on": llm.available(), "agents": len(hub.agents), "local_name": LOCAL_NAME,
+            "local_slots": LOCAL_WORKERS, "local_running": len(hub.local_running), "waiting": len(hub.pending),
             "db": db.path}
 
 
@@ -249,22 +254,42 @@ async def api_run(req: RunRequest):
         rows = iterations(test.data)
         plan = [(row, cfg, f"#{i}" if len(rows) > 1 else None) for i, row in enumerate(rows, 1)]
 
-    if req.agent not in ("local", "any") and req.agent not in hub.agents:
-        raise HTTPException(404, f"Machine '{req.agent}' is not connected")
+    # several engines: every planned run once per engine (Playwright and Selenium side by side)
+    if req.engines and len(set(req.engines)) > 1:
+        plan = [(row, c.model_copy(update={"engine": eng}), lab) for row, c, lab in plan for eng in dict.fromkeys(req.engines)]
+        for _, c, _ in plan:
+            c.session_state = cfg.session_state
+    elif req.engines:
+        for _, c, _ in plan:
+            c.engine = req.engines[0]
+
+    # machines: one, any free one, every one of a list ("each"), or a shared pool of them ("pool")
+    machines = [req.agent] if isinstance(req.agent, str) else list(dict.fromkeys(req.agent))
+    if not machines:
+        raise HTTPException(400, "Pick at least one machine")
+    for m in machines:
+        if m not in ("local", "any", LOCAL_NAME) and m not in hub.agents:
+            raise HTTPException(404, f"Machine '{m}' is not connected")
+    machines = ["local" if m == LOCAL_NAME else m for m in machines]
+    if len(machines) > 1 and req.spread == "each":
+        targets = [[m] for m in machines]
+        plan = [(row, c, lab, t) for row, c, lab in plan for t in targets]
+    else:
+        plan = [(row, c, lab, machines) for row, c, lab in plan]
 
     batch = uuid.uuid4().hex[:8] if len(plan) > 1 else None
-    labels = _iteration_labels([(row, c) for row, c, _ in plan], test.sensitive) if len(plan) > 1 else [None]
+    labels = _iteration_labels([(row, c, t) for row, c, _, t in plan], test.sensitive) if len(plan) > 1 else [None]
     run_ids = []
-    for (row, c, _), label in zip(plan, labels):
+    for (row, c, _, target), label in zip(plan, labels):
         name = _display_name(test.name, row, test.sensitive)
         title = f"{name} · {label}" if label else name
         t = test.model_copy(update={"data": row, "title": title})      # name keeps its ${placeholders} for replays
         rid = new_run_id(title)
         run_ids.append(rid)
         job = {"run_id": rid, "test": json.loads(t.model_dump_json()), "config": c.model_dump(),
-               "session_state": c.session_state, "mode": mode, "agent": req.agent}
+               "session_state": c.session_state, "mode": mode, "targets": target}
         db.create_run({"run_id": rid, "test_name": title, "status": "queued", "engine": c.engine, "browser": c.browser,
-                       "agent": req.agent, "mode": mode, "started_at": now_iso(), "total": len(t.steps),
+                       "agent": target[0] if len(target) == 1 and target[0] != "local" else LOCAL_NAME if target == ["local"] else "any", "mode": mode, "started_at": now_iso(), "total": len(t.steps),
                        "iteration": label, "batch_id": batch, "config_json": c.model_dump_json(),
                        "data_json": json.dumps(masked_data(row, t.sensitive)), "sensitive_json": json.dumps(t.sensitive),
                        "source_run": source_run, "parser": parser})
@@ -277,7 +302,8 @@ async def api_run(req: RunRequest):
             except (KeyError, IndexError, ValueError):
                 pass
         db.put_secrets(rid, secrets)
-        await _dispatch(job)
+        hub.pending.append(job)
+    await _pump()
     await hub.broadcast({"type": "runs_changed"})
     return {"run_ids": run_ids, "batch_id": batch}
 
@@ -442,10 +468,16 @@ def api_agents():
     for m in db.machines():
         live = hub.agents.get(m["name"])
         m["online"] = bool(live)
-        m["busy"] = bool(live and live["busy"])
-        m["queued"] = live["queue"].qsize() if live else 0
+        m["slots"] = live["slots"] if live else (m.get("info") or {}).get("slots") or 1
+        m["running"] = len(live["running"]) if live else 0
+        m["busy"] = bool(live and m["running"] >= m["slots"])
+        m["queued"] = sum(1 for j in hub.pending if name_in(j, m["name"]))
         out.append(m)
     return out
+
+
+def name_in(job: dict, name: str) -> bool:
+    return name in job["targets"] or "any" in job["targets"]
 
 
 @app.delete("/api/agents/{name}")
@@ -457,22 +489,75 @@ def api_agent_forget(name: str):
 
 
 # --------------------------------------------------------------------- dispatch
-async def _dispatch(job: dict) -> None:
-    target = job["agent"]
-    if target == "local" or (target == "any" and not hub.agents):
-        job["agent"] = LOCAL_NAME
-        db.update_run(job["run_id"], agent=LOCAL_NAME)
-        pool.submit(_run_local, job)
-        return
-    if target == "any":
-        target = min(hub.agents, key=lambda n: (hub.agents[n]["busy"], hub.agents[n]["queue"].qsize()))
-        job["agent"] = target
-        db.update_run(job["run_id"], agent=target)
-    db.update_run(job["run_id"], status="dispatched")
-    await hub.agents[target]["queue"].put(job)
+_pump_lock = asyncio.Lock()
+
+
+def _candidates(job: dict) -> list[str]:
+    """Machines that may take this job: its targets ("any" = every connected agent, or the hub if none),
+    connected, supporting the job's engine, with a free slot - least loaded first."""
+    targets = job["targets"]
+    names = [n for t in targets for n in ((list(hub.agents) or ["local"]) if t == "any" else [t])]
+    engine = job["config"].get("engine")
+    free = []
+    for n in dict.fromkeys(names):
+        if n == "local":
+            used, slots = len(hub.local_running), LOCAL_WORKERS
+        elif n in hub.agents:
+            a = hub.agents[n]
+            if engine and a["info"].get("engines") and engine not in a["info"]["engines"]:
+                continue
+            used, slots = len(a["running"]), a["slots"]
+        else:
+            continue
+        if used < slots:
+            free.append((used / slots, used, n))
+    return [n for *_, n in sorted(free)]
+
+
+async def _pump() -> None:
+    """Start every waiting job that has a free slot on one of its machines (FIFO; called on submit,
+    when a run finishes and when a machine connects)."""
+    async with _pump_lock:
+        waiting = []
+        for job in hub.pending:
+            cands = _candidates(job)
+            if not cands:
+                waiting.append(job)
+                continue
+            m = cands[0]
+            if m == "local":
+                hub.local_running.add(job["run_id"])
+                db.update_run(job["run_id"], agent=LOCAL_NAME, status="dispatched")
+                pool.submit(_run_local, job)
+                continue
+            a = hub.agents[m]
+            a["running"].add(job["run_id"])
+            db.update_run(job["run_id"], agent=m, status="dispatched")
+            try:
+                async with a["send_lock"]:
+                    await a["ws"].send_json({"type": "job", "job": {k: job.get(k) for k in ("run_id", "test", "config", "mode", "session_state")}})
+                a["jobs"][job["run_id"]] = job
+            except Exception as e:
+                log.warning("could not send %s to %s: %s", job["run_id"], m, e)
+                a["running"].discard(job["run_id"])
+                waiting.append(job)
+        hub.pending = waiting
+
+
+def _local_done(run_id: str) -> None:
+    hub.local_running.discard(run_id)
+    asyncio.ensure_future(_pump())
 
 
 def _run_local(job: dict) -> None:
+    try:
+        _run_local_job(job)
+    finally:
+        if hub.loop:
+            hub.loop.call_soon_threadsafe(_local_done, job["run_id"])
+
+
+def _run_local_job(job: dict) -> None:
     try:
         test = TestCase.model_validate(job["test"])
         cfg = RunConfig.model_validate(job["config"])
@@ -501,23 +586,15 @@ async def ws_agent(ws: WebSocket):
     name = _slug(hello.get("name") or f"agent-{len(hub.agents) + 1}")
     if name in hub.agents or name == LOCAL_NAME:
         name = f"{name}-{os.urandom(2).hex()}"
-    queue: asyncio.Queue = asyncio.Queue()
-    info = {k: hello.get(k) for k in ("hostname", "platform", "engines", "browsers", "version")}
-    hub.agents[name] = {"ws": ws, "busy": False, "queue": queue, "info": info}
+    info = {k: hello.get(k) for k in ("hostname", "platform", "engines", "browsers", "version", "slots")}
+    slots = max(1, int(hello.get("slots") or 1))
+    hub.agents[name] = {"ws": ws, "info": info, "slots": slots, "running": set(), "jobs": {}, "send_lock": asyncio.Lock()}
     db.machine_seen(name, info, online=True)
     await ws.send_json({"type": "welcome", "name": name})
     await hub.broadcast({"type": "agents_changed"})
-    log.info("agent connected: %s", name)
-    current: dict = {}
-
-    async def sender():
-        while True:
-            job = await queue.get()
-            hub.agents[name]["busy"] = True
-            current["run_id"] = job["run_id"]
-            await ws.send_json({"type": "job", "job": {k: job.get(k) for k in ("run_id", "test", "config", "mode", "session_state")}})
-
-    send_task = asyncio.create_task(sender())
+    log.info("agent connected: %s (%d slot%s)", name, slots, "s" if slots > 1 else "")
+    me = hub.agents[name]
+    await _pump()                     # jobs waiting for this machine (or for any machine) can start now
     try:
         while True:
             msg = await ws.receive_json()
@@ -526,8 +603,9 @@ async def ws_agent(ws: WebSocket):
                 ev["agent"] = name
                 await hub.broadcast(ev)
                 if ev.get("type") == "run_finished":
-                    hub.agents[name]["busy"] = False
-                    current.pop("run_id", None)
+                    me["running"].discard(ev.get("run_id"))
+                    me["jobs"].pop(ev.get("run_id"), None)
+                    await _pump()
             elif msg.get("type") == "session":
                 try:
                     db.session_put(_slug(msg["name"]), msg["state"])
@@ -537,17 +615,15 @@ async def ws_agent(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        send_task.cancel()
         hub.agents.pop(name, None)
         db.machine_offline(name)
-        lost = [current["run_id"]] if current.get("run_id") else []
-        while not queue.empty():
-            lost.append(queue.get_nowait()["run_id"])
+        lost = sorted(me["running"])
         for rid in lost:
             await hub.broadcast({"type": "run_finished", "run_id": rid, "status": "interrupted",
                                  "error": f"Machine '{name}' disconnected"})
         await hub.broadcast({"type": "agents_changed"})
         log.info("agent disconnected: %s", name)
+        await _pump()                 # "any"/pool jobs can move to the machines still connected
 
 
 @app.post("/api/agents/upload/{run_id}")
@@ -599,18 +675,24 @@ def _display_name(name: str, row: dict, sensitive: list[str]) -> str:
     return Masker(row, sensitive)(substitute(name, row)) or name
 
 
-def _iteration_labels(rows: list[tuple[dict, RunConfig]], sensitive: list[str]) -> list[str]:
-    """'#2 HP, qty 1 · chrome': the iteration number plus the data values and browser that differ."""
+def _iteration_labels(rows: list[tuple], sensitive: list[str]) -> list[str]:
+    """'#2 HP, qty 1 · chrome · selenium · docker-1': the run number plus the data, browser, engine and machine
+    that differ between the runs of a batch."""
     from ..data import flatten_items
-    flat = [dict(flatten_items(r)) for r, _ in rows]
+    flat = [dict(flatten_items(r[0])) for r in rows]
+    cfgs = [r[1] for r in rows]
+    tgts = [" | ".join(r[2]) if len(r) > 2 else "" for r in rows]
     keys = [k for k in dict.fromkeys(k for f in flat for k in f)
             if k not in sensitive and len({str(f.get(k)) for f in flat}) > 1][:2]
-    browsers_differ = len({c.browser for _, c in rows}) > 1
+    browsers_differ = len({c.browser for c in cfgs}) > 1
+    engines_differ = len({c.engine for c in cfgs}) > 1
+    machines_differ = len(set(tgts)) > 1
     out = []
-    for i, (f, (_, c)) in enumerate(zip(flat, rows), 1):
+    for i, (f, c, t) in enumerate(zip(flat, cfgs, tgts), 1):
         bits = [str(f.get(k))[:24] if j == 0 else f"{k.split('.')[-1]} {str(f.get(k))[:16]}" for j, k in enumerate(keys)]
         label = f"#{i}" + (f" {', '.join(bits)}" if bits else "")
-        out.append(label + (f" · {c.browser}" if browsers_differ else ""))
+        label += (f" · {c.browser}" if browsers_differ else "") + (f" · {c.engine}" if engines_differ else "")
+        out.append(label + (f" · {t.replace('local', LOCAL_NAME)}" if machines_differ else ""))
     return out
 
 

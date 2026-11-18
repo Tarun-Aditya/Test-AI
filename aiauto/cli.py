@@ -105,6 +105,8 @@ def main(argv=None):
     p.add_argument("--name", default=None)
     p.add_argument("--token", default=os.getenv("AIAUTO_AGENT_TOKEN"))
     p.add_argument("--out", default=os.getenv("AIAUTO_AGENT_ARTIFACTS", "agent_artifacts"))
+    p.add_argument("--slots", type=int, default=int(os.getenv("AIAUTO_SLOTS", "1")),
+                   help="how many tests this machine runs at the same time (default 1)")
 
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -140,7 +142,7 @@ def main(argv=None):
 
     if a.cmd == "agent":
         from .agent import run_agent
-        run_agent(a.server, a.name, a.token, a.out)
+        run_agent(a.server, a.name, a.token, a.out, a.slots)
         return 0
 
 

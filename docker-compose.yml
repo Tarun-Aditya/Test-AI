@@ -1,5 +1,5 @@
 # docker compose up --build          -> hub on http://localhost:8000 plus one agent
-# docker compose up --scale agent=3  -> three agents (each registers with its container hostname)
+# docker compose up --scale agent=3  -> three agents (each registers with its container hostname), 2 slots each
 services:
   hub:
     build: .
@@ -11,8 +11,8 @@ services:
     volumes: ["autopilot-data:/data"]
   agent:
     build: .
-    command: ["agent", "--server", "http://hub:8000", "--token", "${AIAUTO_AGENT_TOKEN:-change-me}"]
-    shm_size: 1gb            # Chromium needs more than Docker's default 64 MB /dev/shm
+    command: ["agent", "--server", "http://hub:8000", "--token", "${AIAUTO_AGENT_TOKEN:-change-me}", "--slots", "${AGENT_SLOTS:-2}"]
+    shm_size: 2gb            # Chromium needs more than Docker's default 64 MB /dev/shm (~1 GB per slot)
     depends_on: [hub]
     restart: unless-stopped
 volumes:

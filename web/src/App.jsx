@@ -8,6 +8,7 @@ import Runs from "./views/Runs.jsx";
 import Library from "./views/Library.jsx";
 import Machines from "./views/Machines.jsx";
 import Sessions from "./views/Sessions.jsx";
+import MachinePicker, { agentsOf } from "./components/MachinePicker.jsx";
 import RunDrawer from "./components/RunDrawer.jsx";
 
 export const Ctx = createContext(null);
@@ -56,7 +57,11 @@ export default function App() {
   useEffect(() => { if (theme === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = theme; store.set("theme", theme); }, [theme]);
 
   const loadRuns = useCallback(async () => { const [r, s] = await Promise.all([api("/api/runs"), api("/api/stats")]); setRuns(r); setStats(s); }, []);
-  const loadMachines = useCallback(async () => setMachines(await api("/api/agents")), []);
+  const loadMachines = useCallback(async () => {
+    const [m, h] = await Promise.all([api("/api/agents"), api("/api/health").catch(() => null)]);
+    setMachines(m);
+    if (h) setHealth(h);
+  }, []);
   const loadSessions = useCallback(async () => setSessions(await api("/api/sessions")), []);
   const loadLibrary = useCallback(async () => setLibrary(await api("/api/library")), []);
 
@@ -85,13 +90,16 @@ export default function App() {
   }, [loadRuns, loadMachines, loadSessions, loadLibrary]);
   // keep progress fresh while something is running
   const anyLive = runs.some(isLive);
-  useEffect(() => { if (!anyLive) return; const h = setInterval(loadRuns, 2500); return () => clearInterval(h); }, [anyLive, loadRuns]);
+  useEffect(() => { if (!anyLive) return; const h = setInterval(() => { loadRuns(); loadMachines(); }, 2500); return () => clearInterval(h); }, [anyLive, loadRuns, loadMachines]);
 
   const startRun = useCallback(async (extra = {}) => {
     setBusy(true);
     try {
       const d = dataPayload(form);
-      const body = { data: d.data, sensitive: d.sensitive, iterations: d.iterations || null, config: runConfig(form), agent: form.agent, ...extra };
+      const agents = agentsOf(form);
+      const body = { data: d.data, sensitive: d.sensitive, iterations: d.iterations || null, config: runConfig(form),
+        agent: agents.length > 1 ? agents : agents[0], spread: form.spread || "each",
+        engines: form.engine === "both" ? ["playwright", "selenium"] : null, ...extra };
       if (!extra.library && !extra.replay_run_id) {
         if (form.srcMode === "lib") { if (!form.libName) throw new Error("Pick a script from the library"); body.library = form.libName; }
         else {
@@ -103,7 +111,7 @@ export default function App() {
       }
       const r = await api("/api/runs", { method: "POST", body });
       loadRuns();
-      if (r.run_ids.length > 1) { nav("dashboard"); toast(`Started ${r.run_ids.length} iterations. Open any of them to watch it live`); }
+      if (r.run_ids.length > 1) { nav("dashboard"); toast(`Started ${r.run_ids.length} runs in parallel. Open any of them to watch it live`); }
       else { nav("studio", r.run_ids[0]); toast("Run started"); }
       return r;
     } catch (e) { toast(e.message, true); } finally { setBusy(false); }
@@ -143,16 +151,12 @@ export default function App() {
           <header className="topbar">
             <div><h1>{title}</h1><div className="sub">{sub}</div></div>
             <div className="spacer" />
-            <div className="seg" title="Execution engine">
-              {["playwright", "selenium"].map((e) => <button key={e} className={form.engine === e ? "on" : ""} onClick={() => setForm({ engine: e })}>{e === "playwright" ? "Playwright" : "Selenium"}</button>)}
+            <div className="seg" title="Execution engine. Both: every run once with Playwright and once with Selenium, in parallel">
+              {[["playwright", "Playwright"], ["selenium", "Selenium"], ["both", "Both"]].map(([e, l]) =>
+                <button key={e} className={form.engine === e ? "on" : ""} onClick={() => setForm({ engine: e })}>{l}</button>)}
             </div>
-            <label className="select" title="Machine that runs the browser"><Icon name="pc" size={16} />
-              <select value={form.agent} onChange={(e) => setForm({ agent: e.target.value })}>
-                <option value="local">{health.local_name} (this server)</option>
-                {online.length > 0 && <option value="any">Any free machine</option>}
-                {online.map((m) => <option key={m.name} value={m.name}>{m.name}{m.busy ? " · busy" : ""}</option>)}
-                {form.agent !== "local" && form.agent !== "any" && !online.some((m) => m.name === form.agent) && <option value={form.agent}>{form.agent} (offline)</option>}
-              </select></label>
+            <MachinePicker agents={agentsOf(form)} spread={form.spread || "each"}
+              onChange={({ agents, spread }) => setForm({ agents, spread, agent: agents[0] })} />
             <label className="toggle"><input type="checkbox" checked={form.headless} onChange={(e) => setForm({ headless: e.target.checked })} /><span className="sw" />Headless</label>
             <button className="btn primary" disabled={busy} onClick={() => startRun()}><Icon name="play" size={14} />Run test</button>
           </header>

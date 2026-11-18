@@ -206,6 +206,23 @@ python -m aiauto agent --server http://HUB:8000 --name my-laptop --token change-
 The agent opens an **outbound** WebSocket (so it works behind NAT and firewalls), appears in the machine dropdown,
 streams live frames and step results, uploads artifacts when each run ends, and reconnects by itself.
 
+### Parallel runs, several machines, both engines
+
+* **Slots**: `python -m aiauto agent ... --slots 3` lets a machine run 3 tests at the same time (each in its own
+  browser; any mix of Playwright and Selenium). The hub itself runs `AIAUTO_LOCAL_WORKERS` (default 2) at once.
+  The hub keeps one queue and only sends a machine as many runs as it has free slots; the rest wait (status
+  *queued*) and start as soon as a slot frees up. The machine picker and Machines page show `running/slots`.
+* **Machine picker** (top bar): tick any number of machines.
+  * **Run on each**: every run goes to every selected machine (same test on Windows, Mac and a Docker box at once).
+  * **Share as pool**: iterations are spread over the selected machines, first free slot wins.
+  * **Any free machine**: the same, over every connected machine.
+* **Engine: Both** runs every run once with Playwright and once with Selenium, side by side.
+* Combined, one click can fan out: 3 iterations × 2 engines × 2 machines = 12 runs, executed in parallel as far
+  as the slots allow. Each run's name says which iteration, engine and machine it is.
+* API: `"agent": ["docker-a", "docker-b"], "spread": "each" | "pool", "engines": ["playwright", "selenium"]`.
+* A machine that disconnects marks its running tests *interrupted*; queued runs for "any"/pool move to the
+  machines still online, and runs pinned to it wait until it reconnects.
+
 ### Docker
 
 One image (based on Microsoft's Playwright image: Chromium, Firefox, WebKit, a matching chromedriver for
@@ -214,14 +231,14 @@ Selenium, and Xvfb) runs either role:
 ```bash
 docker build -t autopilot .
 docker run -d -p 8000:8000 -v autopilot-data:/data -e AIAUTO_AGENT_TOKEN=change-me autopilot hub
-docker run -d --shm-size=1g autopilot agent --server http://HUB:8000 --name docker-1 --token change-me
-docker compose up --build --scale agent=3      # hub + 3 agents (docker-compose.yml)
+docker run -d --shm-size=2g autopilot agent --server http://HUB:8000 --name docker-1 --token change-me --slots 2
+docker compose up --build --scale agent=3      # hub + 3 agents with 2 slots each = 6 tests at once
 ```
 
 * **Headed runs inside the container** go to a virtual screen (Xvfb, started by the entrypoint), so the
   Headless toggle works in both positions. The live view, screenshots and video show that screen.
 * The hub keeps its SQLite DB and artifacts in the `/data` volume, so history survives container restarts.
-* `--shm-size=1g` matters: Chromium crashes with Docker's default 64 MB `/dev/shm`.
+* `--shm-size` matters: Chromium crashes with Docker's default 64 MB `/dev/shm` (about 1 GB per slot).
 * Inside Docker the agent has no access to your desktop Chrome profile. Use **saved sessions** for SSO
   (captured once from a headed run on a desktop agent, then usable on every machine).
 * Building behind a TLS-inspecting proxy: `docker build --secret id=ca,src=/path/to/ca-bundle.crt -t autopilot .`

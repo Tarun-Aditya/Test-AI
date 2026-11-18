@@ -8,7 +8,7 @@ export const BROWSERS = [
 export const DEFAULT_FORM = {
   text: "", name: "", steps: null, stepsText: null, stepsParser: null, srcMode: "text", libName: "",
   dataMode: "table", rows: [{ k: "", v: "", s: false }], iterCols: [], iterRows: [], json: "", sensKeys: "",
-  engine: "playwright", agent: "local", headless: true,
+  engine: "playwright", agent: "local", agents: ["local"], spread: "each", headless: true,
   browser: "chromium", timeout: 10000, dialogs: "accept", slowmo: 0,
   video: true, shots: true, live: true, highlight: true, fullpage: false, heal: true, useLlm: true,
   session: "", saveSession: "", profileDir: "", profileName: "",
@@ -90,7 +90,7 @@ export function toJson(f) {
 
 export function runConfig(f) {
   return {
-    engine: f.engine, browser: f.browser, headless: f.headless, record_video: f.video, screenshot_each_step: f.shots,
+    engine: f.engine === "both" ? "playwright" : f.engine, browser: f.browser, headless: f.headless, record_video: f.video, screenshot_each_step: f.shots,
     full_page_screenshots: f.fullpage, live_view: f.live, highlight: f.highlight !== false, self_heal: f.heal, use_llm: f.useLlm,
     timeout_ms: +f.timeout || 10000, dialogs: f.dialogs, slow_mo_ms: +f.slowmo || 0,
     profile_dir: f.profileDir.trim() || null, profile_name: f.profileName.trim() || null,
