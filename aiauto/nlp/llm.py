@@ -75,6 +75,7 @@ Rules:
 - One sentence may contain several steps ("type x in y and press enter" is two steps).
 - "Login with alice / secret" style shorthand expands into the individual type and click steps.
 - Use assert_text with target null when the text may be anywhere on the page.
+- Use assert_no_text (value = the text that must NOT appear) for "should not see", "must not show", negative checks.
 - optional: true only when the user says the step may not apply ("if present", "if a cookie banner shows").
 - Use pause (not wait) when a human must do something in the browser, e.g. SSO / MFA login.
 - Do not add steps the user did not ask for, and do not invent URLs, credentials or data values.

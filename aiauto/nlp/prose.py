@@ -122,12 +122,39 @@ def _set_any(m):
     return [f'Set {m["f"]} to "{_q(m["v"])}"']
 
 
+NEG = r"(?:does\s*n[o']?t|do\s*n[o']?t|did\s*n[o']?t|should\s*n[o']?t|must\s*n[o']?t|can\s*n[o']?t|cannot|will\s+not|won't|never|no\s+longer|is\s+not|isn't|are\s+not|aren't)"
+
+
+@macro(r"^(?:make\s+sure|ensure|check|confirm|verify|validate|expect|assert)\s+(?:that\s+)?(?:(?:the|my)\s+)?"
+       r"(?:(?:web\s*)?page\s+|screen\s+|site\s+|it\s+|there\s+|you\s+|we\s+|i\s+|the\s+user\s+|user\s+)?" + NEG +
+       r"\s+(?:shows?|displays?|contains?|has|have|includes?|lists?|says?|reads?|see|show\s+up|appears?)\s+(?P<x>.+)$")
+def _verify_not(m):
+    return [f'Verify page does not contain "{_clean_expect(m["x"])}"']
+
+
+@macro(r"^(?:i|you|we|user|the\s+user|it)?\s*(?:should|must|will|can)\s*n[o']?t\s+(?:see|get|find|be\s+shown)\s+(?P<x>.+)$")
+def _should_not_see(m):
+    return [f'Verify page does not contain "{_clean_expect(m["x"])}"']
+
+
+@macro(r"^(?:not|never|n't)\s+(?:be\s+able\s+to\s+)?(?:see|get|find|be\s+shown|show|display|contain|include|have)\s+(?P<x>.+)$")
+def _not_see(m):      # what is left of "I should not see X" / "it should not show X" after the lead-in is dropped
+    return [f'Verify page does not contain "{_clean_expect(m["x"])}"']
+
+
+@macro(r"^(?P<x>[\"“'].+?[\"”'])\s+(?:should|must)\s*(?:n[o']?t|never)\s+(?:be\s+)?(?:visible|shown|displayed|appear|show\s+up)$")
+def _quoted_not_visible(m):
+    return [f'Verify page does not contain "{_q(m["x"])}"']
+
+
 @macro(r"^(?:make\s+sure|ensure|check|confirm|verify|validate|expect|assert)\s+(?:that\s+)?"
        r"(?!(?:the\s+)?(?:page\s+)?(?:url|address|title|alert|dialog|popup|prompt|confirm)\b)(?:(?:the|my|a|an)\s+)?(?P<subj>(?:[\w'-]+\s+){0,4}?)"
        r"(?:shows?|displays?|contains?|has|have|includes?|lists?|says?|reads?|is\s+showing|are\s+showing|"
        r"should\s+(?:show|display|contain|have|say|list|include|read)|can\s+see|see|appears?)\s+(?P<x>.+)$")
 def _verify(m):
     subj = (m["subj"] or "").strip()
+    if re.search(NEG, " " + subj + " ", re.I) or re.search(r"\b(?:not|never|no)\b", subj, re.I):
+        return None                      # a negation must never be read as a positive check
     if subj and not re.fullmatch(r"(?:web\s*)?(?:page|screen|site|it|there|you|we|i|they|cart|basket|result|results|"
                                  r"everything|this|that|window|app|dashboard|ui)", subj, re.I):
         # a specific element is named ("the username field contains …"): check that element's text/value

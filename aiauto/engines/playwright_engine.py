@@ -27,8 +27,22 @@ class PlaywrightEngine(Engine):
 
     def start(self) -> None:
         from playwright.sync_api import sync_playwright
-        c = self.config
         self._pw = sync_playwright().start()
+        self._browser = None
+        try:
+            self._start()
+        except BaseException:
+            # a browser that didn't start must not leave Playwright's loop on this worker thread:
+            # the next run here would fail with "Sync API inside the asyncio loop"
+            for close in (getattr(self._browser, "close", None), self._pw.stop):
+                try:
+                    close and close()
+                except Exception:
+                    pass
+            raise
+
+    def _start(self) -> None:
+        c = self.config
         btype = {"firefox": self._pw.firefox, "webkit": self._pw.webkit}.get(c.browser, self._pw.chromium)
         launch: dict = {"headless": c.headless}
         if c.slow_mo_ms:

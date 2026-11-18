@@ -33,6 +33,9 @@ def new_run_id(name: str) -> str:
     return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{slug}-{uuid.uuid4().hex[:6]}"
 
 
+NO_TEXT_SETTLE_S = float(__import__('os').getenv('AIAUTO_NO_TEXT_SETTLE', '2.0'))
+
+
 class Runner:
     def __init__(self, test: TestCase, config: RunConfig, artifacts_root: Path, mode: str = "ai",
                  on_event: EventCb | None = None, agent: str = "local", run_id: str | None = None):
@@ -141,7 +144,7 @@ class Runner:
                 if v and _UNRESOLVED.search(v):
                     raise StepError(f"No test data for {', '.join(_UNRESOLVED.findall(v))} (in step {field})")
             needs_el = step.action in ELEMENT_ACTIONS or (step.target and step.action in (
-                Action.PRESS, Action.WAIT, Action.SCROLL, Action.ASSERT_TEXT))
+                Action.PRESS, Action.WAIT, Action.SCROLL, Action.ASSERT_TEXT, Action.ASSERT_NO_TEXT))
             if needs_el:
                 t_loc = time.perf_counter()
                 loc, healed = self._resolve(live, step, target)
@@ -626,6 +629,22 @@ class Runner:
         elif a == Action.SCREENSHOT:
             name = re.sub(r"[^\w.-]", "_", v or f"capture_{int(time.time())}")
             e.screenshot(self.run_dir / "screenshots" / f"{name}.png", full_page=True)
+        elif a == Action.ASSERT_NO_TEXT:
+            # negative check: the text must not show up while the page settles (late messages count)
+            unwanted, end = (v or "").strip(), time.time() + min(timeout, NO_TEXT_SETTLE_S)
+            while True:
+                try:
+                    actual = e.text_of(loc) if loc else e.page_text()
+                except Exception as ex:
+                    log.debug("assertion read failed (%s); retrying", ex)
+                    actual = ""
+                if unwanted and _norm(unwanted) in _norm(actual):
+                    raise StepError(f"Expected {'element text' if loc else 'page'} NOT to contain {unwanted!r}; "
+                                    f"found {_excerpt(actual, unwanted)!r}")
+                if time.time() > end:
+                    return
+                e.live_tick()
+                time.sleep(0.4)
         elif a == Action.ASSERT_VISIBLE:
             if not e.is_visible(loc):
                 raise StepError(f"'{s.target}' exists but is not visible")
@@ -697,6 +716,7 @@ _VERBS = {
     Action.CHECK: ("check", "checked"), Action.UNCHECK: ("uncheck", "unchecked"), Action.DRAG: ("drag", "dragged"),
     Action.UPLOAD: ("upload", "uploaded"), Action.SCROLL: ("scroll to", "scrolled to"), Action.WAIT: ("wait for", "appeared"),
     Action.ASSERT_VISIBLE: ("check visible", "visible"), Action.ASSERT_TEXT: ("check text", "text matches"),
+    Action.ASSERT_NO_TEXT: ("check text absent", "text absent"),
 }
 
 

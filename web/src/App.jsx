@@ -10,6 +10,7 @@ import Machines from "./views/Machines.jsx";
 import Sessions from "./views/Sessions.jsx";
 import Settings from "./views/Settings.jsx";
 import MyAI from "./views/MyAI.jsx";
+import Requirements from "./views/Requirements.jsx";
 import MachinePicker, { agentsOf } from "./components/MachinePicker.jsx";
 import RunDrawer from "./components/RunDrawer.jsx";
 
@@ -19,12 +20,13 @@ export const useApp = () => useContext(Ctx);
 const VIEWS = {
   dashboard: ["Dashboard", "Recent and running tests at a glance", "dash"],
   studio: ["Studio", "Describe a test, watch it run, keep the script", "studio"],
+  requirements: ["Requirements", "Stories and bugs from your tracker → test cases → runs → results back", "doc"],
   runs: ["Runs", "Every execution with its report, video and generated scripts", "runs"],
   library: ["Script library", "Reusable scripts with native locators. Run them on any engine or machine", "lib"],
   machines: ["Machines", "Computers that can run tests", "pc"],
   sessions: ["Sessions", "Saved logins (cookies + localStorage) a run can start with", "key"],
   myai: ["My AI", "Your own AI subscription or key, used for your runs", "spark"],
-  settings: ["Admin", "Organisation AI, sign-in (SSO) and users", "key"],
+  settings: ["Admin", "Organisation AI, integrations, sign-in (SSO) and users", "key"],
 };
 // which pages a role sees (no accounts = single user, sees everything except My AI)
 const visibleViews = (me) => Object.keys(VIEWS).filter((k) => (k === "myai" ? !!me : k === "settings" ? !me || me.role === "admin" : true));
@@ -212,6 +214,7 @@ export default function App({ me = null, reloadMe = () => {} }) {
 
           {route.view === "dashboard" && <Dashboard />}
           {route.view === "studio" && <Studio runId={route.id} />}
+          {route.view === "requirements" && <Requirements />}
           {route.view === "runs" && <Runs />}
           {route.view === "library" && <Library />}
           {route.view === "machines" && <Machines />}

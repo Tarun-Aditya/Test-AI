@@ -188,6 +188,7 @@ class Hub:
         if t == "_finalize":       # internal: sync the DB with summary.json after all of the run's events
             try:
                 await asyncio.get_running_loop().run_in_executor(db_writer, db.finalize_from_summary, ARTIFACTS / rid)
+                integrations_api.on_run_finished(db, rid, ARTIFACTS)      # tracker / test-tool write-back
             except Exception as e:
                 log.warning("finalize failed for %s: %s", rid, e)
             event = {"type": "runs_changed"}
@@ -1123,6 +1124,12 @@ async def agent_upload(run_id: str, file: UploadFile = File(...), x_agent_token:
     await hub.broadcast({"type": "_finalize", "run_id": run_id})
     await hub.broadcast({"type": "artifacts_uploaded", "run_id": run_id})
     return {"ok": True}
+
+
+# --------------------------------------------------------------------- requirements -> test design -> write-back
+from . import integrations_api  # noqa: E402  (needs the hub objects above)
+import sys as _sys  # noqa: E402
+app.include_router(integrations_api.make_router(_sys.modules[__name__]))
 
 
 # --------------------------------------------------------------------- SPA fallback

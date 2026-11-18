@@ -24,6 +24,7 @@ class Action(str, Enum):
     WAIT = "wait"            # seconds, or until target visible
     PAUSE = "pause"          # headed runs: give a human N seconds (e.g. SSO / MFA login)
     ASSERT_TEXT = "assert_text"        # page / element contains text
+    ASSERT_NO_TEXT = "assert_no_text"  # page / element does NOT contain text (stays absent while the page settles)
     ASSERT_VISIBLE = "assert_visible"
     ASSERT_URL = "assert_url"
     ASSERT_TITLE = "assert_title"

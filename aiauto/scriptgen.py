@@ -293,6 +293,9 @@ def _pw_lines(st: Step) -> list[str]:
         Action.ASSERT_TITLE: [f"expect(page).to_have_title(re.compile(re.escape({val})))"],
         Action.ASSERT_TEXT: [f"expect({one}).to_contain_text({val})" if st.locator
                              else f'expect(page.locator("body")).to_contain_text({val})'],
+        Action.ASSERT_NO_TEXT: ["page.wait_for_timeout(2000)  # let late messages appear first",
+                                f"expect({one}).not_to_contain_text({val})" if st.locator
+                                else f'expect(page.locator("body")).not_to_contain_text({val})'],
         Action.SCREENSHOT: [f'page.screenshot(path={_q((st.value or "screenshot") + ".png")}, full_page=True)'],
         Action.PAUSE: [f"page.wait_for_timeout({int(_num(st.value, 30) * 1000)})  # manual step (e.g. SSO login)"],
         Action.DIALOG: [f"answer['accept'] = {not (st.value or '').startswith('dismiss')}"],
@@ -462,6 +465,17 @@ def wait_text(get, expected):
         lambda _: expected.lower() in " ".join((get() or "").split()).lower(), f"expected to find {expected!r}")
 
 
+def no_text(get, unwanted, settle=2.0):
+    """The text must not appear while the page settles (late messages count too)."""
+    import time
+    end = time.time() + settle
+    while True:
+        assert unwanted.lower() not in " ".join((get() or "").split()).lower(), f"did not expect to find {unwanted!r}"
+        if time.time() > end:
+            return
+        time.sleep(0.3)
+
+
 def page_text(driver):
     top(driver)
     return driver.execute_script(
@@ -564,6 +578,8 @@ def _se_lines(st: Step) -> list[str]:
         Action.ASSERT_TITLE: ["top(driver)", f"wait_text(lambda: driver.title, {val})"],
         Action.ASSERT_TEXT: [f"wait_text(lambda: ({F}.get_attribute('value') or {F}.text), {val})" if st.locator
                              else f"wait_text(lambda: page_text(driver), {val})"],
+        Action.ASSERT_NO_TEXT: [f"no_text(lambda: ({F}.get_attribute('value') or {F}.text), {val})" if st.locator
+                                else f"no_text(lambda: page_text(driver), {val})"],
         Action.SCREENSHOT: [f"driver.save_screenshot({_q((st.value or 'screenshot') + '.png')})"],
         Action.PAUSE: ["import time", f"time.sleep({_num(st.value, 30)})  # manual step (e.g. SSO login)"],
         Action.DIALOG: [f"accept = {not (st.value or '').startswith('dismiss')}"],

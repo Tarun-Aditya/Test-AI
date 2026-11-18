@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Create your account</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 420px; margin: 40px auto; padding: 0 16px; color: #222; }
+  label { display: block; margin-top: 14px; font-weight: 600; }
+  input { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #aaa; border-radius: 4px; }
+  .error { color: #b00020; font-size: 13px; min-height: 18px; }
+  button { margin-top: 18px; padding: 10px 18px; }
+  #done { background: #e7f6ea; padding: 12px; border-radius: 6px; display: none; }
+</style>
+</head>
+<body>
+<!-- Test target for the requirements -> test design example (story SHOP-1).
+     It has a deliberate bug: the age check lets 100 through (the story says 18 to 99). -->
+<h1>Create your account</h1>
+<form id="signup" novalidate>
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" required>
+  <div class="error" id="email-error"></div>
+
+  <label for="username">Username</label>
+  <input id="username" name="username" type="text" required maxlength="20">
+  <div class="error" id="username-error"></div>
+
+  <label for="age">Age</label>
+  <input id="age" name="age" type="number" min="18" max="99">
+  <div class="error" id="age-error"></div>
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" required minlength="8">
+  <div class="error" id="password-error"></div>
+
+  <button type="submit">Create account</button>
+</form>
+<div id="done" role="status">Account created</div>
+<script>
+  const $ = id => document.getElementById(id);
+  $('signup').addEventListener('submit', e => {
+    e.preventDefault();
+    ['email', 'username', 'age', 'password'].forEach(f => $(f + '-error').textContent = '');
+    let ok = true;
+    const fail = (f, msg) => { $(f + '-error').textContent = msg; ok = false; };
+    const email = $('email').value.trim(), user = $('username').value.trim(), age = $('age').value.trim(), pw = $('password').value;
+    if (!email) fail('email', 'Email is required');
+    else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail('email', 'Enter a valid email');
+    if (!user) fail('username', 'Username is required');
+    if (age !== '') {
+      const n = Number(age);
+      if (!Number.isInteger(n) || n < 18 || n > 100) fail('age', 'Age must be 18-99');   // BUG: should be n > 99
+    }
+    if (!pw) fail('password', 'Password is required');
+    else if (pw.length < 8) fail('password', 'Password too short');
+    if (ok) { $('signup').style.display = 'none'; $('done').style.display = 'block'; }
+  });
+</script>
+</body>
+</html>

@@ -88,6 +88,10 @@ Logitech result → Cart → check "Logitech" · #1 Logitech, qty 2`).
 Step-by-step text works too ("Click the Login button", "Type "x" into Email", …), as do drag, hover,
 dialogs, tabs, optional steps ("Click Accept cookies if shown") and pauses for manual SSO login.
 
+Negative checks: `Verify page does not contain "Account created"`, `I should not see "Error"`, `Verify "Delete" is not visible`,
+or for one element `Verify the Username field does not contain "…"`. They wait a moment (`AIAUTO_NO_TEXT_SETTLE`, 2 s) so a late
+message still fails the step.
+
 ## Where AI is used
 
 | Stage | With AI (any provider below) | Without it |
@@ -256,6 +260,56 @@ on `localhost` for one person.
 * **Single user**: `AIAUTO_AUTH=off` turns accounts off (no sign-in), as before.
 * Writes need the `X-Requested-With: autopilot` header (the web app sends it), so another website can't make
   your browser change things.
+
+## Requirements → test cases → runs → results back (Jira, Confluence, GitHub, Zephyr Scale)
+
+Before a test exists, Autopilot can write it from the story. **Requirements** (left menu) searches your tracker; pick a story or bug and
+Autopilot gathers its *context pack*:
+
+- **Jira**: summary, description, acceptance criteria (a custom field, a field named like "Acceptance criteria", the description's
+  section, or Given/When/Then lines), steps to reproduce / expected / actual for bugs, links, the last comments.
+- **Confluence**: pages linked from the story, then pages that mention its key or title in the configured spaces.
+- **GitHub**: pull requests that mention the key; their diff and the changed UI files, read for form fields (label, `required`,
+  `type`, `maxlength`/`minlength`, `min`/`max`, `pattern`, zod/yup rules), buttons and routes.
+
+**Design test cases** then writes positive, negative, boundary, role and (for bugs) regression cases **with rules only — no AI needed**:
+required fields left empty, invalid formats, lengths and numbers just inside and outside each limit, the error message the criteria
+quote, and "the form is not accepted" checks. Every case is plain English in the same format Studio runs, traces back to its acceptance
+criterion, and the coverage table shows criteria that still lack a positive or a negative case. Tick **AI ideas** to also ask your AI for
+cases the rules can't see (business rules, edge cases); those are marked `ai`.
+
+Review → edit → **Approve** → **Push to test tool** (or just **Run**, which pushes first) → the runs use the machine, engine and options of
+the top bar. When they finish:
+
+| Where | What is written |
+|---|---|
+| Zephyr Scale | test cases (with steps, folder, linked to the story), one test cycle per launch, one execution per run with step results |
+| Xray *(under development)* | results imported (tests created on first import, linked to the story) |
+| Jira | one comment on the story with every result and report link; the pass / fail transition you configured; for each new failure a bug (linked, screenshot attached) — the same failure again adds a comment to that bug instead of a new one |
+
+Everything sent is listed in the design's **sync log**. **Re-check story** says when the story, its pages or its code changed after the
+cases were written.
+
+### Connecting (tokens only)
+
+Admin → **Integrations**, per project. Every tool is connected with a token; there is no OAuth app to register.
+
+| Tool | Credential |
+|---|---|
+| Jira / Confluence **Cloud** | your Atlassian e-mail + an **API token** (id.atlassian.com → Security → API tokens), sent as Basic auth |
+| Jira / Confluence **Data Center** | a **personal access token** (profile → Personal access tokens), sent as Bearer |
+| GitHub (or Enterprise) | a fine-grained **personal access token**: read access to Contents and Pull requests |
+| Zephyr Scale (Cloud) | a Zephyr **API access token** (Jira → Apps → Zephyr → API Access Tokens), sent as Bearer |
+| Xray Cloud | an **API key** (client id + client secret, Xray → Global Settings → API Keys); exchanged for a 24-hour token automatically |
+| Azure DevOps *(under development)* | a **personal access token** (Work Items read/write, Test Management read/write) |
+| Custom *(under development)* | optional token header for your own JSON endpoints |
+
+Tokens are encrypted on the hub, never returned to the browser (shown as `••••••••`), and only admins can change them. Give each
+the least access it needs. Planned: GitHub Issues, Zephyr Squad, TestRail, OpenText ALM / Octane, GitLab, Bitbucket.
+Set `AIAUTO_PUBLIC_URL` so links in Jira comments and bugs point at your hub.
+
+Try it without real tools: `python -m tests.fake_tools 8765` serves fake Jira/Confluence/GitHub/Zephyr/Xray (it prints the URLs and
+tokens) and `examples/signup/signup.html` is the app under test — it has one deliberate bug (age 100 is accepted) for the flow to find.
 
 ## Machines (run anywhere)
 

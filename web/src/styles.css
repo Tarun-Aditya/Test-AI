@@ -370,3 +370,10 @@ tr.off td{opacity:.5}
 .chipsel.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent)}
 .chipsel small{color:var(--mut)}
 .chipsel input{margin:0}
+/* requirements / integrations */
+.slots{font:12px var(--mono,ui-monospace,monospace);padding:2px 7px;border-radius:6px;background:var(--sunken);border:0;color:var(--fg-2);white-space:nowrap}
+.slots.ok{color:var(--ok)}.slots.busy{color:var(--warn)}.slots.bad{color:var(--bad);background:var(--bad-soft)}
+button.slots{cursor:pointer}
+.linkish{background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer}.linkish:hover{color:var(--acc);text-decoration:underline}
+.mrow small{display:block;color:var(--mut);font-size:12px}
+.dt td .pill{margin-right:4px}

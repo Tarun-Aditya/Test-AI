@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
+import Integrations from "./Integrations.jsx";
 
 const ORDER = ["auto", "claude-code", "cursor", "copilot", "anthropic", "litellm"];
 const HELP = {
@@ -258,14 +259,16 @@ function Projects() {
 export default function Settings() {
   const { me } = useApp();
   const [tab, setTab] = useState("ai");
-  if (!me) return <OrgAI />;                     // single-user mode: just the AI settings
+  const tabs = me ? [["ai", "Organisation AI"], ["integrations", "Integrations"], ["sso", "Sign-in (SSO)"], ["users", "Users"], ["projects", "Projects"]]
+    : [["ai", "AI provider"], ["integrations", "Integrations"]];          // single-user mode: no accounts to manage
   return (
     <>
       <div className="seg" style={{ margin: "16px 24px 0" }}>
-        {[["ai", "Organisation AI"], ["sso", "Sign-in (SSO)"], ["users", "Users"], ["projects", "Projects"]].map(([k, l]) =>
+        {tabs.map(([k, l]) =>
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
       </div>
       {tab === "ai" && <OrgAI />}
+      {tab === "integrations" && <section className="view on"><Integrations /></section>}
       {tab === "sso" && <section className="view on"><SSO /></section>}
       {tab === "users" && <section className="view on"><Users /></section>}
       {tab === "projects" && <section className="view on"><Projects /></section>}

@@ -51,6 +51,21 @@ CREATE TABLE IF NOT EXISTS agent_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT, token_hash TEXT UNIQUE, created REAL, created_by TEXT,
   last_used REAL, last_machine TEXT, revoked INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS connections (
+  project TEXT, kind TEXT, settings_json TEXT, secrets_enc TEXT, updated REAL, updated_by TEXT, PRIMARY KEY (project, kind)
+);
+CREATE TABLE IF NOT EXISTS designs (
+  id TEXT PRIMARY KEY, project TEXT, issue_key TEXT, issue_title TEXT, status TEXT, pack_json TEXT, cases_json TEXT,
+  notes_json TEXT, created_by TEXT, created REAL, updated REAL, cycles_json TEXT
+);
+CREATE INDEX IF NOT EXISTS designs_issue ON designs(project, issue_key);
+CREATE TABLE IF NOT EXISTS design_runs (
+  run_id TEXT PRIMARY KEY, design_id TEXT, case_id TEXT, launch_id TEXT, synced INTEGER DEFAULT 0, created REAL
+);
+CREATE TABLE IF NOT EXISTS sync_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, design_id TEXT, project TEXT, kind TEXT, action TEXT, ok INTEGER, detail TEXT,
+  ref TEXT, at REAL
+);
 CREATE TABLE IF NOT EXISTS machines (
   name TEXT PRIMARY KEY, hostname TEXT, platform TEXT, engines TEXT, browsers TEXT, version TEXT,
   first_seen REAL, last_seen REAL, online INTEGER DEFAULT 0
@@ -287,6 +302,7 @@ class DB:
             c.execute("DELETE FROM steps WHERE run_id=?", (run_id,))
             c.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
             c.execute("DELETE FROM run_secrets WHERE run_id=?", (run_id,))
+            c.execute("DELETE FROM design_runs WHERE run_id=?", (run_id,))
 
     def stats(self, project: str | None = None) -> dict:
         where, args = ("WHERE COALESCE(project, 'default')=?", [project]) if project else ("", [])
@@ -395,10 +411,11 @@ class DB:
             c.executemany("INSERT INTO project_members (project, user_id) VALUES (?,?)", [(key, u) for u in user_ids])
 
     def project_delete(self, key: str) -> None:
-        """Its runs, scripts and saved logins move to the default project (nothing is lost)."""
+        """Its runs, scripts, saved logins and test designs move to the default project (nothing is lost)."""
         with self.tx() as c:
-            for t in ("runs", "library", "sessions"):
+            for t in ("runs", "library", "sessions", "designs", "sync_log"):
                 c.execute(f"UPDATE {t} SET project='default' WHERE project=?", (key,))
+            c.execute("DELETE FROM connections WHERE project=?", (key,))     # its tokens go with it
             c.execute("DELETE FROM project_members WHERE project=?", (key,))
             c.execute("DELETE FROM projects WHERE key=?", (key,))
 
@@ -488,6 +505,83 @@ class DB:
     def user_ai_put(self, user_id: int, data_enc: str) -> None:
         self.x("INSERT OR REPLACE INTO user_ai (user_id, data_enc, updated) VALUES (?,?,?)", (user_id, data_enc, time.time()))
 
+    # ------------------------------------------------------------------ integrations
+    def connection_get(self, project: str, kind: str) -> dict | None:
+        r = self.one("SELECT * FROM connections WHERE project=? AND kind=?", (project, kind))
+        if not r:
+            return None
+        return {"kind": kind, "project": project, "settings": json.loads(r["settings_json"] or "{}"),
+                "secrets": (self.vault.dec(r["secrets_enc"], {}) if self.vault and r["secrets_enc"] else {}) or {},
+                "updated": r["updated"], "updated_by": r["updated_by"]}
+
+    def connections(self, project: str) -> list[dict]:
+        return [self.connection_get(project, r["kind"]) for r in self.q("SELECT kind FROM connections WHERE project=? ORDER BY kind", (project,))]
+
+    def connection_put(self, project: str, kind: str, settings: dict, secrets: dict, by: str | None) -> None:
+        enc = self.vault.enc(secrets) if self.vault else None
+        self.x("INSERT OR REPLACE INTO connections (project, kind, settings_json, secrets_enc, updated, updated_by) VALUES (?,?,?,?,?,?)",
+               (project, kind, json.dumps(settings), enc, time.time(), by))
+
+    def connection_delete(self, project: str, kind: str) -> None:
+        self.x("DELETE FROM connections WHERE project=? AND kind=?", (project, kind))
+
+    def design_put(self, d: dict) -> None:
+        cols = ["id", "project", "issue_key", "issue_title", "status", "pack_json", "cases_json", "notes_json", "created_by",
+                "created", "updated", "cycles_json"]
+        row = {**d, "pack_json": json.dumps(d.get("pack") or {}), "cases_json": json.dumps(d.get("cases") or []),
+               "notes_json": json.dumps(d.get("notes") or []), "cycles_json": json.dumps(d.get("cycles") or {}),
+               "updated": time.time(), "created": d.get("created") or time.time()}
+        self.x(f"INSERT OR REPLACE INTO designs ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", [row.get(c) for c in cols])
+
+    def design_get(self, design_id: str) -> dict | None:
+        r = self.one("SELECT * FROM designs WHERE id=?", (design_id,))
+        return _design_out(r) if r else None
+
+    def designs(self, project: str, issue_key: str | None = None, limit: int = 200) -> list[dict]:
+        sql, args = "SELECT id, project, issue_key, issue_title, status, cases_json, created_by, created, updated FROM designs WHERE project=?", [project]
+        if issue_key:
+            sql, args = sql + " AND issue_key=?", args + [issue_key]
+        out = []
+        for r in self.q(sql + " ORDER BY updated DESC LIMIT ?", args + [limit]):
+            cases = json.loads(r.pop("cases_json") or "[]")
+            r["cases"] = len(cases)
+            r["approved"] = sum(1 for c in cases if c.get("status") == "approved")
+            out.append(r)
+        return out
+
+    def design_delete(self, design_id: str) -> None:
+        with self.tx() as c:
+            c.execute("DELETE FROM designs WHERE id=?", (design_id,))
+            c.execute("DELETE FROM design_runs WHERE design_id=?", (design_id,))
+            c.execute("DELETE FROM sync_log WHERE design_id=?", (design_id,))
+
+    def design_run_add(self, run_id: str, design_id: str, case_id: str, launch_id: str) -> None:
+        self.x("INSERT OR REPLACE INTO design_runs (run_id, design_id, case_id, launch_id, synced, created) VALUES (?,?,?,?,0,?)",
+               (run_id, design_id, case_id, launch_id, time.time()))
+
+    def design_run(self, run_id: str) -> dict | None:
+        return self.one("SELECT * FROM design_runs WHERE run_id=?", (run_id,))
+
+    def design_runs(self, design_id: str, launch_id: str | None = None) -> list[dict]:
+        sql = ("SELECT d.*, r.status, r.test_name, r.finished_at, r.duration_ms, r.error FROM design_runs d "
+               "LEFT JOIN runs r ON r.run_id = d.run_id WHERE d.design_id=?")
+        args = [design_id]
+        if launch_id:
+            sql, args = sql + " AND d.launch_id=?", args + [launch_id]
+        return self.q(sql + " ORDER BY d.created DESC", args)
+
+    def design_run_synced(self, run_id: str) -> None:
+        self.x("UPDATE design_runs SET synced=1 WHERE run_id=?", (run_id,))
+
+    def sync_log_add(self, design_id: str | None, project: str, kind: str, action: str, ok: bool, detail: str, ref: str | None = None) -> None:
+        self.x("INSERT INTO sync_log (design_id, project, kind, action, ok, detail, ref, at) VALUES (?,?,?,?,?,?,?,?)",
+               (design_id, project, kind, action, 1 if ok else 0, (detail or "")[:2000], ref, time.time()))
+
+    def sync_log(self, design_id: str | None = None, project: str | None = None, limit: int = 200) -> list[dict]:
+        if design_id:
+            return self.q("SELECT * FROM sync_log WHERE design_id=? ORDER BY id DESC LIMIT ?", (design_id, limit))
+        return self.q("SELECT * FROM sync_log WHERE project=? ORDER BY id DESC LIMIT ?", (project, limit))
+
     def session_delete(self, name: str) -> None:
         self.x("DELETE FROM sessions WHERE name=?", (name,))
 
@@ -547,6 +641,15 @@ def _loc_label(loc: dict | None) -> str | None:
     where = "".join(f"iframe[{f}] » " for f in loc.get("frames") or []) + "".join(f"shadow[{s}] » " for s in loc.get("shadow") or [])
     role = f"{loc['role']}:" if loc.get("role") else ""
     return f"{where}{loc['strategy']}={role}{loc['value']}"
+
+
+def _design_out(r: dict) -> dict:
+    d = {k: v for k, v in r.items() if not k.endswith("_json")}
+    d["pack"] = json.loads(r.get("pack_json") or "{}")
+    d["cases"] = json.loads(r.get("cases_json") or "[]")
+    d["notes"] = json.loads(r.get("notes_json") or "[]")
+    d["cycles"] = json.loads(r.get("cycles_json") or "{}")
+    return d
 
 
 def _run_out(r: dict) -> dict:

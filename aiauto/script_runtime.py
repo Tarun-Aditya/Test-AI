@@ -78,7 +78,7 @@ HL_CLEAR_JS = """(el) => { const docs = [el ? el.ownerDocument : document];
 VERBS = {"click": "clicked", "double_click": "double-clicked", "right_click": "right-clicked", "type": "typed",
          "append": "typed", "press": "key pressed", "hover": "hovered", "select": "selected", "check": "checked",
          "uncheck": "unchecked", "drag": "dragged", "upload": "uploaded", "scroll": "scrolled to", "wait": "appeared",
-         "assert_visible": "visible", "assert_text": "text matches"}
+         "assert_visible": "visible", "assert_text": "text matches", "assert_no_text": "text absent"}
 
 
 def _env_bool(name, default):

@@ -100,6 +100,9 @@ _p(r"^scroll\s+(?:down\s+)?to\s+(?P<t>.+)$", Action.SCROLL, "to")
 _p(r"^scroll\s+(?P<v>up|down|top|bottom)(?:\s+(?:by\s+)?(?P<n>\d+))?", Action.SCROLL)
 _p(r"^(?:wait|sleep|pause)\s+(?:for\s+)?(?P<v>\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)?$", Action.WAIT)
 _p(r"^wait\s+(?:for|until)\s+(?P<t>.+?)(?:\s+(?:to\s+)?(?:be\s+)?(?:visible|appear|appears|shown|displayed|loaded))?$", Action.WAIT, "element")
+_p(rf"^(?:verify|assert|check|ensure|confirm|validate|expect|make\s+sure)\s+(?:that\s+)?(?:the\s+)?(?:page\s+)?(?:does\s*n[o']?t|do\s*n[o']?t|should\s*n[o']?t|must\s*n[o']?t|never)\s+(?:contain|show|display|include|have)\s+(?:text\s+)?{QV}", Action.ASSERT_NO_TEXT)
+_p(rf"^(?:verify|assert|check|ensure|confirm|validate|expect)\s+(?:that\s+)?(?:the\s+)?(?:text\s+)?{QV}\s+(?:is|does)\s+not\s+(?:visible|displayed|shown|present|appear)$", Action.ASSERT_NO_TEXT)
+_p(rf"^(?:verify|assert|check|ensure|confirm|validate|expect|make\s+sure)\s+(?:that\s+)?(?:the\s+)?(?!page\b)(?P<t>.+?)\s+(?:does\s*n[o']?t|do\s*n[o']?t|should\s*n[o']?t|must\s*n[o']?t|never)\s+(?:contain|show|display|include|have|read|say)\s+(?:text\s+)?{QV}", Action.ASSERT_NO_TEXT)
 _p(rf"^(?:verify|assert|check|ensure|confirm|validate|expect)\s+(?:that\s+)?(?:the\s+)?(?:page\s+)?(?:url|address)\s+(?:contains|is|has|includes|matches)\s+{QV}", Action.ASSERT_URL)
 _p(rf"^(?:verify|assert|check|ensure|confirm|validate|expect)\s+(?:that\s+)?(?:the\s+)?(?:page\s+)?title\s+(?:contains|is|has|includes|equals)\s+{QV}", Action.ASSERT_TITLE)
 _p(rf"^(?:verify|assert|check|ensure|confirm|validate|expect)\s+(?:that\s+)?(?:the\s+)?(?P<t>.+?)\s+(?:contains|has|shows|displays|includes|reads|says|has\s+text)\s+{QV}", Action.ASSERT_TEXT)
@@ -165,7 +168,7 @@ def _parse(s: str, sentence: str) -> Step | None:
                 rest = s[qm.end():].strip()
                 role = re.match(r"(button|link|tab|icon|menu|checkbox|radio|option)\b", rest, re.I)
                 target = qm.group("t") + (f" {role.group(1)}" if role else "")
-        if action in (Action.ASSERT_TEXT, Action.WAIT) and target and \
+        if action in (Action.ASSERT_TEXT, Action.ASSERT_NO_TEXT, Action.WAIT) and target and \
                 re.fullmatch(r"(?:web\s*)?(?:page|screen|body|site|window)", target, re.I):
             target = None
         if target:
