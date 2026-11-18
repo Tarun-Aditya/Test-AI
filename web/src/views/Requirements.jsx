@@ -72,10 +72,11 @@ function Design({ id, onClose, onChanged = () => {} }) {
   const [baseUrl, setBaseUrl] = useState(() => store.get("designBaseUrl", ""));
   const [busy, setBusy] = useState(false);
   const [linkKey, setLinkKey] = useState("");
+  const [view, setView] = useState("cases");
   const load = async () => { const [x, l] = await Promise.all([api(`/api/designs/${id}`), api(`/api/designs/${id}/log`)]); setD(x); setLog(l); };
   useEffect(() => { load().catch((e) => toast(e.message, true)); }, [id]);
   useEffect(() => subscribe?.((ev) => { if (ev.type === "runs_changed") setTimeout(() => load().catch(() => {}), 1500); }), [id]);
-  if (!d) return <div className="panel"><div className="panel-b">Loading…</div></div>;
+  if (!d) return <div className="panel" style={{ padding: 16 }} aria-busy="true"><div className="skel" style={{ height: 16, width: "40%" }} /><div className="skel" style={{ height: 12, marginTop: 14 }} /><div className="skel" style={{ height: 12, marginTop: 8, width: "80%" }} /></div>;
   const act = async (fn, msg) => { setBusy(true); try { const r = await fn(); if (msg) toast(typeof msg === "function" ? msg(r) : msg); await load(); return r; } catch (e) { toast(e.message, true); } finally { setBusy(false); } };
   const ids = [...sel];
   const status = (s) => act(async () => { const r = await api(`/api/designs/${id}/status`, { method: "POST", body: { case_ids: ids, status: s } });
@@ -131,22 +132,27 @@ function Design({ id, onClose, onChanged = () => {} }) {
           <button className="btn primary sm" disabled={busy || !approved} onClick={run}><Icon name="play" size={12} />Run {ids.length ? "selected" : "approved"}</button>
         </div>
         <div className="hint" style={{ marginTop: 4 }}>Runs use the engine, machine and options from the top bar and Studio.</div>
-        <table className="dt" style={{ marginTop: 10 }}><thead><tr>
+        <nav className="tabs subtabs" role="tablist" aria-label="Design">
+          {[["cases", "Cases", d.cases.length], ["coverage", "Coverage", (d.coverage || []).filter((r) => r.missing.length).length ? `${(d.coverage || []).filter((r) => r.missing.length).length} gap` : null],
+            ["activity", "Activity", log.length || null]].map(([k, l, n]) =>
+            <button key={k} role="tab" aria-selected={view === k} className={view === k ? "on" : ""} onClick={() => setView(k)}>{l}{n != null && <span className="badge">{n}</span>}</button>)}
+        </nav>
+        {view === "cases" && <div style={{ overflowX: "auto" }}><table className="dt" style={{ marginTop: 10 }}><thead><tr>
           <th><input type="checkbox" checked={allSel} onChange={(e) => setSel(new Set(e.target.checked ? d.cases.map((c) => c.id) : []))} /></th>
           <th>Type</th><th>Case</th><th>Covers</th><th>Origin</th><th>Status</th><th>Last run</th><th>In tool</th></tr></thead>
           <tbody>{d.cases.map((c) => <CaseRow key={c.id} c={c} latest={d.latest?.[c.id]} selected={sel.has(c.id)} openRun={openRun} onChange={saveCase}
-            onSelect={(on) => setSel((s) => { const n = new Set(s); on ? n.add(c.id) : n.delete(c.id); return n; })} />)}</tbody></table>
-        {d.coverage?.length > 0 && <>
-          <h4 style={{ margin: "14px 0 6px" }}>Coverage by acceptance criterion</h4>
+            onSelect={(on) => setSel((s) => { const n = new Set(s); on ? n.add(c.id) : n.delete(c.id); return n; })} />)}</tbody></table></div>}
+        {view === "coverage" && (d.coverage?.length > 0 ? <>
+          <p className="hint">Each acceptance criterion should have a case that shows it working and one that shows it refusing bad input.</p>
           <table className="dt"><tbody>{d.coverage.map((r) => <tr key={r.ac}><td className="mut">AC {r.ac}</td><td>{r.text}</td>
             <td>{r.types.map((t) => <span key={t} className="pill" style={{ color: TYPE_COLOR[t] }}>{t}</span>)}</td>
-            <td>{r.missing.length ? <span style={{ color: "var(--warn)" }}>no {r.missing.join(" / ")} case</span> : "✓"}</td></tr>)}</tbody></table></>}
-        <h4 style={{ margin: "14px 0 6px" }}>Sync log</h4>
-        {log.length ? <table className="dt"><tbody>{log.slice(0, 40).map((x) => <tr key={x.id}>
+            <td>{r.missing.length ? <span style={{ color: "var(--warn)" }}>no {r.missing.join(" / ")} case</span> : "✓"}</td></tr>)}</tbody></table></>
+          : <div className="empty-state">No acceptance criteria were found in this story, so there is nothing to measure coverage against.</div>)}
+        {view === "activity" && (log.length ? <table className="dt"><tbody>{log.slice(0, 40).map((x) => <tr key={x.id}>
           <td className="mut">{ago(new Date(x.at * 1000).toISOString())}</td><td>{x.kind}</td><td>{x.action}</td>
           <td style={{ color: x.ok ? "inherit" : "var(--bad)" }}>{x.ok ? "" : "✗ "}{x.detail}</td><td className="mut">{x.ref}</td>
           <td className="mut">{x.by || ""}</td></tr>)}</tbody></table>
-          : <div className="mut">Nothing sent yet.</div>}
+          : <div className="empty-state">Nothing sent to Jira or the test tool yet.</div>)}
       </div>
     </div>
   );
@@ -199,7 +205,7 @@ export default function Requirements() {
   const admin = !me || me.role === "admin";
   return (
     <section className="view on">
-      <div className="grid2" style={{ gridTemplateColumns: "minmax(260px, 1fr) 2.4fr", alignItems: "start" }}>
+      <div className="reqgrid">
         <div className="panel">
           <div className="panel-h"><h3>Stories &amp; bugs</h3><span className="spacer" />
             <button className="btn sm" onClick={() => { setPaste({ text: "", title: "", key: "", type: "Story", notes: "" }); setOpen(null); setKey(null); }}>

@@ -28,7 +28,9 @@ function OrgAI() {
       users_may_use_org: a.users_may_use_org !== false });
   };
   useEffect(() => { load().catch((e) => toast(e.message, true)); }, []);
-  if (!ai) return <section className="view on"><div className="empty-state">Loading…</div></section>;
+  if (!ai) return <section className="view on"><div className="grid2" style={{ alignItems: "start" }}>{[0, 1].map((i) => <div key={i} className="panel" style={{ padding: 16 }} aria-busy="true">
+    <div className="skel" style={{ height: 16, width: "40%" }} /><div className="skel" style={{ height: 12, marginTop: 14 }} /><div className="skel" style={{ height: 12, marginTop: 8, width: "85%" }} />
+    <div className="skel" style={{ height: 34, marginTop: 18 }} /><div className="skel" style={{ height: 34, marginTop: 10 }} /></div>)}</div></section>;
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const save = async () => {
     setBusy(true);

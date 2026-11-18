@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { api } from "../api.js";
+import { ago, api } from "../api.js";
+import { Status } from "./Dashboard.jsx";
 import { useApp } from "../App.jsx";
 import DataEditor from "../components/DataEditor.jsx";
 import LiveViewer from "../components/LiveViewer.jsx";
@@ -87,14 +88,14 @@ function Script() {
         <button className={form.srcMode === "lib" ? "on" : ""} onClick={() => setForm({ srcMode: "lib" })}>From library</button>
       </div>
       {form.srcMode === "text" ? <>
-        {!health.llm_on && <div className="callout warn-call"><b>AI is off on this server.</b> The built-in parser understands common phrasing
-          (search, log in, add to cart, make sure…). For any wording, set <code>ANTHROPIC_API_KEY</code> on the server and Claude breaks your description into steps.</div>}
+        {!health.llm_on && <div className="note"><Icon name="spark" size={14} /><span>AI is off, so the built-in rules read your steps (one action per line works best).
+          Free-form wording needs AI: <a href="#/settings">set it up in Admin</a>.</span></div>}
         <input className="name-in" value={form.name || ""} placeholder="Test name (optional; leave empty to name it from what the test does)" onChange={(e) => setForm({ name: e.target.value })} aria-label="Test name" />
         <div className="editor">
           <div className="gutter" ref={gutter}>{Array.from({ length: lines }, (_, i) => i + 1).join("\n")}</div>
           <textarea spellCheck={false} value={form.text} onChange={(e) => setForm({ text: e.target.value })} style={{ whiteSpace: "pre-wrap" }}
             onScroll={(e) => gutter.current && (gutter.current.scrollTop = e.currentTarget.scrollTop)}
-            placeholder={"Describe the test the way you'd tell a colleague, e.g.\n\nGo to ${base_url}, search for a wireless mouse and open the first ${brand} result. Add ${qty} of them to the cart, go to the cart and make sure it shows ${brand}."} />
+            placeholder={"Write your test here, e.g.\nOpen ${base_url}/login\nType ${user.email} into Email\nClick Sign in\nVerify page contains \"Welcome\""} aria-label="Test steps" />
         </div>
         <p className="hint" style={{ margin: "8px 0 0" }}><code>{"${name}"}</code> is a placeholder: it is replaced by the value called <i>name</i> under
           <b> Test data</b> (e.g. <code>{"${brand}"}</code> → Logitech), so the same test can run with different data.</p>
@@ -167,7 +168,36 @@ function Auth() {
   );
 }
 
-const TABS = [["script", "Script"], ["data", "Test data"], ["options", "Options"], ["auth", "Login & SSO"]];
+const TABS = [["script", "Steps"], ["data", "Test data"], ["options", "Settings"], ["auth", "Sign-in"]];
+
+/** The settings that change what a run does, always visible above the editor (they used to hide in tabs). */
+function Summary({ go }) {
+  const { form } = useApp();
+  const b = (BROWSERS.find(([v]) => v === form.browser) || [form.browser, form.browser])[1];
+  const items = [b, form.video ? "video on" : "no video", `${(+form.timeout || 10000) / 1000} s per step`, form.heal ? "self-heal on" : "self-heal off",
+    form.session ? `starts signed in: ${form.session}` : form.profileDir ? "Chrome profile" : "signed out", form.saveSession ? `saves login as ${form.saveSession}` : null].filter(Boolean);
+  return <div className="runsum"><span className="mut">This run:</span>{items.map((x) => <span key={x} className="pill">{x}</span>)}
+    <button className="btn ghost sm" onClick={() => go("options")}>Change</button></div>;
+}
+
+/** Before any run is open: a small placeholder and the latest Studio runs instead of a big empty browser. */
+function Idle() {
+  const { runs, nav } = useApp();
+  const mine = runs.filter((r) => !r.batch_id).slice(0, 6);
+  return <div className="studio-side">
+    <div className="panel idlebox">
+      <Icon name="eye" size={22} />
+      <b>The browser shows here while a test runs</b>
+      <span className="mut">From whichever machine runs it, with a screenshot for every step.</span>
+    </div>
+    <div className="panel">
+      <div className="panel-h"><h3>Recent runs</h3><span className="spacer" /><a href="#/runs">All runs</a></div>
+      {mine.length ? mine.map((r) => <a key={r.run_id} className="lrow" href={`#/studio/${encodeURIComponent(r.run_id)}`}
+        onClick={(e) => { e.preventDefault(); nav("studio", r.run_id); }}><Status s={r.status} /><span className="ellipsis" style={{ flex: 1 }}>{r.test_name}</span>
+        <span className="mut nowrap">{ago(r.started_at)}</span></a>) : <div className="empty-state">Your runs appear here.</div>}
+    </div>
+  </div>;
+}
 
 export default function Studio({ runId }) {
   const { form } = useApp();
@@ -177,17 +207,18 @@ export default function Studio({ runId }) {
     <section className="view on">
       <div className="studio">
         <div className="panel">
-          <div className="tabs">
+          <div className="tabs" role="tablist" aria-label="Test">
             {TABS.map(([k, l]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}{k === "data" && <span className="badge">{dataCount}</span>}</button>)}
           </div>
           <div className="panel-b">
+            {tab !== "options" && <Summary go={setTab} />}
             {tab === "script" && <Script />}
             {tab === "data" && <DataEditor />}
             {tab === "options" && <Options />}
             {tab === "auth" && <Auth />}
           </div>
         </div>
-        <LiveViewer runId={runId} />
+        {runId ? <LiveViewer runId={runId} /> : <Idle />}
       </div>
     </section>
   );

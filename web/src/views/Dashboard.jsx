@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ago, api, art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
@@ -55,8 +55,9 @@ export function StopButton({ ids, label = "Stop", className = "", all }) {
   return <button className={"stop " + className} disabled={busy || !ids.length} onClick={go} title="Queued runs are removed; running ones stop after the current step and keep their report">■ {label}</button>;
 }
 
+const STATUS_ICON = { passed: "ok", failed: "fail", cancelled: "minus", interrupted: "minus", queued: "clock", dispatched: "clock", running: "clock" };
 export function Status({ s }) {
-  return <span className={"status " + s}><i />{s}</span>;
+  return <span className={"status " + s}>{STATUS_ICON[s] ? <Icon name={STATUS_ICON[s]} size={13} /> : <i />}{s}</span>;
 }
 
 function Trend({ trend }) {
@@ -77,90 +78,114 @@ function Trend({ trend }) {
   );
 }
 
+/** Failures worth a look: the newest run of each test, when it failed. */
+function needsAttention(runs) {
+  const seen = new Set(), out = [];
+  for (const r of runs) {
+    if (isLive(r) || seen.has(r.test_name)) continue;
+    seen.add(r.test_name);
+    if (r.status === "failed" || r.status === "interrupted") out.push(r);
+  }
+  return out;
+}
+
 export default function Dashboard() {
-  const { runs, stats, nav, openRun, me, can } = useApp();
-  const [filter, setFilter] = useState("");
-  const [mine, setMine] = useState(false);
+  const { runs, stats, nav, openRun, me, can, project } = useApp();
+  const [stories, setStories] = useState(null);
+  useEffect(() => {
+    let off = false;
+    api("/api/designs").then(async (list) => {
+      const top = await Promise.all(list.slice(0, 5).map((d) => api(`/api/designs/${d.id}`).catch(() => null)));
+      if (!off) setStories(top.filter(Boolean));
+    }).catch(() => !off && setStories([]));
+    return () => { off = true; };
+  }, [project, runs.length]);
   const live = runs.filter(isLive);
-  const done = runs.filter((r) => !isLive(r));
+  const bad = needsAttention(runs).slice(0, 6);
   const finished = (stats?.passed || 0) + (stats?.failed || 0);
   const rate = finished ? Math.round((100 * stats.passed) / finished) : 0;
-  const recent = done.filter((r) => (!filter || r.status === filter) && (!mine || r.owner === me?.username)).slice(0, 30);
-
-  const kpis = [
-    ["Pass rate", finished ? `${rate}%` : "–", `${stats?.passed || 0} of ${finished} finished runs`, finished ? (rate >= 80 ? "var(--ok)" : rate >= 50 ? "var(--warn)" : "var(--bad)") : ""],
-    ["Running now", live.length, live.length ? [...new Set(live.map((r) => r.agent))].join(", ") : "idle", live.length ? "var(--warn)" : ""],
-    ["Runs, last 24 h", stats?.day || 0, `${stats?.day_failed || 0} failed`, ""],
-    ["Avg duration", stats?.avg_ms ? secs(stats.avg_ms) : "–", "per finished run", ""],
-    ["Self-healed steps", stats?.healed || 0, "locators repaired automatically", stats?.healed ? "var(--warn)" : ""],
-  ];
+  const recent = runs.filter((r) => !isLive(r)).slice(0, 8);
+  const mine = (r) => can.admin || !r.owner || r.owner === me?.username;
 
   return (
     <section className="view on">
-      <div className="dash-top">
-        <div className="kpis">
-          {kpis.map(([l, v, s, c]) => (
-            <div className="kpi" key={l}><div className="l">{l}</div><div className="v" style={c ? { color: c } : undefined}>{v}</div><div className="s">{s}</div></div>
-          ))}
+      <div className="kpis">
+        <div className="kpi"><div className="l">Pass rate</div><div className="v" style={{ color: finished ? (rate >= 80 ? "var(--ok)" : rate >= 50 ? "var(--warn)" : "var(--bad)") : undefined }}>{finished ? `${rate}%` : "–"}</div><div className="s">{stats?.passed || 0} of {finished} finished runs</div></div>
+        <div className="kpi"><div className="l">Runs, last 24 h</div><div className="v">{stats?.day || 0}</div><div className="s">{stats?.day_failed ? <span style={{ color: "var(--bad)", fontWeight: 600 }}>{stats.day_failed} failed</span> : "none failed"}</div></div>
+        <div className="kpi"><div className="l">Average duration</div><div className="v">{stats?.avg_ms ? secs(stats.avg_ms) : "–"}</div><div className="s">per finished run</div></div>
+        <div className="kpi"><div className="l">Self-healed steps</div><div className="v">{stats?.healed || 0}</div><div className="s">locators repaired automatically</div></div>
+      </div>
+
+      <div className="dash-cols">
+        <div className="dash-main">
+          <section className="panel">
+            <div className="panel-h"><h3>Needs attention</h3>{bad.length > 0 && <span className="status failed">{bad.length}</span>}<span className="spacer" />
+              <button className="btn ghost sm" onClick={() => nav("runs")}>All runs</button></div>
+            {bad.length ? bad.map((r) => (
+              <div className="att" key={r.run_id}>
+                <span style={{ color: "var(--bad)", paddingTop: 2 }}><Icon name="fail" size={18} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <a href={`#/runs/${encodeURIComponent(r.run_id)}`} className="att-t">{r.test_name}</a>
+                  <div className="mut">{r.passed_steps}/{r.total} steps · {r.engine}{r.browser ? ` · ${r.browser}` : ""} · {r.agent} · {ago(r.started_at)}{r.owner ? ` · ${r.owner}` : ""}</div>
+                  {r.error && <div className="att-err" title={r.error}>{r.error}</div>}
+                </div>
+                <div className="att-acts"><button className="btn sm" onClick={() => openRun(r.run_id)}>Open</button>
+                  {can.run && mine(r) && <button className="btn sm" onClick={() => openRun(r.run_id, "replay")}>Replay</button>}</div>
+              </div>)) : <div className="empty-state">Nothing failing. The newest run of every test passed.</div>}
+          </section>
+
+          <section className="panel">
+            <div className="panel-h"><h3>Recent runs</h3><span className="spacer" /><button className="btn ghost sm" onClick={() => nav("runs")}>All runs</button></div>
+            <div style={{ overflowX: "auto" }}><table className="table compact">
+              <thead><tr><th>Run</th><th>Result</th><th>Steps</th><th>Engine · machine</th><th>Duration</th><th>When</th></tr></thead>
+              <tbody>{recent.map((r) => (
+                <tr key={r.run_id} className="clickable" onClick={() => openRun(r.run_id)}>
+                  <td><a href={`#/runs/${encodeURIComponent(r.run_id)}`} onClick={(e) => e.stopPropagation()} style={{ color: "var(--fg)", fontWeight: 550 }}>{r.test_name}</a></td>
+                  <td><Status s={r.status} /></td>
+                  <td style={{ minWidth: 110 }}><StepBar r={r} /></td>
+                  <td className="nowrap mut">{r.engine}{r.browser ? `/${r.browser}` : ""} · {r.agent}</td>
+                  <td className="mono nowrap">{secs(r.duration_ms)}</td><td className="mut nowrap">{ago(r.started_at)}</td>
+                </tr>))}
+                {!recent.length && <tr><td colSpan={6}><div className="empty-state">No runs yet. <a href="#/studio">Start a test</a></div></td></tr>}</tbody>
+            </table></div>
+          </section>
         </div>
-        <div className="kpi trend-card"><div className="l">Last 14 days</div><Trend trend={stats?.trend || []} /></div>
-      </div>
 
-      <div className="sec-h"><h3>Running now</h3><span className="mut">{live.length ? `${live.length} in progress` : ""}</span>
-        <span className="spacer" />{live.length > 1 && <StopButton ids={live.map((r) => r.run_id)} label="Stop all" all className="btn sm" />}</div>
-      <div className="panel"><div className="panel-b" style={{ paddingTop: 4, paddingBottom: 4 }}>
-        {live.length ? live.map((r) => (
-          <div className="running-row" key={r.run_id}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Status s={r.status} /><ModeBadge mode={r.mode} parser={r.parser} /><b className="ellipsis">{r.test_name}</b></div>
-              <div className="mut ellipsis" style={{ marginTop: 4 }}>{r.engine}{r.browser ? ` · ${r.browser}` : ""} · {r.agent}{r.owner ? ` · ${r.owner}` : ""} · {r.current_step ? `▶ ${r.current_step}` : "starting…"}</div>
-            </div>
-            <div><StepBar r={r} /><div className="mut" style={{ marginTop: 4 }}>{r.done || 0} / {r.total} steps{r.failed_steps ? <span style={{ color: "var(--bad)" }}> · {r.failed_steps} failed</span> : null}</div></div>
-            <div className="links"><button onClick={() => nav("studio", r.run_id)}><span className="dot-live" /> Watch live</button>
-              {(can.admin || !r.owner || r.owner === me?.username) && can.run && <StopButton ids={[r.run_id]} />}</div>
-          </div>
-        )) : <div className="empty-state" style={{ padding: 18 }}>Nothing running. <a href="#/studio">Start a test</a></div>}
-      </div></div>
+        <div className="dash-side">
+          <section className="panel">
+            <div className="panel-h"><h3>Running now</h3><span className="spacer" />{live.length > 1 && can.run && <StopButton ids={live.map((r) => r.run_id)} label="Stop all" all className="btn sm" />}</div>
+            {live.length ? live.map((r) => (
+              <div className="att" key={r.run_id}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="row"><Status s={r.status} /><b className="ellipsis">{r.test_name}</b></div>
+                  <div className="mut ellipsis" style={{ margin: "4px 0 6px" }}>{r.agent} · {r.current_step ? `▶ ${r.current_step}` : "starting…"}</div>
+                  <StepBar r={r} />
+                </div>
+                <div className="att-acts"><button className="btn sm" onClick={() => nav("studio", r.run_id)}>Watch</button>{can.run && mine(r) && <StopButton ids={[r.run_id]} className="btn sm" />}</div>
+              </div>)) : <div className="empty-state">Nothing running. <a href="#/studio">Start a test</a> or <a href="#/requirements">run a test design</a>.</div>}
+          </section>
 
-      <div className="sec-h"><h3>Recent runs</h3><span className="mut">{done.length} total, kept across restarts</span><span className="spacer" />
-        <div className="seg">{[["", "All"], ["passed", "Passed"], ["failed", "Failed"], ["cancelled", "Stopped"], ["interrupted", "Interrupted"]].map(([k, l]) =>
-          <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{l}</button>)}</div>
-        {me && <div className="seg"><button className={!mine ? "on" : ""} onClick={() => setMine(false)}>Everyone</button>
-          <button className={mine ? "on" : ""} onClick={() => setMine(true)}>Mine</button></div>}
-        <button className="btn sm" onClick={() => nav("runs")}>Table view</button></div>
-      <div className="legend">
-        <span>How each run's steps were made:</span>
-        <span><ModeBadge mode="ai" parser="ai" /> Claude (AI) turned your English into steps</span>
-        <span><ModeBadge mode="ai" parser="rules" /> built-in rule parser, used when AI is off</span>
-        <span><ModeBadge mode="ai" parser="user" /> you edited the steps</span>
-        <span><ModeBadge mode="replay" /> replay of a generated script, no parsing</span>
-      </div>
-      <div className="runcards">
-        {recent.map((r) => (
-          <div className="rc" key={r.run_id} onClick={() => openRun(r.run_id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && openRun(r.run_id)}>
-            <div className="th">
-              {r.thumb && <img loading="lazy" src={art(r.run_id, r.thumb)} alt="" onError={(e) => (e.currentTarget.style.display = "none")} />}
-              <Status s={r.status} />
-              <span className="mode-pos"><ModeBadge mode={r.mode} parser={r.parser} /></span>
-              {r.video && <span className="vid"><Icon name="video" size={13} /></span>}
-              <span className="dur">{secs(r.duration_ms)}</span>
-            </div>
-            <div className="bd">
-              <div className="nm" title={r.test_name}>{r.test_name}</div>
-              <StepBar r={r} />
-              <div className="mut">{r.passed_steps}/{r.total} steps · {r.engine}{r.browser ? `/${r.browser}` : ""} · {r.agent} · {ago(r.started_at)}{r.owner ? ` · by ${r.owner}` : ""}</div>
-              {r.error && <div className="mut ellipsis" style={{ color: "var(--bad)" }} title={r.error}>{r.error}</div>}
-            </div>
-            <div className="acts links" onClick={(e) => e.stopPropagation()}>
-              <button onClick={() => openRun(r.run_id)}>Details</button>
-              <a href={art(r.run_id, "report.html")} target="_blank" rel="noreferrer">Report</a>
-              {r.video && <button onClick={() => openRun(r.run_id, "video")}>▶ Video</button>}
-              <button onClick={() => openRun(r.run_id, "code")}>Code</button>
-              {can.run && <button className="accent" onClick={() => openRun(r.run_id, "replay")}>▶ Replay</button>}
-            </div>
-          </div>
-        ))}
-        {!recent.length && <div className="card"><h4>No runs yet</h4><div className="mut">Finished runs appear here with a thumbnail, step results, report and video.</div></div>}
+          <section className="panel">
+            <div className="panel-h"><h3>Stories</h3><span className="spacer" /><button className="btn ghost sm" onClick={() => nav("requirements")}>Test design</button></div>
+            {stories === null ? <div style={{ padding: 16 }}><div className="skel" style={{ height: 14 }} /><div className="skel" style={{ height: 14, marginTop: 10, width: "70%" }} /></div>
+              : stories.length ? stories.map((d) => {
+                const approved = d.cases.filter((c) => c.status === "approved");
+                const latest = approved.map((c) => d.latest?.[c.id]?.status).filter(Boolean);
+                const ok = latest.filter((x) => x === "passed").length, ko = latest.filter((x) => x === "failed").length;
+                return <a key={d.id} className="story-row" href="#/requirements" onClick={(e) => { e.preventDefault(); nav("requirements"); }}>
+                  <div className="row"><span className="pill mono">{d.issue_key}</span><b className="ellipsis" style={{ flex: 1 }}>{d.issue_title}</b>
+                    <span className="mut nowrap">{latest.length ? `${ok}/${approved.length}` : `${d.cases.length} cases`}</span></div>
+                  {latest.length > 0 && <div className="sbar" style={{ marginTop: 8 }}><i className="p" style={{ width: `${(100 * ok) / approved.length}%` }} /><i className="f" style={{ width: `${(100 * ko) / approved.length}%` }} /></div>}
+                  <div className="mut" style={{ marginTop: 6 }}>{approved.length} approved{latest.length < approved.length ? ` · ${approved.length - latest.length} not run yet` : ""}{d.unpublished ? ` · ${d.unpublished} result(s) not published` : ""}</div>
+                </a>; })
+              : <div className="empty-state">No test designs yet. <a href="#/requirements">Pick or paste a story</a> to get positive and negative cases.</div>}
+          </section>
+
+          <section className="panel">
+            <div className="panel-h"><h3>Last 14 days</h3></div>
+            <div className="panel-b" style={{ paddingTop: 4 }}><Trend trend={stats?.trend || []} /></div>
+          </section>
+        </div>
       </div>
     </section>
   );

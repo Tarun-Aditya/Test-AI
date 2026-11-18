@@ -342,6 +342,9 @@ def make_router(app_mod) -> APIRouter:
         if not run_case:
             raise HTTPException(422, {"message": "None of the cases could be run", "skipped": skipped})
         launch = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.as_actor, app_mod._owner_of(request), sync.start_launch, db, d, run_case)
+        if len(run_case) > 1:                 # one launch = one group in the Runs list
+            ids = list(run_case)
+            db.x(f"UPDATE runs SET batch_id=? WHERE run_id IN ({','.join('?' * len(ids))})", ["d" + launch, *ids])
         return {"launch": launch, "run_ids": list(run_case), "skipped": skipped}
 
     @r.post("/api/designs/{design_id}/publish")

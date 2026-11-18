@@ -30,7 +30,7 @@ export default function MyAI() {
   const [busy, setBusy] = useState(false);
   const load = async () => { const x = await api("/api/me/ai"); setS(x); setF({ provider: x.provider, model: x.model || "", litellm_model: x.litellm_model || "", litellm_base: x.litellm_base || "", secret: "" }); };
   useEffect(() => { load().catch((e) => toast(e.message, true)); }, []);
-  if (!s) return <section className="view on"><div className="empty-state">Loading…</div></section>;
+  if (!s) return <section className="view on"><div className="panel" style={{ padding: 16 }} aria-busy="true"><div className="skel" style={{ height: 16, width: "40%" }} /><div className="skel" style={{ height: 12, marginTop: 14 }} /><div className="skel" style={{ height: 12, marginTop: 8, width: "80%" }} /></div></section>;
   const p = f.provider;
   const sk = SECRET[p];
   const save = async () => {

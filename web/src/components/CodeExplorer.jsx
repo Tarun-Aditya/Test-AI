@@ -88,7 +88,7 @@ export default function CodeExplorer({ runId }) {
   };
   const jump = (path, line) => { setSel(path); setTimeout(() => document.getElementById(`L${line}`)?.scrollIntoView({ block: "center" }), 150); };
 
-  if (files === null) return <div className="empty-state">Loading files…</div>;
+  if (files === null) return <div style={{ padding: 16 }} aria-busy="true"><div className="skel" style={{ height: 14 }} /><div className="skel" style={{ height: 14, marginTop: 10, width: "70%" }} /></div>;
   if (!files.length) return <div className="empty-state">No files yet. Artifacts appear once the run finishes (agents upload them at the end).</div>;
   const lines = content ? highlight(content, sel).split("\n") : [];
   return (
