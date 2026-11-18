@@ -1,0 +1,3 @@
+Open https://www.selenium.dev/selenium/web/shadowRootPage.html
+Type "outside the shadow" into the first text box
+Check the checkbox

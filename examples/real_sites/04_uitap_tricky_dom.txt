@@ -1,0 +1,23 @@
+Open http://uitestingplayground.com/textinput
+Type "Autopilot" into Set New Button Name
+Click "Button That Should Change it's Name Based on Input Value"
+Verify page contains "Autopilot"
+Open http://uitestingplayground.com/dynamicid
+Click "Button with Dynamic ID"
+Open http://uitestingplayground.com/classattr
+Click the primary button
+Verify the alert says "Primary button pressed"
+Open http://uitestingplayground.com/scrollbars
+Click Hiding Button
+Open http://uitestingplayground.com/nbsp
+Click My Button
+Open http://uitestingplayground.com/sampleapp
+Type "ada" into User Name
+Type ${pwd} into Password
+Click Log In
+Verify page contains "Welcome, ada!"
+Open http://uitestingplayground.com/ajax
+Click "Button Triggering AJAX Request"
+Wait for "Data loaded with AJAX get request." to appear
+Open http://uitestingplayground.com/shadowdom
+Click the generate button

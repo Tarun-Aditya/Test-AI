@@ -1,0 +1,11 @@
+Open https://books.toscrape.com/
+Click ${category}
+Verify page contains "${category}"
+Click "${book}"
+Verify page contains "${price}"
+Verify page contains "In stock"
+Go back
+Verify page contains "results"
+Open https://books.toscrape.com/
+Click next
+Verify page contains "Page 2 of 50"

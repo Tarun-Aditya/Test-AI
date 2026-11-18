@@ -1,0 +1,2 @@
+{"password": {"value": "secret_sauce", "sensitive": true},
+ "rows": [{"user": "standard_user"}, {"user": "performance_glitch_user"}]}

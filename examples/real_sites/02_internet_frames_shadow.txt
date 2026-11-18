@@ -1,0 +1,13 @@
+Open https://the-internet.herokuapp.com/shadowdom
+Verify page contains "Let's have some different text!"
+Verify page contains "In a list!"
+Open https://the-internet.herokuapp.com/nested_frames
+Verify page contains "MIDDLE"
+Verify page contains "BOTTOM"
+Open https://the-internet.herokuapp.com/iframe
+Verify page contains "An iFrame containing the TinyMCE WYSIWYG Editor"
+Open https://the-internet.herokuapp.com/javascript_alerts
+Click "Click for JS Confirm"
+Verify page contains "You clicked: Ok"
+Click "Click for JS Alert"
+Verify page contains "You successfully clicked an alert"

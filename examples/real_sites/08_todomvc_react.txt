@@ -1,0 +1,17 @@
+Open https://todomvc.com/examples/react/dist/
+Type "Write tests" into What needs to be done?
+Press Enter
+Type "Run them on both engines" into What needs to be done?
+Press Enter
+Type "Ship it" into What needs to be done?
+Press Enter
+Verify page contains "3 items left"
+Check the first todo checkbox
+Verify page contains "2 items left"
+Click Active
+Verify page does not contain "Write tests"
+Click Completed
+Verify page contains "Write tests"
+Click Clear completed
+Click All
+Verify page contains "Ship it"

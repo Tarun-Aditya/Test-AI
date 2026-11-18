@@ -1,0 +1,21 @@
+Open https://the-internet.herokuapp.com/dynamic_loading/2
+Click Start
+Wait for "Hello World!" to appear
+Verify page contains "Hello World!"
+Open https://the-internet.herokuapp.com/dropdown
+Select "Option 2" from the dropdown
+Open https://the-internet.herokuapp.com/checkboxes
+Check checkbox 1
+Uncheck checkbox 2
+Open https://the-internet.herokuapp.com/hovers
+Hover over the first user avatar
+Verify page contains "name: user1"
+Open https://the-internet.herokuapp.com/add_remove_elements/
+Click Add Element
+Click Add Element
+Click the first Delete button
+Verify page contains "Delete"
+Open https://the-internet.herokuapp.com/tables
+Verify page contains "fbach@yahoo.com"
+Open https://the-internet.herokuapp.com/drag_and_drop
+Drag box A to box B

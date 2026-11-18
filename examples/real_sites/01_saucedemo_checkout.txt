@@ -1,0 +1,21 @@
+Open https://www.saucedemo.com/
+Type "${user}" into Username
+Type ${password} into Password
+Click Login
+Verify page contains "Products"
+Select "Price (low to high)" from the sort dropdown
+Click the first "Add to cart" button
+Click the first "Add to cart" button
+Click the shopping cart link
+Verify page contains "Sauce Labs Onesie"
+Verify page contains "Sauce Labs Bike Light"
+Click Checkout
+Type "Ada" into First Name
+Type "Lovelace" into Last Name
+Type "560001" into Zip/Postal Code
+Click Continue
+Verify page contains "Item total: $17.98"
+Click Finish
+Verify page contains "Thank you for your order!"
+Click Back Home
+Verify page contains "Products"

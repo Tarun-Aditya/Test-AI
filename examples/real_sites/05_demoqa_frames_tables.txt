@@ -1,0 +1,16 @@
+Open https://demoqa.com/frames
+Verify page contains "This is a sample page"
+Open https://demoqa.com/nestedframes
+Verify page contains "Child Iframe"
+Open https://demoqa.com/webtables
+Click Add
+Type "Ada" into First Name
+Type "Lovelace" into Last Name
+Type "ada@example.com" into Email
+Type "36" into Age
+Type "5000" into Salary
+Type "Engineering" into Department
+Click Submit
+Verify page contains "ada@example.com"
+Type "Lovelace" into the search box
+Verify page contains "Engineering"
