@@ -146,6 +146,11 @@ def selenium_service(kind, driver, binary=None):
     return {"chrome": ChromeService, "edge": EdgeService, "firefox": FirefoxService}[kind](driver)
 
 
+FRAME_TEXT_JS = """() => { const p = []; const w = (r) => { try { if (r.body) p.push(r.body.innerText); } catch (e) {}
+  for (const el of (r.querySelectorAll ? r.querySelectorAll('*') : [])) if (el.shadowRoot) { p.push(el.shadowRoot.textContent || ''); w(el.shadowRoot); } };
+  w(document); return p.join('\\n'); }"""
+
+
 class StepSkipped(Exception):
     pass
 
@@ -253,6 +258,8 @@ class Run:
             self._native_video, self._frame_mode = False, self.video     # frames + ffmpeg instead
         self.ctx.add_init_script(OPEN_SHADOW_JS)
         self.ctx.set_default_timeout(self.timeout_ms)
+        from playwright.sync_api import expect
+        expect.set_options(timeout=self.timeout_ms)         # assertions wait as long as steps do
         self.ctx.on("page", lambda p: setattr(self, "_page", p))
 
     def _remote(self, o):
@@ -287,6 +294,9 @@ class Run:
             edge = kind == "edge"
             o = webdriver.EdgeOptions() if edge else webdriver.ChromeOptions()
             o.add_argument(f"--window-size={self.viewport[0]},{self.viewport[1]}")
+            # plain http:// pages: no HTTPS-First interstitial (Playwright's Chromium has it off too)
+            o.add_argument("--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,HttpsFirstModeV2ForEngagedSites")
+            o.add_experimental_option("prefs", {"https_only_mode_enabled": False, "https_upgrades_enabled": False})
             o.set_capability("unhandledPromptBehavior", "ignore")
             if self.headless:
                 o.add_argument("--headless=new")
@@ -326,6 +336,33 @@ class Run:
     @property
     def page(self):
         return self._page
+
+    # ------------------------------------------------------------ page text (every frame + open shadow roots)
+    def page_text(self) -> str:
+        parts = []
+        for f in self._page.frames:            # frameset frames, nested and cross-origin iframes
+            try:
+                parts.append(f.evaluate(FRAME_TEXT_JS))
+            except Exception:
+                pass
+        return "\n".join(parts)
+
+    def expect_page_text(self, text: str, present: bool = True, settle_s: float = 2.0) -> None:
+        """Like the recording engine: the text anywhere on the page (frames and shadow roots included), within the
+        step timeout; absent = it does not show up while the page settles."""
+        want = " ".join(str(text).split()).lower()
+        end = time.time() + (self.timeout_ms / 1000 if present else settle_s)
+        while True:
+            got = " ".join(self.page_text().split()).lower()
+            if present and want in got:
+                return
+            if not present and want in got:
+                raise AssertionError(f"expected the page not to contain {text!r}")
+            if time.time() > end:
+                if present:
+                    raise AssertionError(f"expected the page to contain {text!r}; it shows {got[:300]!r}")
+                return
+            time.sleep(0.25)
 
     # ------------------------------------------------------------ video
     def _grab(self):
@@ -399,6 +436,10 @@ class Run:
         video = None
         try:
             if self.engine == "playwright":
+                if getattr(self, "ctx", None) is None:          # the browser never started: nothing to close
+                    if getattr(self, "_pw", None):
+                        self._pw.stop()
+                    return None
                 self._frame()
                 vid = self._page.video if getattr(self, "_native_video", False) else None
                 self.ctx.close()
@@ -414,7 +455,8 @@ class Run:
                 if getattr(self, "_rec", None):
                     self._stop_rec.set()
                     self._rec.join(timeout=5)
-                self.driver.quit()
+                if getattr(self, "driver", None) is not None:
+                    self.driver.quit()
         except Exception as e:
             print(f"warning: closing the browser failed: {e}", file=sys.stderr)
         if self._frame_mode and video is None:

@@ -77,6 +77,13 @@ JS_LIB = r"""
     const root = el.getRootNode();
     const count = s => { try { return root.querySelectorAll(s).length; } catch(e) { return 0; } };
     if (el.id && !dyn(el.id) && count('#'+CSS.escape(el.id))===1) return '#'+CSS.escape(el.id);
+    // one stable class that only this element has ("btn-primary" among three look-alike buttons) beats a position
+    const tg = el.tagName.toLowerCase();
+    for (const cl of Array.from(el.classList||[])) {
+      if (dyn(cl) || cl.length >= 40) continue;
+      const sel = tg + '.' + CSS.escape(cl);
+      if (count(sel)===1) return sel;
+    }
     const parts = [];
     let cur = el;
     while (cur && cur.nodeType===1) {
@@ -184,7 +191,12 @@ return (function(){
       if (SKIP.has(tag) || el.hasAttribute('data-aiauto-box') || !interesting(el, tag)) continue;
       const type = (el.getAttribute('type')||'').toLowerCase();
       const vis = visible(el);
-      if (!vis && !(tag==='input' && ['checkbox','radio','file'].includes(type))) continue;
+      // custom-skinned native controls: a transparent <select>/<input> laid over a styled span (SauceDemo's sort,
+      // most "pretty" checkboxes). Still the element to act on, as long as it is laid out and not hidden.
+      const skinned = !vis && (tag==='select' || tag==='input' || tag==='textarea') && (() => {
+        const r = el.getBoundingClientRect(), st = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden'; })();
+      if (!vis && !skinned && !(tag==='input' && ['checkbox','radio','file'].includes(type))) continue;
       const i = info(el);
       if (i.longtext) continue;  // big containers are never what the user means
       i.uid = ++uid; i.visible = vis; i.frames = frames; i.shadow = shadow;
@@ -405,8 +417,20 @@ def score(step: Step, c: dict, target: str | None = None) -> float:
 
 def _contains_all(target: str, c: dict) -> bool:
     toks = _content_tokens(target)
-    hay = " ".join(_tokens(" ".join(str(c.get(f) or "") for f in ("text", "name", "label", "aria_label", "alt", "title", "placeholder", "value"))))
+    hay = " ".join(_tokens(" ".join(str(c.get(f) or "") for f in ("text", "name", "label", "aria_label", "alt", "title", "placeholder", "value"))
+                           + " " + " ".join(_norm_attr(f, str(c.get(f) or "")) for f in ("testid", "id", "nameattr"))))
     return bool(toks) and all(t in hay for t in toks)
+
+
+def _role_kinds(target: str) -> set[str]:
+    """The element kinds a description names ("checkbox", "the first link", "todo checkbox")."""
+    out: set[str] = set()
+    if re.search(r"(?i)\btext\s*(?:box|field|input|area)\b|\binput\s+field\b", target or ""):
+        out |= ROLE_WORDS["textbox"]                         # "the first text box"
+    for w in _tokens(target):
+        if w in ROLE_WORDS and w not in ("box", "field", "input", "menu", "icon", "option", "title"):
+            out |= ROLE_WORDS[w]
+    return out
 
 
 _HAY = ("name", "text", "label", "aria_label", "placeholder", "value", "alt", "title", "testid", "id", "nameattr", "context")
@@ -444,11 +468,15 @@ def nth_match(step: Step, candidates: list[dict], target: str, n: int) -> tuple[
     link and the span inside it count once."""
     pool = []
     generic = all(w in STOP for w in _tokens(target))      # "the first result" / "the second product"
+    kinds = _role_kinds(target)
     for c in candidates:
-        if generic:
+        if generic and kinds:                               # "checkbox 1", "the second link": that kind, in page order
+            ok = bool(_kinds(c) & kinds)
+        elif generic:
             ok = (c.get("role") in ("link", "button") or c["tag"] in ("a", "button")) and len(c.get("name") or c.get("text") or "") >= 15
         else:
-            ok = _contains_all(target, c)
+            # "the first todo checkbox": its words in its text, label or ids, and the kind when one is named
+            ok = _contains_all(target, c) and (not kinds or bool(_kinds(c) & kinds))
         if ok and _action_fit(step.action, c) >= 0:
             c = dict(c)
             c["score"] = score(step, c, target)

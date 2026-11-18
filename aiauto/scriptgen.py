@@ -218,12 +218,28 @@ def _pw_target(st: Step) -> str:
     if st.locator.strategy == "point":
         x, y = st.locator.value.split(",")
         return f"('point', {x}, {y})"
-    if st.nth is not None and st.target:
+    if _data_nth(st):
         return _pw_nth(st)
     return pw_locator(st.locator)
 
 
 CLICKABLE_CSS = "a, button, [role=link], [role=button], input[type=submit], [role=option], [role=menuitem], li"
+
+
+_KIND_WORDS = r"(?i)\s*\b(?:button|btn|link|checkbox|radio|field|textbox|dropdown|tab|icon|image|option|item|result|results|entry|row)s?\b\s*"
+
+
+def _data_nth(st: Step) -> bool:
+    """'first result containing ${brand}': positional and data-driven, so re-evaluated on every run. A fixed
+    description ('the first Add to cart button') uses the element the run recorded: its text may not even
+    contain the words (a checkbox has none)."""
+    return st.nth is not None and bool(st.target) and bool(re.search(r"\$\{|\{\{", st.target)) and bool(_nth_text(st))
+
+
+def _nth_text(st: Step) -> str:
+    """The text to look for: the description without its kind words ("Add to cart button" -> "Add to cart")."""
+    t = re.sub(r"(?i)^\s*(?:the\s+)?(?:\w+\s+)?(?:containing|with|named|called|labell?ed)\s+", "", st.target or "")
+    return re.sub(_KIND_WORDS, " ", t).strip().strip('"\'')
 
 
 def _pw_nth(st: Step) -> str:
@@ -233,7 +249,7 @@ def _pw_nth(st: Step) -> str:
         base += f".frame_locator({_q(f)})"
     kind = f"get_by_role({_q(st.locator.role)})" if st.locator.role else f"locator({_q(CLICKABLE_CSS)})"
     pick = ".last" if st.nth == -1 else f".nth({st.nth})"
-    return f"{base}.{kind}.filter(has_text={_val(st.target)}){pick}"
+    return f"{base}.{kind}.filter(has_text={_val(_nth_text(st))}){pick}"
 
 
 def _point_lines(st: Step, engine: str) -> list[str] | None:
@@ -265,7 +281,7 @@ def _pw_lines(st: Step) -> list[str]:
         return pts
     a, val = st.action, _val(st.value)
     one = f"{pw_locator(st.locator)}.first" if st.locator else "None"
-    if st.locator and st.nth is not None and st.target:
+    if st.locator and _data_nth(st):
         one = _pw_nth(st)
     tab = _tab(st)
     m = {
@@ -292,10 +308,9 @@ def _pw_lines(st: Step) -> list[str]:
         Action.ASSERT_URL: [f"expect(page).to_have_url(re.compile(re.escape({val})))"],
         Action.ASSERT_TITLE: [f"expect(page).to_have_title(re.compile(re.escape({val})))"],
         Action.ASSERT_TEXT: [f"expect({one}).to_contain_text({val})" if st.locator
-                             else f'expect(page.locator("body")).to_contain_text({val})'],
-        Action.ASSERT_NO_TEXT: ["page.wait_for_timeout(2000)  # let late messages appear first",
-                                f"expect({one}).not_to_contain_text({val})" if st.locator
-                                else f'expect(page.locator("body")).not_to_contain_text({val})'],
+                             else f"r.expect_page_text({val})  # every frame and open shadow root"],
+        Action.ASSERT_NO_TEXT: [f"page.wait_for_timeout(2000)  # let late messages appear first", f"expect({one}).not_to_contain_text({val})"]
+                               if st.locator else [f"r.expect_page_text({val}, present=False)"],
         Action.SCREENSHOT: [f'page.screenshot(path={_q((st.value or "screenshot") + ".png")}, full_page=True)'],
         Action.PAUSE: [f"page.wait_for_timeout({int(_num(st.value, 30) * 1000)})  # manual step (e.g. SSO login)"],
         Action.DIALOG: [f"answer['accept'] = {not (st.value or '').startswith('dismiss')}"],
@@ -465,6 +480,22 @@ def wait_text(get, expected):
         lambda _: expected.lower() in " ".join((get() or "").split()).lower(), f"expected to find {expected!r}")
 
 
+def choose(driver, el, wanted):
+    """Pick option(s) by visible text; a transparent, custom-skinned <select> is set the way the page would."""
+    sel = Select(el)
+    for opt in str(wanted).split("|"):
+        opt = opt.strip()
+        try:
+            sel.select_by_visible_text(opt)
+        except Exception:
+            ok = driver.execute_script("""const s = arguments[0], want = arguments[1];
+              const o = [...s.options].find(x => x.text.trim() === want || x.value === want);
+              if (!o) return false; s.value = o.value;
+              s.dispatchEvent(new Event('input', {bubbles: true})); s.dispatchEvent(new Event('change', {bubbles: true})); return true;""", el, opt)
+            if not ok:
+                raise
+
+
 def no_text(get, unwanted, settle=2.0):
     """The text must not appear while the page settles (late messages count too)."""
     import time
@@ -481,7 +512,7 @@ def page_text(driver):
     return driver.execute_script(
         "const p=[];const w=r=>{try{if(r.body)p.push(r.body.innerText)}catch(e){}"
         "for(const el of r.querySelectorAll('*')){if(el.shadowRoot){p.push(el.shadowRoot.textContent||'');w(el.shadowRoot)}"
-        "if(el.tagName==='IFRAME'){try{if(el.contentDocument)w(el.contentDocument)}catch(e){}}}};w(document);return p.join(' ');")
+        "if(el.tagName==='IFRAME'||el.tagName==='FRAME'){try{if(el.contentDocument)w(el.contentDocument)}catch(e){}}}};w(document);return p.join(' ');")
 
 
 def follow_new_window(driver, known=[1]):
@@ -521,7 +552,7 @@ def _se_target(st: Step) -> str:
         return f"('point', {x}, {y})"
     from .engines.selenium_engine import by_for
     loc = se_locator(st)
-    if st.nth is not None and st.target and not loc.shadow:
+    if _data_nth(st) and not loc.shadow:
         call = _se_nth(st, False)                       # find(driver, By.XPATH, "<expr>", ...)
         inner = call[len("find(driver, "):-1]
         by, rest = inner.split(", ", 1)
@@ -538,7 +569,7 @@ def _se_nth(st: Step, clickable: bool) -> str:
              "option": "self::option or @role='option'"}
     cond = kinds.get(st.locator.role or "", "self::a or self::button or @role='link' or @role='button' or self::li")
     pos = "last()" if st.nth == -1 else str((st.nth or 0) + 1)
-    xp = f'"(//*[({cond}) and contains(normalize-space(.), " + xq({_val(st.target)}) + ")])[{pos}]"'
+    xp = f'"(//*[({cond}) and contains(normalize-space(.), " + xq({_val(_nth_text(st))}) + ")])[{pos}]"'
     args = f"By.XPATH, {xp}" + (f", frames={st.locator.frames!r}" if st.locator.frames else "") + (", clickable=True" if clickable else "")
     return f"find(driver, {args})"
 
@@ -549,7 +580,7 @@ def _se_lines(st: Step) -> list[str]:
         return pts
     a, val = st.action, _val(st.value)
     F, FC = se_find(se_locator(st)), se_find(se_locator(st), clickable=True)
-    if st.locator and st.nth is not None and st.target and not st.locator.shadow:
+    if st.locator and _data_nth(st) and not st.locator.shadow:
         F, FC = _se_nth(st, False), _se_nth(st, True)
     tab = _tab(st)
     m = {
@@ -566,7 +597,7 @@ def _se_lines(st: Step) -> list[str]:
         Action.PRESS: [f"{F}.send_keys({_sel_key(st.value)})" if st.locator
                        else f"top(driver); ActionChains(driver).send_keys({_sel_key(st.value)}).perform()"],
         Action.HOVER: [f"ActionChains(driver).move_to_element({F}).perform()"],
-        Action.SELECT: [f"sel = Select({F})", f"for opt in {val}.split('|'):", "    sel.select_by_visible_text(opt.strip())"],
+        Action.SELECT: [f"choose(driver, {F}, {val})"],
         Action.CHECK: [f"el = {F}", "if not el.is_selected():", "    driver.execute_script('arguments[0].click()', el)"],
         Action.UNCHECK: [f"el = {F}", "if el.is_selected():", "    driver.execute_script('arguments[0].click()', el)"],
         Action.UPLOAD: [f"{F}.send_keys(os.path.abspath({val}))"],

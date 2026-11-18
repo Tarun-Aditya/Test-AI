@@ -129,8 +129,12 @@ class SeleniumEngine(Engine):
             opts = webdriver.EdgeOptions() if kind == "edge" else webdriver.ChromeOptions()
             if c.headless:
                 opts.add_argument("--headless=new")
-            for a in ("--no-sandbox", "--disable-dev-shm-usage", f"--window-size={c.viewport_width},{c.viewport_height}"):
+            # HTTPS-First (Chrome 115+) turns plain http:// pages into an empty interstitial an automated
+            # browser can't click through; Playwright's Chromium launches with it off, so the same test works on both
+            for a in ("--no-sandbox", "--disable-dev-shm-usage", f"--window-size={c.viewport_width},{c.viewport_height}",
+                      "--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,HttpsFirstModeV2ForEngagedSites"):
                 opts.add_argument(a)
+            opts.add_experimental_option("prefs", {"https_only_mode_enabled": False, "https_upgrades_enabled": False})
             if c.user_agent:
                 opts.add_argument(f"--user-agent={c.user_agent}")
             if c.locale:
@@ -593,7 +597,17 @@ class SeleniumEngine(Engine):
             try:
                 s.select_by_visible_text(o)
             except Exception:
-                s.select_by_value(o)
+                try:
+                    s.select_by_value(o)
+                except Exception:
+                    # a transparent, custom-skinned <select> Selenium won't click: choose it the way the page would
+                    ok = self.driver.execute_script("""const s = arguments[0], want = arguments[1].trim();
+                      const opt = [...s.options].find(x => x.text.trim() === want || x.value === want);
+                      if (!opt) return false; s.value = opt.value;
+                      s.dispatchEvent(new Event('input', {bubbles: true})); s.dispatchEvent(new Event('change', {bubbles: true})); return true;""",
+                                                    s._el, o)
+                    if not ok:
+                        raise
         self.frame()
 
     def set_checked(self, loc, checked):

@@ -491,6 +491,10 @@ class Runner:
             info["name"] = desc["name"]
         cand = info
         all_locs = L.to_locators(cand)
+        # position-free locators first: "button.btn-primary" survives a page that reorders look-alike elements,
+        # "the first button named Button" does not
+        positional = lambda l: l.strategy == "xpath" or "nth=" in (l.value or "") or ":nth-of-type" in (l.value or "") or ":nth-child" in (l.value or "")
+        all_locs = [l for l in all_locs if not positional(l)] + [l for l in all_locs if positional(l)]
         all_locs = self._count_tolerant(all_locs, target) + all_locs
         if hasattr(e, "verify_locators"):
             # one in-page check of every locator, then a native find_elements confirmation of the winners
