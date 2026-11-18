@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { api, isLive, store } from "./api.js";
+import { api, currentProject, isLive, setProject, store } from "./api.js";
 import { dataPayload, loadForm, runConfig, saveForm } from "./form.js";
 import Icon from "./icons.jsx";
 import Dashboard from "./views/Dashboard.jsx";
@@ -45,6 +45,8 @@ export default function App({ me = null, reloadMe = () => {} }) {
   const role = me ? me.role : "admin";
   const can = { run: role !== "viewer", admin: role === "admin" };
   const [menu, setMenu] = useState(false);
+  const [projects, setProjects] = useState([]);
+  const [project, setProjectState] = useState(currentProject);
   const [form, setFormState] = useState(loadForm);
   const [runs, setRuns] = useState([]);
   const [stats, setStats] = useState(null);
@@ -72,6 +74,17 @@ export default function App({ me = null, reloadMe = () => {} }) {
     if (h) setHealth(h);
   }, []);
   const loadSessions = useCallback(async () => setSessions(await api("/api/sessions")), []);
+  const loadProjects = useCallback(async () => {
+    const ps = await api("/api/projects").catch(() => []);
+    setProjects(ps);
+    if (ps.length && !ps.some((p) => p.key === currentProject())) { setProject("default"); setProjectState("default"); }
+  }, []);
+  useEffect(() => { loadProjects(); }, [loadProjects]);
+  const switchProject = (key) => {
+    setProject(key); setProjectState(key);
+    loadRuns(); loadSessions(); loadLibrary();
+    nav("dashboard");
+  };
   const loadLibrary = useCallback(async () => setLibrary(await api("/api/library")), []);
 
   // live events from the hub (one socket for the whole app)
@@ -129,7 +142,8 @@ export default function App({ me = null, reloadMe = () => {} }) {
   const ctx = useMemo(() => ({
     form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy,
     loadRuns, loadMachines, loadSessions, loadLibrary, openRun: (id, tab) => setDrawer({ id, tab: tab || "overview" }), me, can,
-  }), [form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy, loadRuns, loadMachines, loadSessions, loadLibrary, me]);
+    projects, project, loadProjects,
+  }), [form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy, loadRuns, loadMachines, loadSessions, loadLibrary, me, projects, project, loadProjects]);
   const signOut = async () => { try { await api("/api/auth/logout", { method: "POST" }); } catch { /* already out */ } reloadMe(); };
   const changePassword = async () => {
     const current = me?.has_password ? window.prompt("Current password") : "";
@@ -150,6 +164,10 @@ export default function App({ me = null, reloadMe = () => {} }) {
       <div className="app">
         <aside className="side">
           <div className="brand"><div className="logo"><Icon name="spark" /></div><div><b>Autopilot</b><small>AI test automation</small></div></div>
+          {projects.length > 1 && <label className="projsel" title="Project: its runs, scripts and saved logins">
+            <small>Project</small>
+            <select value={project} onChange={(e) => switchProject(e.target.value)}>
+              {projects.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}</select></label>}
           <nav className="nav">
             {Object.entries(VIEWS).filter(([k]) => visibleViews(me).includes(k)).map(([k, [label, , icon]]) => (
               <button key={k} className={route.view === k ? "on" : ""} onClick={() => nav(k)}>

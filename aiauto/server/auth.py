@@ -231,7 +231,8 @@ def base_url(request) -> str:
 PUBLIC = ("/api/health", "/api/auth/me", "/api/auth/login", "/api/auth/setup", "/api/auth/logout",
           "/api/auth/sso/start", "/api/auth/sso/callback", "/api/agents/upload/", "/api/ai/call", "/assets/")
 ADMIN_ONLY = [("PUT", "/api/ai"), ("POST", "/api/ai/test"), ("PUT", "/api/grids/"), ("DELETE", "/api/grids/"),
-              ("DELETE", "/api/agents/"), ("*", "/api/users"), ("*", "/api/auth/sso-config"), ("*", "/api/agent-tokens")]
+              ("DELETE", "/api/agents/"), ("*", "/api/users"), ("*", "/api/auth/sso-config"), ("*", "/api/agent-tokens"),
+              ("PUT", "/api/projects/"), ("DELETE", "/api/projects/")]
 VIEWER_MAY_WRITE = ("/api/auth/logout", "/api/me/")
 
 

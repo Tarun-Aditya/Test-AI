@@ -422,3 +422,44 @@ def test_per_machine_agent_tokens(cluster, tmp_path):
     finally:
         for p in procs:
             p.terminate()
+
+
+def test_live_events_stay_in_their_project(cluster, tmp_path):
+    """Real hub, accounts on: Bob's live feed never carries steps or screenshots of Ann's project's runs."""
+    from websockets.sync.client import connect as ws_connect
+    pw = "correct horse battery"
+    base, _ = cluster({}, hub_env={"AIAUTO_AUTH": "on", "AIAUTO_ADMIN_USER": "admin", "AIAUTO_ADMIN_PASSWORD": pw})
+    W = {"X-Requested-With": "autopilot"}
+    admin = httpx.Client(base_url=base, timeout=30)
+    admin.post("/api/auth/login", json={"username": "admin", "password": pw})
+    for u in ("ann", "bob"):
+        admin.post("/api/users", json={"username": u, "password": pw, "role": "tester"}, headers=W)
+    admin.put("/api/projects/payments", json={"name": "Payments", "members": ["ann"]}, headers=W)
+    admin.put("/api/projects/search", json={"name": "Search", "members": ["bob"]}, headers=W)
+    cl = {}
+    for u in ("ann", "bob"):
+        cl[u] = httpx.Client(base_url=base, timeout=30)
+        assert cl[u].post("/api/auth/login", json={"username": u, "password": pw}).status_code == 200
+    cookie = lambda u: "aiauto_session=" + cl[u].cookies["aiauto_session"]
+    wsurl = base.replace("http", "ws") + "/ws/ui"
+    steps = [{"action": "navigate", "value": (EXAMPLES / "demo_app.html").as_uri()}, {"action": "screenshot"}]
+    with ws_connect(wsurl, additional_headers={"Cookie": cookie("ann")}) as ann_ws, \
+            ws_connect(wsurl, additional_headers={"Cookie": cookie("bob")}) as bob_ws:
+        mk = lambda u, p: cl[u].post("/api/runs", headers={**W, "X-Project": p}, json={"steps": steps, "name": u,
+                                     "config": {"use_llm": False, "record_video": False, "live_view": True}}).json()["run_ids"][0]
+        a_rid = mk("ann", "payments")
+        seen_a = []
+        while True:
+            m = json.loads(ann_ws.recv(timeout=60))
+            seen_a.append(m)
+            if m.get("type") == "run_finished" and m.get("run_id") == a_rid:
+                break
+        assert any(m.get("type") == "step_shot" and m.get("run_id") == a_rid for m in seen_a)   # ann sees her screenshots
+        b_rid = mk("bob", "search")
+        while True:
+            m = json.loads(bob_ws.recv(timeout=60))
+            assert m.get("run_id") != a_rid, "bob received an event of another project's run"
+            if m.get("type") == "run_finished" and m.get("run_id") == b_rid:
+                break
+    assert cl["bob"].get(f"/artifacts/{a_rid}/summary.json").status_code == 404
+    assert cl["ann"].get(f"/artifacts/{a_rid}/summary.json").status_code == 200

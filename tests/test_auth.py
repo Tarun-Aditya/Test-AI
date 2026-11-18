@@ -275,3 +275,45 @@ def test_sso_sign_in_creates_and_links_accounts(hub):
     # a forged callback (no matching state cookie) is refused
     forged = _client(appmod).get("/api/auth/sso/callback?code=x&state=y", follow_redirects=False)
     assert forged.status_code == 303 and "error" in forged.headers["location"]
+
+
+def test_projects_keep_teams_apart(hub, demo_page):
+    """Team A's runs, reports, files, scripts, saved logins and live events are invisible to team B."""
+    c, appmod = hub
+    _setup_admin(c, appmod)
+    for u in ("ann", "bob"):
+        c.post("/api/users", json={"username": u, "password": PW, "role": "tester"}, headers=W)
+    assert c.put("/api/projects/payments", json={"name": "Payments", "members": ["ann"]}, headers=W).status_code == 200
+    assert c.put("/api/projects/search", json={"name": "Search", "members": ["bob"]}, headers=W).status_code == 200
+    ann, bob = _login(appmod, "ann"), _login(appmod, "bob")
+    assert {p["key"] for p in ann.get("/api/projects").json()} == {"default", "payments"}
+    assert "members" not in ann.get("/api/projects").json()[0]                        # only admins see members
+    assert bob.put("/api/projects/x", json={"name": "X"}, headers=W).status_code == 403  # admins make projects
+    PA = {**W, "X-Project": "payments"}
+    assert bob.get("/api/runs", headers={"X-Project": "payments"}).status_code == 403
+
+    steps = [{"action": "navigate", "value": demo_page.as_uri()}]
+    r = ann.post("/api/runs", headers=PA, json={"steps": steps, "name": "pay", "config": {"use_llm": False, "record_video": False}})
+    assert r.status_code == 200, r.text
+    rid = r.json()["run_ids"][0]
+    _wait(ann, rid)
+    run = c.get(f"/api/runs/{rid}").json()
+    assert run["project"] == "payments" and run["owner"] == "ann"
+    assert [x["run_id"] for x in ann.get("/api/runs", headers={"X-Project": "payments"}).json()] == [rid]
+    assert ann.get("/api/runs").json() == []                                         # default project: empty
+    for path in (f"/api/runs/{rid}", f"/api/runs/{rid}/files", f"/api/runs/{rid}/script", f"/artifacts/{rid}/summary.json",
+                 f"/api/runs/{rid}/export", f"/api/runs/{rid}/download"):
+        assert bob.get(path).status_code == 404, path
+        assert ann.get(path).status_code in (200, 409), path
+    assert bob.post("/api/runs/cancel", json={"run_ids": [rid]}, headers=W).json()["cancelled"][rid] == "not found"
+    assert bob.post("/api/runs", headers=W, json={"replay_run_id": rid}).status_code == 404
+    lib = ann.post("/api/library/from-run", json={"run_id": rid, "name": "pay-flow"}, headers=PA)
+    assert lib.status_code == 200 and lib.json()["project"] == "payments"
+    assert bob.get("/api/library/pay-flow").status_code == 404
+    assert [x["name"] for x in ann.get("/api/library", headers={"X-Project": "payments"}).json()] == ["pay-flow"]
+    assert ann.get("/api/stats", headers={"X-Project": "payments"}).json()["total"] == 1
+    assert c.get("/api/stats", headers={"X-Project": "payments"}).json()["total"] == 1   # admin sees every project
+    assert c.get("/api/stats", headers={"X-Project": "search"}).json()["total"] == 0
+    # deleting a project moves its work to Default instead of losing it
+    assert c.delete("/api/projects/payments", headers=W).json()["moved_to"] == "default"
+    assert c.get(f"/api/runs/{rid}").json()["project"] == "default"

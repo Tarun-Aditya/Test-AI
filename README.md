@@ -232,6 +232,11 @@ on `localhost` for one person.
   *Everyone / Mine* filter. The team sees all runs, but only the owner (or an admin) can delete or stop them,
   and a replay reuses the stored secrets only for the owner. **Saved logins (sessions) are private**: they
   hold cookies.
+* **Projects**: each team's runs, reports, videos, files, library scripts, saved logins and live events stay in
+  its project. Members see only their projects (plus **Default**, which is open to everyone), admins see all, and
+  links to another project's run or report return "not found". Switch projects at the top of the sidebar; admins
+  manage projects and members in Admin → Projects. Deleting a project moves its work to Default. Machines, grids
+  and the organisation AI are shared.
 * **Each person's own AI (My AI)**: everyone can tie their own subscription or key to their account. Claude
   (`claude setup-token`), GitHub Copilot (a GitHub token with Copilot access), Cursor (API key), an Anthropic
   key, or any model via LiteLLM. It is used for **their** runs only, on whatever machine the run lands on:

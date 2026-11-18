@@ -1,7 +1,11 @@
+let project = (() => { try { return JSON.parse(localStorage.getItem("aiauto.project")) || "default"; } catch { return "default"; } })();
+export const currentProject = () => project;
+export function setProject(key) { project = key || "default"; try { localStorage.setItem("aiauto.project", JSON.stringify(project)); } catch { /* ok */ } }
+
 export async function api(path, opts = {}) {
   const form = opts.body instanceof FormData;
   // X-Requested-With: the hub refuses writes without it (a page on another site can't add it: CSRF guard)
-  const init = { ...opts, headers: { "X-Requested-With": "autopilot", ...(form ? {} : { "Content-Type": "application/json" }), ...(opts.headers || {}) } };
+  const init = { ...opts, headers: { "X-Requested-With": "autopilot", "X-Project": project, ...(form ? {} : { "Content-Type": "application/json" }), ...(opts.headers || {}) } };
   if (init.body && !form && typeof init.body !== "string") init.body = JSON.stringify(init.body);
   const r = await fetch(path, init);
   const j = await r.json().catch(() => ({}));

@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS users_sso ON users(sso_issuer, sso_sub) WHERE sso_sub IS NOT NULL;
 CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER, created REAL, expires REAL);
 CREATE TABLE IF NOT EXISTS user_ai (user_id INTEGER PRIMARY KEY, data_enc TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS projects (key TEXT PRIMARY KEY, name TEXT, description TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS project_members (project TEXT, user_id INTEGER, PRIMARY KEY (project, user_id));
 CREATE TABLE IF NOT EXISTS agent_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT, token_hash TEXT UNIQUE, created REAL, created_by TEXT,
   last_used REAL, last_machine TEXT, revoked INTEGER DEFAULT 0
@@ -77,6 +79,11 @@ class DB:
         for table in ("library", "sessions"):
             if "owner" not in {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN owner TEXT")
+        for table in ("runs", "library", "sessions"):     # everything belongs to a project ("default" before projects)
+            if "project" not in {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN project TEXT DEFAULT 'default'")
+        self._conn.execute("INSERT OR IGNORE INTO projects (key, name, description, created) VALUES "
+                           "('default', 'Default', 'Open to everyone', ?)", (time.time(),))
         have = {r[1] for r in self._conn.execute("PRAGMA table_info(steps)")}
         for col in ("parsed_by", "picked_by", "origin"):
             if col not in have:
@@ -121,8 +128,9 @@ class DB:
     # ------------------------------------------------------------------ runs
     def create_run(self, run: dict) -> None:
         cols = ["run_id", "test_name", "status", "engine", "browser", "agent", "mode", "started_at", "total",
-                "iteration", "batch_id", "config_json", "created", "data_json", "sensitive_json", "source_run", "parser", "owner"]
-        run = {**run, "created": run.get("created", time.time())}
+                "iteration", "batch_id", "config_json", "created", "data_json", "sensitive_json", "source_run", "parser", "owner",
+                "project"]
+        run = {**run, "created": run.get("created", time.time()), "project": run.get("project") or "default"}
         self.x(f"INSERT OR REPLACE INTO runs ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                [run.get(c) for c in cols])
 
@@ -172,13 +180,13 @@ class DB:
         res = s.get("results", [])
         shots = [r["screenshot"] for r in res if r.get("screenshot")]
         err = next((r.get("error") for r in res if r.get("status") == "failed"), None)
-        existing = self.one("SELECT run_id, created, config_json, batch_id, iteration, browser, data_json, sensitive_json, source_run, parser, owner FROM runs WHERE run_id=?", (s["run_id"],))
+        existing = self.one("SELECT run_id, created, config_json, batch_id, iteration, browser, data_json, sensitive_json, source_run, parser, owner, project FROM runs WHERE run_id=?", (s["run_id"],))
         created = existing["created"] if existing else (datetime.fromisoformat(s["started_at"]).timestamp() if s.get("started_at") else p.stat().st_mtime)
         with self.tx() as c:
             c.execute("""INSERT OR REPLACE INTO runs (run_id, test_name, status, engine, browser, agent, mode, started_at, finished_at,
                          duration_ms, total, done, passed, failed, healed, current_step, video, thumb, error, iteration, batch_id, config_json, created,
-                         data_json, sensitive_json, source_run, parser, owner)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         data_json, sensitive_json, source_run, parser, owner, project)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (s["run_id"], s.get("test_name"), s.get("status"), s.get("engine"), existing and existing["browser"], s.get("agent"),
                        s.get("mode"), s.get("started_at"), s.get("finished_at"), s.get("duration_ms", 0), len(res), len(res),
                        sum(1 for r in res if r.get("status") == "passed"), sum(1 for r in res if r.get("status") == "failed"),
@@ -188,7 +196,7 @@ class DB:
                        (existing and existing["sensitive_json"]) or json.dumps(_script_sensitive(Path(run_dir))),
                        existing and existing["source_run"],
                        (existing and existing["parser"]) or _parser_of(Path(run_dir), s.get("mode")),
-                       existing and existing["owner"]))
+                       existing and existing["owner"], (existing and existing["project"]) or "default"))
             c.execute("DELETE FROM steps WHERE run_id=?", (s["run_id"],))
             for r in res:
                 st = r.get("step", {})
@@ -241,8 +249,11 @@ class DB:
         return self.one("SELECT * FROM runs WHERE run_id=?", (run_id,))
 
     def list_runs(self, limit: int = 200, status: str | None = None, q: str | None = None,
-                  owner: str | None = None) -> list[dict]:
+                  owner: str | None = None, project: str | None = None) -> list[dict]:
         sql, args = "SELECT * FROM runs WHERE 1=1", []
+        if project:
+            sql += " AND COALESCE(project, 'default')=?"
+            args.append(project)
         if owner:
             sql += " AND owner=?"
             args.append(owner)
@@ -277,30 +288,34 @@ class DB:
             c.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
             c.execute("DELETE FROM run_secrets WHERE run_id=?", (run_id,))
 
-    def stats(self) -> dict:
+    def stats(self, project: str | None = None) -> dict:
+        where, args = ("WHERE COALESCE(project, 'default')=?", [project]) if project else ("", [])
         r = self.one("""SELECT COUNT(*) total,
                           SUM(status='passed') passed, SUM(status='failed') failed,
                           SUM(status IN ('queued','dispatched','running')) live,
                           AVG(CASE WHEN status IN ('passed','failed') THEN duration_ms END) avg_ms,
                           SUM(healed) healed,
                           SUM(created > ?) day, SUM(created > ? AND status='failed') day_failed
-                        FROM runs""", (time.time() - 86400, time.time() - 86400)) or {}
+                        FROM runs """ + where, (time.time() - 86400, time.time() - 86400, *args)) or {}
         trend = self.q("""SELECT date(created, 'unixepoch') d, SUM(status='passed') passed, SUM(status='failed') failed
-                          FROM runs WHERE created > ? GROUP BY d ORDER BY d""", (time.time() - 14 * 86400,))
+                          FROM runs WHERE created > ? """ + (where.replace("WHERE", "AND") if where else "") +
+                       " GROUP BY d ORDER BY d", (time.time() - 14 * 86400, *args))
         return {k: (v or 0) for k, v in r.items()} | {"trend": trend}
 
     # ------------------------------------------------------------------ library
-    def lib_put(self, name: str, test: dict, source_run: str | None = None, owner: str | None = None) -> dict:
+    def lib_put(self, name: str, test: dict, source_run: str | None = None, owner: str | None = None,
+                project: str | None = None) -> dict:
         now = time.time()
-        old = self.one("SELECT created, owner FROM library WHERE name=?", (name,))
-        self.x("""INSERT OR REPLACE INTO library (name, test_name, steps, engine, sensitive, test_json, source_run, created, updated, owner)
-                  VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        old = self.one("SELECT created, owner, project FROM library WHERE name=?", (name,))
+        self.x("""INSERT OR REPLACE INTO library (name, test_name, steps, engine, sensitive, test_json, source_run, created, updated, owner, project)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                (name, test.get("name"), len(test.get("steps", [])), test.get("engine"), json.dumps(test.get("sensitive", [])),
-                json.dumps(test), source_run, old["created"] if old else now, now, (old and old["owner"]) or owner))
+                json.dumps(test), source_run, old["created"] if old else now, now, (old and old["owner"]) or owner,
+                (old and old["project"]) or project or "default"))
         return self.lib_meta(name)
 
     def lib_meta(self, name: str) -> dict | None:
-        r = self.one("SELECT name, test_name, steps, engine, sensitive, source_run, created, updated, test_json, owner FROM library WHERE name=?", (name,))
+        r = self.one("SELECT name, test_name, steps, engine, sensitive, source_run, created, updated, test_json, owner, project FROM library WHERE name=?", (name,))
         if not r:
             return None
         t = json.loads(r.pop("test_json"))
@@ -308,8 +323,12 @@ class DB:
         r["data_keys"] = sorted((t.get("data") or {}).keys())
         return r
 
-    def lib_list(self) -> list[dict]:
-        return [self.lib_meta(r["name"]) for r in self.q("SELECT name FROM library ORDER BY updated DESC")]
+    def lib_list(self, project: str | None = None) -> list[dict]:
+        sql, args = "SELECT name FROM library", []
+        if project:
+            sql += " WHERE COALESCE(project, 'default')=?"
+            args.append(project)
+        return [self.lib_meta(r["name"]) for r in self.q(sql + " ORDER BY updated DESC", args)]
 
     def lib_get(self, name: str) -> dict | None:
         r = self.one("SELECT test_json FROM library WHERE name=?", (name,))
@@ -319,12 +338,13 @@ class DB:
         self.x("DELETE FROM library WHERE name=?", (name,))
 
     # ------------------------------------------------------------------ sessions
-    def session_put(self, name: str, state: dict, owner: str | None = None) -> None:
+    def session_put(self, name: str, state: dict, owner: str | None = None, project: str | None = None) -> None:
         domains = sorted({c.get("domain", "").lstrip(".") for c in state.get("cookies", []) if c.get("domain")})
         origins = [o.get("origin", "") for o in state.get("origins", [])]
-        old = self.one("SELECT owner FROM sessions WHERE name=?", (name,))
-        self.x("INSERT OR REPLACE INTO sessions (name, state_json, domains, updated, owner) VALUES (?,?,?,?,?)",
-               (name, json.dumps(state), json.dumps((domains + origins)[:12]), time.time(), owner or (old and old["owner"])))
+        old = self.one("SELECT owner, project FROM sessions WHERE name=?", (name,))
+        self.x("INSERT OR REPLACE INTO sessions (name, state_json, domains, updated, owner, project) VALUES (?,?,?,?,?,?)",
+               (name, json.dumps(state), json.dumps((domains + origins)[:12]), time.time(), owner or (old and old["owner"]),
+                project or (old and old["project"]) or "default"))
 
     def session_owner(self, name: str) -> str | None:
         r = self.one("SELECT owner FROM sessions WHERE name=?", (name,))
@@ -341,13 +361,54 @@ class DB:
         r = self.one("SELECT state_json FROM sessions WHERE name=?", (name,))
         return json.loads(r["state_json"]) if r else None
 
-    def session_list(self, owner: str | None = None) -> list[dict]:
-        sql, args = "SELECT name, domains, updated, owner FROM sessions", []
+    def session_list(self, owner: str | None = None, project: str | None = None) -> list[dict]:
+        sql, args = "SELECT name, domains, updated, owner FROM sessions WHERE 1=1", []
         if owner is not None:            # a user sees their own saved logins (and old ones nobody owns)
-            sql += " WHERE owner=? OR owner IS NULL"
+            sql += " AND (owner=? OR owner IS NULL)"
             args.append(owner)
+        if project:
+            sql += " AND COALESCE(project, 'default')=?"
+            args.append(project)
         return [{"name": r["name"], "domains": json.loads(r["domains"] or "[]"), "updated": int(r["updated"]), "owner": r["owner"]}
                 for r in self.q(sql + " ORDER BY updated DESC", args)]
+
+    # ------------------------------------------------------------------ projects
+    def projects(self) -> list[dict]:
+        rows = self.q("SELECT key, name, description, created FROM projects ORDER BY key='default' DESC, name")
+        for r in rows:
+            r["members"] = [m["username"] for m in self.q(
+                "SELECT u.username FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project=? ORDER BY u.username", (r["key"],))]
+            r["runs"] = self.one("SELECT COUNT(*) n FROM runs WHERE COALESCE(project,'default')=?", (r["key"],))["n"]
+        return rows
+
+    def project(self, key: str) -> dict | None:
+        return next((p for p in self.projects() if p["key"] == key), None)
+
+    def project_put(self, key: str, name: str, description: str | None = None) -> None:
+        old = self.one("SELECT created FROM projects WHERE key=?", (key,))
+        self.x("INSERT OR REPLACE INTO projects (key, name, description, created) VALUES (?,?,?,?)",
+               (key, name, description, old["created"] if old else time.time()))
+
+    def project_members_set(self, key: str, user_ids: list[int]) -> None:
+        with self.tx() as c:
+            c.execute("DELETE FROM project_members WHERE project=?", (key,))
+            c.executemany("INSERT INTO project_members (project, user_id) VALUES (?,?)", [(key, u) for u in user_ids])
+
+    def project_delete(self, key: str) -> None:
+        """Its runs, scripts and saved logins move to the default project (nothing is lost)."""
+        with self.tx() as c:
+            for t in ("runs", "library", "sessions"):
+                c.execute(f"UPDATE {t} SET project='default' WHERE project=?", (key,))
+            c.execute("DELETE FROM project_members WHERE project=?", (key,))
+            c.execute("DELETE FROM projects WHERE key=?", (key,))
+
+    def user_projects(self, user_id: int) -> set[str]:
+        """Projects a user may see: every project they're a member of, plus the default one."""
+        return {"default"} | {r["project"] for r in self.q("SELECT project FROM project_members WHERE user_id=?", (user_id,))}
+
+    def run_project(self, run_id: str) -> str | None:
+        r = self.one("SELECT COALESCE(project, 'default') p FROM runs WHERE run_id=?", (run_id,))
+        return r["p"] if r else None
 
     # ------------------------------------------------------------------ users
     def user_get(self, user_id: int | None = None, username: str | None = None) -> dict | None:

@@ -209,6 +209,52 @@ function SSO() {
   );
 }
 
+function Projects() {
+  const { toast, loadProjects } = useApp();
+  const [ps, setPs] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [edit, setEdit] = useState(null);
+  const load = async () => { setPs(await api("/api/projects")); setUsers(await api("/api/users")); };
+  useEffect(() => { load().catch((e) => toast(e.message, true)); }, []);
+  const save = async () => {
+    try {
+      const key = (edit.key || edit.name || "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, "");
+      if (!key) throw new Error("Give the project a name");
+      await api(`/api/projects/${encodeURIComponent(key)}`, { method: "PUT", body: { name: edit.name || key, description: edit.description || "", members: edit.members } });
+      setEdit(null); load(); loadProjects(); toast("Project saved");
+    } catch (e) { toast(e.message, true); }
+  };
+  const del = async (p) => { if (!window.confirm(`Delete project "${p.name}"? Its ${p.runs} runs, scripts and saved logins move to Default.`)) return; await api(`/api/projects/${p.key}`, { method: "DELETE" }); load(); loadProjects(); };
+  const toggle = (u) => setEdit((e) => ({ ...e, members: e.members.includes(u) ? e.members.filter((x) => x !== u) : [...e.members, u] }));
+  return (
+    <div className="panel">
+      <div className="panel-h"><h3>Projects</h3><span className="spacer" /><button className="btn sm" onClick={() => setEdit({ isNew: true, name: "", description: "", members: [] })}>+ New project</button></div>
+      <div className="panel-b">
+        <p className="hint" style={{ marginTop: 0 }}>A project keeps a team's runs, reports, videos, library scripts and saved logins apart from other teams: members see
+          only their projects (and <b>Default</b>, which is open to everyone). Admins see all. Machines, grids and AI settings are shared.</p>
+        <table className="dt"><thead><tr><th>Project</th><th>Members</th><th>Runs</th><th /></tr></thead><tbody>
+          {ps.map((p) => <tr key={p.key}><td><b>{p.name}</b><div className="mut">{p.key}{p.description ? ` · ${p.description}` : ""}</div></td>
+            <td>{p.key === "default" ? <span className="mut">everyone</span> : (p.members || []).join(", ") || <span className="mut">admins only</span>}</td>
+            <td>{p.runs}</td>
+            <td style={{ whiteSpace: "nowrap" }}>{p.key !== "default" && <>
+              <button className="btn sm" onClick={() => setEdit({ ...p, members: p.members || [] })}>Edit</button>
+              <button className="btn sm ghost danger" onClick={() => del(p)}>Delete</button></>}</td></tr>)}</tbody></table>
+        {edit && <div className="card" style={{ marginTop: 12 }}>
+          <div className="grid2">
+            <div className="field"><span>Name</span><input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} disabled={!edit.isNew && false} placeholder="Payments" /></div>
+            <div className="field"><span>Description</span><input value={edit.description || ""} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></div>
+          </div>
+          <div className="field"><span>Members</span><div className="chips">
+            {users.filter((u) => u.role !== "admin").map((u) => <label key={u.id} className={"chipsel" + (edit.members.includes(u.username) ? " on" : "")}>
+              <input type="checkbox" checked={edit.members.includes(u.username)} onChange={() => toggle(u.username)} />{u.name} <small>{u.role}</small></label>)}
+          </div><small>Admins see every project without being members.</small></div>
+          <div style={{ display: "flex", gap: 8 }}><button className="btn primary" onClick={save}>Save project</button><button className="btn" onClick={() => setEdit(null)}>Cancel</button></div>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { me } = useApp();
   const [tab, setTab] = useState("ai");
@@ -216,12 +262,13 @@ export default function Settings() {
   return (
     <>
       <div className="seg" style={{ margin: "16px 24px 0" }}>
-        {[["ai", "Organisation AI"], ["sso", "Sign-in (SSO)"], ["users", "Users"]].map(([k, l]) =>
+        {[["ai", "Organisation AI"], ["sso", "Sign-in (SSO)"], ["users", "Users"], ["projects", "Projects"]].map(([k, l]) =>
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
       </div>
       {tab === "ai" && <OrgAI />}
       {tab === "sso" && <section className="view on"><SSO /></section>}
       {tab === "users" && <section className="view on"><Users /></section>}
+      {tab === "projects" && <section className="view on"><Projects /></section>}
     </>
   );
 }

@@ -104,6 +104,31 @@ def _owner_of(request) -> str | None:
     return _user(request)["username"] if authmod.enabled() else None
 
 
+class _AllProjects:
+    def __contains__(self, key):
+        return True
+
+
+ALL_PROJECTS = _AllProjects()
+
+
+def _projects_for(user: dict | None):
+    """Projects this person may see. No accounts or admin: all of them."""
+    if not authmod.enabled() or not user or user.get("role") == "admin" or not user.get("id"):
+        return ALL_PROJECTS
+    return db.user_projects(user["id"])
+
+
+def _project(request) -> str:
+    """The project a request works in (the project switcher sends it as X-Project)."""
+    key = request.headers.get("x-project") or request.query_params.get("project") or "default"
+    if key != "default" and not db.project(key):
+        raise HTTPException(404, f"No project '{key}'")
+    if key not in _projects_for(_user(request)):
+        raise HTTPException(403, f"You are not a member of project '{key}'")
+    return key
+
+
 def _ai_scope(username: str | None) -> dict | None:
     """AI settings for work done for this user: their own subscription / key, or the organisation's."""
     if not authmod.enabled() or not username:
@@ -132,6 +157,11 @@ async def _auth_gate(request, call_next):
     why = authmod.denied(user, request.method, path)
     if why:
         return _JSON({"detail": why}, status_code=403)
+    m = re.match(r"^/(?:api/runs|artifacts)/([^/]+)", path)
+    if m and m.group(1) not in ("cancel",):
+        p = db.run_project(m.group(1))
+        if p and p not in _projects_for(user):
+            return _JSON({"detail": "Not found"}, status_code=404)      # another project's run: invisible
     request.state.user = user
     return await call_next(request)
 
@@ -143,6 +173,8 @@ app.include_router(authmod.make_router(AUTH, _org_ai, providers))
 class Hub:
     def __init__(self):
         self.ui: set[WebSocket] = set()
+        self.ui_user: dict[WebSocket, dict] = {}          # who is watching (live events are filtered by project)
+        self.run_project: dict[str, str] = {}             # run id -> project (cache for event filtering)
         self.agents: dict[str, dict[str, Any]] = {}      # connected agents: name -> {ws, info, slots, running, send_lock}
         self.pending: list[dict] = []                    # jobs waiting for a free slot on one of their machines
         self.local_running: set[str] = set()             # run ids executing on the hub itself
@@ -169,13 +201,20 @@ class Hub:
             if t == "run_finished":
                 self.events.pop(rid, None)
         dead = []
+        project = None
+        if rid:
+            project = self.run_project.get(rid) or db.run_project(rid) or "default"
+            self.run_project[rid] = project
         for ws in list(self.ui):
+            if project and project not in _projects_for(self.ui_user.get(ws)):
+                continue                                  # another project's steps / screenshots stay there
             try:
                 await ws.send_json(event)
             except Exception:
                 dead.append(ws)
         for ws in dead:
             self.ui.discard(ws)
+            self.ui_user.pop(ws, None)
 
     def emit_threadsafe(self, event: dict) -> None:
         if self.loop:
@@ -262,16 +301,19 @@ def index():
 
 @app.websocket("/ws/ui")
 async def ws_ui(ws: WebSocket):
-    if authmod.enabled() and not AUTH.user_from_request(ws):
+    user = AUTH.user_from_request(ws)
+    if authmod.enabled() and not user:
         await ws.close(code=4401)
         return
     await ws.accept()
     hub.ui.add(ws)
+    hub.ui_user[ws] = user
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         hub.ui.discard(ws)
+        hub.ui_user.pop(ws, None)
 
 
 # --------------------------------------------------------------------- API: parse & run
@@ -294,6 +336,12 @@ def api_parse(req: ParseRequest, request: Request):
 @app.post("/api/runs")
 async def api_run(req: RunRequest, request: Request):
     user, owner = _user(request), _owner_of(request)
+    project = _project(request)
+    for ref in filter(None, (req.replay_run_id,)):
+        if (db.run_project(ref) or "default") not in _projects_for(user):
+            raise HTTPException(404, "script not found for that run")
+    if req.library and (db.lib_meta(req.library) or {}).get("project", "default") not in _projects_for(user):
+        raise HTTPException(404, "library script not found")
     data, sens = normalize(_data(req.data), req.sensitive)
     mode = "ai"
     parser = "user"
@@ -391,12 +439,13 @@ async def api_run(req: RunRequest, request: Request):
         rid = new_run_id(title)
         run_ids.append(rid)
         job = {"run_id": rid, "test": json.loads(t.model_dump_json()), "config": c.model_dump(),
-               "session_state": c.session_state, "mode": mode, "targets": target, "owner": owner}
+               "session_state": c.session_state, "mode": mode, "targets": target, "owner": owner, "project": project}
         db.create_run({"run_id": rid, "test_name": title, "status": "queued", "engine": c.engine, "browser": c.browser,
                        "agent": target[0] if len(target) == 1 and target[0] != "local" else LOCAL_NAME if target == ["local"] else "any", "mode": mode, "started_at": now_iso(), "total": len(t.steps),
                        "iteration": label, "batch_id": batch, "config_json": c.model_dump_json(),
                        "data_json": json.dumps(masked_data(row, t.sensitive)), "sensitive_json": json.dumps(t.sensitive),
-                       "source_run": source_run, "parser": parser, "owner": owner})
+                       "source_run": source_run, "parser": parser, "owner": owner, "project": project})
+        hub.run_project[rid] = project
         secrets = {}
         for k in t.sensitive:
             try:
@@ -454,7 +503,11 @@ async def api_cancel(req: CancelRequest, request: Request):
         ids += [r["run_id"] for r in db.list_runs(1000, None, None) if r.get("batch_id") == req.batch_id]
     user = _user(request)
     out = {}
+    allowed = _projects_for(user)
     for rid in dict.fromkeys(ids):
+        if (db.run_project(rid) or "default") not in allowed:
+            out[rid] = "not found"
+            continue
         if not authmod.can_manage(user, (db.get_run(rid) or {}).get("owner")):
             out[rid] = "not yours (ask its owner or an admin)"
             continue
@@ -470,12 +523,12 @@ async def api_cancel_one(run_id: str, request: Request):
 
 @app.get("/api/runs")
 def api_runs(request: Request, limit: int = 200, status: Optional[str] = None, q: Optional[str] = None, mine: bool = False):
-    return db.list_runs(limit, status, q, owner=_owner_of(request) if mine else None)
+    return db.list_runs(limit, status, q, owner=_owner_of(request) if mine else None, project=_project(request))
 
 
 @app.get("/api/stats")
-def api_stats():
-    return db.stats()
+def api_stats(request: Request):
+    return db.stats(_project(request))
 
 
 @app.get("/api/runs/{run_id}")
@@ -560,8 +613,8 @@ def artifact(run_id: str, path: str):
 
 # --------------------------------------------------------------------- API: script library
 @app.get("/api/library")
-def library_list():
-    return db.lib_list()
+def library_list(request: Request):
+    return db.lib_list(_project(request))
 
 
 @app.post("/api/library/from-run")
@@ -570,7 +623,8 @@ def library_from_run(req: SaveScript, request: Request):
     if not src.exists():
         raise HTTPException(404)
     t = json.loads(src.read_text(encoding="utf-8"))
-    return db.lib_put(_slug(req.name or t["name"]), t, source_run=req.run_id, owner=_owner_of(request))
+    return db.lib_put(_slug(req.name or t["name"]), t, source_run=req.run_id, owner=_owner_of(request),
+                      project=db.run_project(req.run_id) or _project(request))
 
 
 @app.post("/api/library/upload")
@@ -581,13 +635,13 @@ async def library_upload(request: Request, file: UploadFile = File(...), name: O
         t = extract_spec(raw)
     except Exception as e:
         raise HTTPException(400, f"Unrecognised script: {e}")
-    return db.lib_put(_slug(name or t.name), json.loads(t.model_dump_json()), owner=_owner_of(request))
+    return db.lib_put(_slug(name or t.name), json.loads(t.model_dump_json()), owner=_owner_of(request), project=_project(request))
 
 
 @app.get("/api/library/{name}")
-def library_get(name: str):
+def library_get(name: str, request: Request):
     t = db.lib_get(name)
-    if t is None:
+    if t is None or (db.lib_meta(name) or {}).get("project", "default") not in _projects_for(_user(request)):
         raise HTTPException(404)
     return t
 
@@ -605,7 +659,7 @@ def library_delete(name: str, request: Request):
 def sessions_list(request: Request):
     u = _user(request)
     # saved logins hold cookies: each user sees their own (admins see all)
-    return db.session_list(None if not authmod.enabled() or u["role"] == "admin" else u["username"])
+    return db.session_list(None if not authmod.enabled() or u["role"] == "admin" else u["username"], project=_project(request))
 
 
 @app.post("/api/sessions/{name}")
@@ -616,7 +670,7 @@ async def sessions_upload(name: str, request: Request, file: UploadFile = File(.
         assert isinstance(state.get("cookies", []), list)
         if not authmod.can_manage(_user(request), db.session_owner(_slug(name))):
             raise PermissionError("that name belongs to someone else's saved session")
-        db.session_put(_slug(name), state, owner=_owner_of(request))
+        db.session_put(_slug(name), state, owner=_owner_of(request), project=_project(request))
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except Exception as e:
@@ -802,6 +856,47 @@ async def api_grid_delete(name: str):
     return {"deleted": name}
 
 
+class ProjectReq(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    members: Optional[list[str]] = None     # usernames; admins see every project anyway
+
+
+@app.get("/api/projects")
+def api_projects(request: Request):
+    allowed = _projects_for(_user(request))
+    out = [p for p in db.projects() if p["key"] in allowed]
+    if authmod.enabled() and _user(request).get("role") != "admin":
+        for p in out:
+            p.pop("members", None)
+    return out
+
+
+@app.put("/api/projects/{key}")
+def api_project_put(key: str, req: ProjectReq):
+    key = _slug(key)
+    old = db.project(key)
+    db.project_put(key, req.name or (old or {}).get("name") or key, req.description if req.description is not None else (old or {}).get("description"))
+    if req.members is not None and key != "default":
+        ids = []
+        for u in req.members:
+            row = db.user_get(username=u)
+            if not row:
+                raise HTTPException(400, f"No user '{u}'")
+            ids.append(row["id"])
+        db.project_members_set(key, ids)
+    return db.project(key)
+
+
+@app.delete("/api/projects/{key}")
+def api_project_delete(key: str):
+    if key == "default":
+        raise HTTPException(400, "The default project can't be deleted")
+    db.project_delete(key)
+    hub.run_project.clear()
+    return {"deleted": key, "moved_to": "default"}
+
+
 class TokenReq(BaseModel):
     label: str
 
@@ -944,7 +1039,7 @@ def _run_local_job(job: dict) -> None:
                  agent=job.get("machine") or LOCAL_NAME, run_id=job["run_id"], runner_out=holder)
         hub.emit_threadsafe({"type": "_finalize", "run_id": job["run_id"]})   # ordered after the run's events
         if cfg.save_session and holder and holder[0].saved_session:
-            db.session_put(cfg.save_session, holder[0].saved_session, owner=job.get("owner"))
+            db.session_put(cfg.save_session, holder[0].saved_session, owner=job.get("owner"), project=job.get("project"))
             hub.emit_threadsafe({"type": "session_saved", "name": cfg.save_session})
     except Exception as e:
         log.exception("local run failed")
@@ -990,7 +1085,7 @@ async def ws_agent(ws: WebSocket):
             elif msg.get("type") == "session":
                 try:
                     run = db.get_run(msg.get("run_id") or "") or {}
-                    db.session_put(_slug(msg["name"]), msg["state"], owner=run.get("owner"))
+                    db.session_put(_slug(msg["name"]), msg["state"], owner=run.get("owner"), project=run.get("project"))
                     await hub.broadcast({"type": "session_saved", "name": msg["name"]})
                 except Exception as e:
                     log.warning("could not save session from %s: %s", name, e)
