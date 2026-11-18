@@ -129,12 +129,19 @@ class SeleniumEngine(Engine):
             opts = webdriver.EdgeOptions() if kind == "edge" else webdriver.ChromeOptions()
             if c.headless:
                 opts.add_argument("--headless=new")
-            # HTTPS-First (Chrome 115+) turns plain http:// pages into an empty interstitial an automated
-            # browser can't click through; Playwright's Chromium launches with it off, so the same test works on both
+            # Chrome features that put browser UI over the page, which an automated browser can't dismiss
+            # (Playwright's Chromium launches with them off, so the same test behaves the same on both engines):
+            # - HTTPS-First turns plain http:// pages into an empty interstitial
+            # - the password leak check ("Change your password", after signing in with a known password such as a
+            #   demo site's) swallows every click on the next page
             for a in ("--no-sandbox", "--disable-dev-shm-usage", f"--window-size={c.viewport_width},{c.viewport_height}",
-                      "--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,HttpsFirstModeV2ForEngagedSites"):
+                      "--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,HttpsFirstModeV2ForEngagedSites,"
+                      "PasswordLeakDetection,PasswordCheck"):
                 opts.add_argument(a)
-            opts.add_experimental_option("prefs", {"https_only_mode_enabled": False, "https_upgrades_enabled": False})
+            prefs = {"https_only_mode_enabled": False, "https_upgrades_enabled": False, "profile.password_manager_leak_detection": False}
+            if not c.profile_dir:            # a real profile keeps its saved passwords; a fresh one offers no save bubble
+                prefs.update({"credentials_enable_service": False, "profile.password_manager_enabled": False})
+            opts.add_experimental_option("prefs", prefs)
             if c.user_agent:
                 opts.add_argument(f"--user-agent={c.user_agent}")
             if c.locale:

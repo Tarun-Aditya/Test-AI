@@ -285,7 +285,7 @@ class Runner:
                         if attr == "locator":
                             template.locator, template.fallbacks = verified[0], verified[1:4]
                         else:
-                            template.target_locator = verified[0]
+                            template.target_locator = _portable_first(verified)
                         return verified[0], bool(stored)
                 if problem and "match equally well" in problem:
                     break                    # a real tie: don't let a weaker source pick one of them silently
@@ -387,7 +387,7 @@ class Runner:
                     if attr == "locator":
                         template.locator, template.fallbacks = verified[0], verified[1:4]
                     else:
-                        template.target_locator = verified[0]
+                        template.target_locator = _portable_first(verified)
                     return verified[0], bool(stored)
         return None
 
@@ -495,6 +495,11 @@ class Runner:
         # "the first button named Button" does not
         positional = lambda l: l.strategy == "xpath" or "nth=" in (l.value or "") or ":nth-of-type" in (l.value or "") or ":nth-child" in (l.value or "")
         all_locs = [l for l in all_locs if not positional(l)] + [l for l in all_locs if positional(l)]
+        # a class or attribute carrying the step's own words ("the primary button" -> button.btn-primary) is the
+        # stable one; other unique classes may be shuffled by the page (class1 / class2 / class3)
+        words = [w for w in L._content_tokens(target or "") if len(w) > 3]
+        said = lambda l: l.strategy == "css" and any(w in (l.value or "").lower().replace("-", " ").replace("_", " ") for w in words)
+        all_locs = [l for l in all_locs if said(l)] + [l for l in all_locs if not said(l)]
         all_locs = self._count_tolerant(all_locs, target) + all_locs
         if hasattr(e, "verify_locators"):
             # one in-page check of every locator, then a native find_elements confirmation of the winners
@@ -722,6 +727,12 @@ _VERBS = {
     Action.ASSERT_VISIBLE: ("check visible", "visible"), Action.ASSERT_TEXT: ("check text", "text matches"),
     Action.ASSERT_NO_TEXT: ("check text absent", "text absent"),
 }
+
+
+def _portable_first(locs: list) -> "Locator":
+    """A drop target keeps one locator: take one Selenium can run too, so scripts and replays work on both engines."""
+    from .engines.selenium_engine import by_for
+    return next((l for l in locs if by_for(l, bool(l.shadow)) is not None), locs[0])
 
 
 def _number_in(target: str | None) -> int | None:

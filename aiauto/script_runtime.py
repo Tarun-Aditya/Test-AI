@@ -294,9 +294,14 @@ class Run:
             edge = kind == "edge"
             o = webdriver.EdgeOptions() if edge else webdriver.ChromeOptions()
             o.add_argument(f"--window-size={self.viewport[0]},{self.viewport[1]}")
-            # plain http:// pages: no HTTPS-First interstitial (Playwright's Chromium has it off too)
-            o.add_argument("--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,HttpsFirstModeV2ForEngagedSites")
-            o.add_experimental_option("prefs", {"https_only_mode_enabled": False, "https_upgrades_enabled": False})
+            # no browser UI over the page (Playwright's Chromium has these off too): HTTPS-First interstitial on
+            # http:// pages, and the password leak warning that swallows clicks after signing in with a known password
+            o.add_argument("--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,HttpsFirstModeV2ForEngagedSites,"
+                           "PasswordLeakDetection,PasswordCheck")
+            prefs = {"https_only_mode_enabled": False, "https_upgrades_enabled": False, "profile.password_manager_leak_detection": False}
+            if not os.getenv("CHROME_PROFILE_DIR"):
+                prefs.update({"credentials_enable_service": False, "profile.password_manager_enabled": False})
+            o.add_experimental_option("prefs", prefs)
             o.set_capability("unhandledPromptBehavior", "ignore")
             if self.headless:
                 o.add_argument("--headless=new")

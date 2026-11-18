@@ -126,6 +126,7 @@ JS_LIB = r"""
       testid: el.getAttribute('data-testid')||el.getAttribute('data-test')||el.getAttribute('data-qa')||'',
       editable: !!el.isContentEditable, role: el.getAttribute('role') || implicitRole(el),
       draggable: el.getAttribute('draggable')==='true',
+      cls: Array.from(el.classList||[]).filter(c => !dyn(c) && c.length < 40).slice(0, 8).join(' '),
       options: tag==='select' ? Array.from(el.options).slice(0,50).map(o=>norm(o.text)) : [],
       longtext: text.length > 300,
     };
@@ -149,6 +150,13 @@ JS_LIB = r"""
     if (i.aria_label) add('css', tag+'[aria-label="'+q(i.aria_label)+'"]');
     if (tag==='input' && i.value && ['submit','button','reset'].includes(i.type)) add('css', 'input[type="'+i.type+'"][value="'+q(i.value)+'"]');
     if (tag==='a' && i.href && i.href.length < 100 && !/[?&]|\d{5,}/.test(i.href)) add('css', 'a[href="'+q(el.getAttribute('href'))+'"]');
+    // single classes only this element has (which one is stable is decided later, against the step's words)
+    { const root = el.getRootNode(); let n = 0;
+      for (const cl of Array.from(el.classList||[])) {
+        if (n >= 4 || dyn(cl) || cl.length >= 40) continue;
+        const sel = tag + '.' + CSS.escape(cl);
+        try { if (root.querySelectorAll(sel).length === 1) { add('css', sel); n++; } } catch(e) {}
+      } }
     add('css', cssPathIn(el));
     if (!inShadow) add('xpath', xpathPath(el));
     return c;
@@ -372,11 +380,11 @@ def _action_fit(action: Action, c: dict) -> float:
 
 
 FIELD_WEIGHTS = {"testid": 1.0, "label": 1.0, "aria_label": 1.0, "name": 1.0, "placeholder": 0.95, "text": 0.95,
-                 "value": 0.9, "nameattr": 0.8, "id": 0.75, "title": 0.8, "alt": 0.8}
+                 "value": 0.9, "nameattr": 0.8, "id": 0.75, "title": 0.8, "alt": 0.8, "cls": 0.55}
 
 
 def _norm_attr(f: str, v: str) -> str:
-    return v.replace("_", " ").replace("-", " ") if f in ("nameattr", "id", "testid") else v
+    return v.replace("_", " ").replace("-", " ") if f in ("nameattr", "id", "testid", "cls") else v
 
 
 def score(step: Step, c: dict, target: str | None = None) -> float:
@@ -530,6 +538,11 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
     # unless the description has no specific words at all ("the textbox")
     specific = any(w not in STOP for w in _tokens(target))
     eligible = [c for c in ranked if not specific or c.get("_text_match", 0) > 0.25]
+    # "Click the primary button": text that merely mentions the words (a code sample, a caption) is not it.
+    # Only that kind of element, or something interactive, may win; else the engine looks further (DOM walk).
+    named = _role_kinds(target)
+    if named and step.action in ACTING:
+        eligible = [c for c in eligible if _kinds(c) & named or _interactive(c)]
     winner = eligible[0] if eligible and eligible[0]["score"] >= 1.0 else None
     if winner:
         winner["picked_by"] = "heuristic"
@@ -552,6 +565,17 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
         return None, ranked, (f"{len(rivals) + 1} different elements match equally well ({names}). "
                               "Say which one: e.g. 'the first …', 'the … in <section>', or use more of its text")
     return winner, ranked, None
+
+
+ACTING = {Action.CLICK, Action.DOUBLE_CLICK, Action.RIGHT_CLICK, Action.CHECK, Action.UNCHECK, Action.SELECT, Action.TYPE,
+          Action.APPEND, Action.UPLOAD}
+_INTERACTIVE_ROLES = {"button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "menuitemcheckbox", "menuitemradio",
+                      "option", "combobox", "listbox", "textbox", "searchbox", "spinbutton", "slider", "treeitem"}
+
+
+def _interactive(c: dict) -> bool:
+    return c["tag"] in ("button", "a", "input", "select", "textarea", "summary", "option") or (c.get("role") or "") in _INTERACTIVE_ROLES \
+        or bool(c.get("editable"))
 
 
 def describe(c: dict) -> str:
