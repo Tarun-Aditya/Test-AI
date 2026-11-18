@@ -1,8 +1,8 @@
-"""Claude-backed intent/value extraction and locator disambiguation.
+"""AI intent/value extraction, locator disambiguation and the screenshot fallback.
 
-Enabled when an Anthropic credential is available (ANTHROPIC_API_KEY, or a profile from
-`ant auth login`). Everything here degrades gracefully: callers fall back to the rule parser
-and heuristic locator scoring when the model is unavailable or declines.
+The model is reached through `providers`: your Claude / Cursor / Copilot subscription (their CLIs), an
+Anthropic API key, or any model via LiteLLM. Everything here degrades gracefully: callers fall back to the
+rule parser and heuristic locator scoring when no provider is available or the model declines.
 """
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ import os
 from typing import Any
 
 from ..models import Action, Step
+from . import providers
 
 log = logging.getLogger(__name__)
 
-MODEL = os.getenv("AIAUTO_MODEL", "claude-opus-5-5")
 EFFORT = os.getenv("AIAUTO_EFFORT", "low")   # parsing English into steps is a light task
 
 _ACTIONS = [a.value for a in Action]
@@ -103,76 +103,21 @@ PICK_SCHEMA = {
     "additionalProperties": False,
 }
 
-_client = None
-_disabled_reason: str | None = None
-
-
-def _get_client():
-    global _client, _disabled_reason
-    if _client is not None or _disabled_reason:
-        return _client
-    if os.getenv("AIAUTO_DISABLE_LLM"):
-        _disabled_reason = "disabled by AIAUTO_DISABLE_LLM"
-        return None
-    try:
-        import anthropic
-    except ImportError:
-        _disabled_reason = "anthropic package not installed"
-        return None
-    has_cred = any(os.getenv(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE")) or \
-        os.path.isdir(os.path.expanduser("~/.config/anthropic"))
-    if not has_cred:
-        _disabled_reason = "no Anthropic credentials found"
-        return None
-    _client = anthropic.Anthropic()
-    return _client
-
-
 def available() -> bool:
-    return _get_client() is not None
+    return providers.available()
 
 
 def status() -> str:
-    return f"enabled ({MODEL})" if available() else f"disabled: {_disabled_reason}"
+    return providers.status()
+
+
+def model_label() -> str:
+    a = providers.active()
+    return f"{a}:{providers.model_for(a) or 'default'}" if a else "none"
 
 
 def _structured_call(system: str, user: str, schema: dict, max_tokens: int = 16000) -> dict | None:
-    client = _get_client()
-    if client is None:
-        return None
-    import anthropic
-    try:
-        resp = client.beta.messages.create(
-            model=MODEL,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}},
-            # If the primary model declines, the API re-runs the request on a fallback model.
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-        )
-    except anthropic.AuthenticationError as e:
-        global _disabled_reason, _client
-        _disabled_reason, _client = f"authentication failed: {e}", None
-        log.warning("LLM disabled: %s", e)
-        return None
-    except anthropic.APIConnectionError as e:
-        log.warning("LLM unreachable, falling back to rules: %s", e)
-        return None
-    except anthropic.APIStatusError as e:
-        log.warning("LLM error %s, falling back to rules: %s", e.status_code, e)
-        return None
-    if resp.stop_reason in ("refusal", "max_tokens"):
-        log.warning("LLM stop_reason=%s, falling back to rules", resp.stop_reason)
-        return None
-    text = next((b.text for b in resp.content if b.type == "text"), None)
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
+    return providers.call_json(system, user, schema, max_tokens=max_tokens, effort=EFFORT)
 
 
 def parse_steps(text: str, data_keys: list[str] | None = None) -> tuple[str, list[Step]] | None:
@@ -216,34 +161,12 @@ VISUAL_SCHEMA = {
 
 
 def locate_visual(png: bytes, step: Step, width: int, height: int) -> dict | None:
-    """Claude looks at a screenshot and returns {found, x, y, reason} for the step's element (canvas fallback)."""
-    client = _get_client()
-    if client is None:
-        return None
-    import base64
-    import anthropic
-    content = [
-        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(png).decode()}},
-        {"type": "text", "text": f"Screenshot size: {width}x{height} pixels.\nStep: action={step.action.value} target={step.target!r} "
-                                 f"value={step.value!r}\nOriginal sentence: {step.raw!r}"},
-    ]
-    try:
-        resp = client.beta.messages.create(
-            model=MODEL, max_tokens=4000, system=VISUAL_SYSTEM, messages=[{"role": "user", "content": content}],
-            output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": VISUAL_SCHEMA}},
-            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-        )
-    except anthropic.APIError as e:
-        log.warning("visual locate failed: %s", e)
-        return None
-    if resp.stop_reason in ("refusal", "max_tokens"):
-        return None
-    text = next((b.text for b in resp.content if b.type == "text"), None)
-    try:
-        out = json.loads(text) if text else None
-    except json.JSONDecodeError:
-        return None
-    if not out or not out.get("found") or not (0 <= out["x"] < width and 0 <= out["y"] < height):
+    """The model looks at a screenshot and returns {found, x, y, reason} for the step's element (canvas fallback)."""
+    user = (f"Screenshot size: {width}x{height} pixels.\nStep: action={step.action.value} target={step.target!r} "
+            f"value={step.value!r}\nOriginal sentence: {step.raw!r}")
+    out = providers.call_json(VISUAL_SYSTEM, user, VISUAL_SCHEMA, image_png=png, max_tokens=4000, effort=EFFORT)
+    if not out or not out.get("found") or not isinstance(out.get("x"), int) or not isinstance(out.get("y"), int) \
+            or not (0 <= out["x"] < width and 0 <= out["y"] < height):
         return None
     return out
 

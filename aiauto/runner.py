@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import traceback
 import uuid
@@ -50,6 +51,7 @@ class Runner:
         self.saved_session: dict | None = None
         self._picked: str | None = None
         self.timings: dict[str, list[float]] = {}
+        self.cancel = threading.Event()          # set from another thread to stop after the current step
 
     # ---------------------------------------------------------------- public
     def run(self) -> RunSummary:
@@ -58,7 +60,7 @@ class Runner:
                              status=StepStatus.PASSED, started_at=_now(), agent=self.agent, mode=self.mode)
         resolved_steps: list[Step] = [s.model_copy(deep=True) for s in self.test.steps]
         self._emit("run_started", total=len(resolved_steps), test=self.test.title or self.test.name, engine=self.config.engine)
-        failed = False
+        failed = cancelled = False
         try:
             self.engine = make_engine(self.config, self.run_dir)
             if self._listening:
@@ -66,11 +68,18 @@ class Runner:
             self.engine.start()
             self.engine.live_tick(force=True)
             for i, template_step in enumerate(resolved_steps):
-                if failed and not template_step.optional:
+                if self.cancel.is_set():
+                    cancelled = True
+                    res = StepResult(index=i, step=template_step, status=StepStatus.SKIPPED, error="Cancelled by user")
+                elif failed and not template_step.optional:
                     res = StepResult(index=i, step=template_step, status=StepStatus.SKIPPED)
                 else:
                     res = self._run_step(i, template_step)
-                    if res.status == StepStatus.FAILED and not template_step.optional:
+                    if self.cancel.is_set():          # stopped during this step (e.g. a wait or a manual pause)
+                        cancelled = True
+                        if template_step.action in (Action.WAIT, Action.PAUSE) or res.status == StepStatus.FAILED:
+                            res.status, res.error = StepStatus.SKIPPED, "Cancelled by user"
+                    elif res.status == StepStatus.FAILED and not template_step.optional:
                         failed = True
                 summary.results.append(res)
                 self._emit("step_finished", index=i, status=res.status.value, error=res.error, healed=res.healed,
@@ -78,7 +87,7 @@ class Runner:
                            locator=template_step.locator.label() if template_step.locator else None,
                            parsed_by=template_step.source, picked_by=res.picked_by, origin=self.mask(template_step.origin),
                            url=res.url, duration_ms=res.duration_ms, dialog=res.dialog, locate_ms=res.locate_ms)
-            if self.config.save_session and not failed:
+            if self.config.save_session and not failed and not cancelled:
                 self.saved_session = self.engine.storage_state()
                 summary.session_saved = self.config.save_session if self.saved_session else None
         except Exception as e:  # browser failed to start etc.
@@ -93,7 +102,7 @@ class Runner:
                 except Exception as e:
                     log.warning("engine stop failed: %s", e)
 
-        summary.status = StepStatus.FAILED if failed else StepStatus.PASSED
+        summary.status = StepStatus.CANCELLED if cancelled else StepStatus.FAILED if failed else StepStatus.PASSED
         summary.finished_at = _now()
         summary.duration_ms = int((time.time() - started) * 1000)
         summary.healed_steps = sum(1 for r in summary.results if r.healed)
@@ -170,13 +179,22 @@ class Runner:
         if self.config.screenshot_each_step or res.status == StepStatus.FAILED:
             shot = self.run_dir / "screenshots" / f"step_{i + 1:02d}.png"
             try:
-                e.screenshot(shot, full_page=self.config.full_page_screenshots)
+                for attempt in range(4):      # an action that navigates can leave the page mid-load: wait and retry
+                    try:
+                        e.screenshot(shot, full_page=self.config.full_page_screenshots)
+                        break
+                    except Exception as ex:
+                        if attempt == 3:
+                            raise
+                        log.debug("screenshot retry %d: %s", attempt + 1, ex)
+                        time.sleep(0.4)
+                        e.wait_for_load()
                 res.screenshot = f"screenshots/{shot.name}"
                 if self.config.live_view and self._listening:
                     import base64
                     self._emit("step_shot", index=i, mime="image/png", image=base64.b64encode(shot.read_bytes()).decode())
-            except Exception:
-                pass
+            except Exception as ex:
+                log.warning("step %d: no screenshot (%s)", i + 1, _short_error(ex))
         if loc is not None:
             e.clear_box(loc)       # never left on the page for the next step
         return res
@@ -592,14 +610,14 @@ class Runner:
         elif a == Action.WAIT:
             if not loc:
                 end = time.time() + float(v or 1)
-                while time.time() < end:
+                while time.time() < end and not self.cancel.is_set():
                     e.live_tick()
                     time.sleep(min(0.3, max(0.0, end - time.time())))
         elif a == Action.PAUSE:
             secs = float(v or 30)
             self._emit("paused", seconds=secs, message="Complete the manual step (e.g. SSO / MFA login) in the browser")
             end = time.time() + secs
-            while time.time() < end:
+            while time.time() < end and not self.cancel.is_set():
                 time.sleep(0.5)
                 e.frame()
                 e.live_tick()
@@ -648,13 +666,13 @@ class Runner:
         safe_data = masked_data(self.test.data, self.test.sensitive)
         resolved = self.test.model_copy(update={"steps": resolved_steps, "data": safe_data, "engine": self.config.engine})
         d = self.run_dir
-        (d / "script.json").write_text(resolved.model_dump_json(indent=2))
+        (d / "script.json").write_text(resolved.model_dump_json(indent=2), encoding="utf-8")
         cfg = self.config.model_dump()
-        (d / "test_playwright.py").write_text(scriptgen.playwright_script(resolved, cfg))
-        (d / "test_selenium.py").write_text(scriptgen.selenium_script(resolved, cfg))
+        (d / "test_playwright.py").write_text(scriptgen.playwright_script(resolved, cfg), encoding="utf-8")
+        (d / "test_selenium.py").write_text(scriptgen.selenium_script(resolved, cfg), encoding="utf-8")
         # the standalone runtime the scripts use (report, video, screenshots, highlight) - no dependency on this tool
-        (d / "autopilot_runtime.py").write_text(Path(__file__).with_name("script_runtime.py").read_text())
-        (d / "data.json").write_text(json.dumps(safe_data, indent=2))
+        (d / "autopilot_runtime.py").write_text(Path(__file__).with_name("script_runtime.py").read_text(), encoding="utf-8")
+        (d / "data.json").write_text(json.dumps(safe_data, indent=2), encoding="utf-8")
         summary.artifacts = {
             "report": "report.html", "script": "script.json", "playwright": "test_playwright.py",
             "selenium": "test_selenium.py", "data": "data.json", "summary": "summary.json",
@@ -662,7 +680,7 @@ class Runner:
         if summary.video:
             summary.artifacts["video"] = summary.video
         # mask values, not the JSON text: a secret "2" must not turn "index": 2 into invalid JSON
-        (d / "summary.json").write_text(json.dumps(self.mask.deep(summary.model_dump(mode="json")), indent=2))
+        (d / "summary.json").write_text(json.dumps(self.mask.deep(summary.model_dump(mode="json")), indent=2), encoding="utf-8")
         (d / "report.html").write_text(report.render(summary, resolved, d, self.mask), encoding="utf-8")
 
     def _emit(self, kind: str, **kw) -> None:
@@ -716,4 +734,4 @@ def run_test(test: TestCase, config: RunConfig, artifacts_root: str | Path = "ar
 
 
 def load_script(path: str | Path) -> TestCase:
-    return TestCase.model_validate_json(Path(path).read_text())
+    return TestCase.model_validate_json(Path(path).read_text(encoding="utf-8"))

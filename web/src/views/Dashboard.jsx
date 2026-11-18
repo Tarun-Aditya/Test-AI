@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ago, art, isLive, secs } from "../api.js";
+import { ago, api, art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
 
@@ -35,6 +35,24 @@ export function Prov({ parsed, picked }) {
     {parsed && <span className={"prov " + (parsed === "ai" ? "ai" : "")} title="Who turned the English into this step">step: {P[parsed] || parsed}</span>}
     {picked && <span className={"prov " + (picked === "ai" || picked === "ai-vision" ? "ai" : "")} title="How the element was identified">element: {K[picked] || picked}</span>}
   </>;
+}
+
+/** Stop queued / running runs: queued ones never start, running ones stop after their current step. */
+export function StopButton({ ids, label = "Stop", className = "", all }) {
+  const { toast, loadRuns } = useApp();
+  const [busy, setBusy] = useState(false);
+  const go = async (e) => {
+    e.stopPropagation();
+    if (all && !window.confirm(`Stop ${ids.length} run${ids.length > 1 ? "s" : ""}?`)) return;
+    setBusy(true);
+    try {
+      const r = await api("/api/runs/cancel", { method: "POST", body: { run_ids: ids } });
+      const n = Object.values(r.cancelled).filter((v) => v !== "not running").length;
+      toast(n ? `Stopping ${n} run${n > 1 ? "s" : ""}` : "Nothing to stop");
+      loadRuns();
+    } catch (err) { toast(err.message, true); } finally { setBusy(false); }
+  };
+  return <button className={"stop " + className} disabled={busy || !ids.length} onClick={go} title="Queued runs are removed; running ones stop after the current step and keep their report">■ {label}</button>;
 }
 
 export function Status({ s }) {
@@ -87,7 +105,8 @@ export default function Dashboard() {
         <div className="kpi trend-card"><div className="l">Last 14 days</div><Trend trend={stats?.trend || []} /></div>
       </div>
 
-      <div className="sec-h"><h3>Running now</h3><span className="mut">{live.length ? `${live.length} in progress` : ""}</span></div>
+      <div className="sec-h"><h3>Running now</h3><span className="mut">{live.length ? `${live.length} in progress` : ""}</span>
+        <span className="spacer" />{live.length > 1 && <StopButton ids={live.map((r) => r.run_id)} label="Stop all" all className="btn sm" />}</div>
       <div className="panel"><div className="panel-b" style={{ paddingTop: 4, paddingBottom: 4 }}>
         {live.length ? live.map((r) => (
           <div className="running-row" key={r.run_id}>
@@ -96,13 +115,13 @@ export default function Dashboard() {
               <div className="mut ellipsis" style={{ marginTop: 4 }}>{r.engine}{r.browser ? ` · ${r.browser}` : ""} · {r.agent} · {r.current_step ? `▶ ${r.current_step}` : "starting…"}</div>
             </div>
             <div><StepBar r={r} /><div className="mut" style={{ marginTop: 4 }}>{r.done || 0} / {r.total} steps{r.failed_steps ? <span style={{ color: "var(--bad)" }}> · {r.failed_steps} failed</span> : null}</div></div>
-            <div className="links"><button onClick={() => nav("studio", r.run_id)}><span className="dot-live" /> Watch live</button></div>
+            <div className="links"><button onClick={() => nav("studio", r.run_id)}><span className="dot-live" /> Watch live</button><StopButton ids={[r.run_id]} /></div>
           </div>
         )) : <div className="empty-state" style={{ padding: 18 }}>Nothing running. <a href="#/studio">Start a test</a></div>}
       </div></div>
 
       <div className="sec-h"><h3>Recent runs</h3><span className="mut">{done.length} total, kept across restarts</span><span className="spacer" />
-        <div className="seg">{[["", "All"], ["passed", "Passed"], ["failed", "Failed"], ["interrupted", "Interrupted"]].map(([k, l]) =>
+        <div className="seg">{[["", "All"], ["passed", "Passed"], ["failed", "Failed"], ["cancelled", "Stopped"], ["interrupted", "Interrupted"]].map(([k, l]) =>
           <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{l}</button>)}</div>
         <button className="btn sm" onClick={() => nav("runs")}>Table view</button></div>
       <div className="legend">

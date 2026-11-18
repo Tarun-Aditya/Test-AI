@@ -50,6 +50,12 @@ class PlaywrightEngine(Engine):
             ctx.update(record_video_dir=str(self.run_dir / "_video"), record_video_size=vp)
 
         def open_ctx(opts):
+            if c.remote_url:     # a browser running somewhere else (browser server / cloud grid / DevTools endpoint)
+                u = c.remote_url
+                self._browser = btype.connect(u) if u.startswith(("ws://", "wss://")) else self._pw.chromium.connect_over_cdp(u)
+                if c.session_state:
+                    opts = {**opts, "storage_state": c.session_state}
+                return self._browser.new_context(**opts)
             if c.profile_dir:   # real Chrome profile: saved passwords, SSO cookies, extensions
                 args = list(launch.get("args", []))
                 if c.profile_name:

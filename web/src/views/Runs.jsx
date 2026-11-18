@@ -2,7 +2,7 @@ import { useState } from "react";
 import { art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
-import { ModeBadge, Status, StepBar } from "./Dashboard.jsx";
+import { ModeBadge, Status, StepBar, StopButton } from "./Dashboard.jsx";
 
 export default function Runs() {
   const { runs, openRun, nav, loadRuns } = useApp();
@@ -35,7 +35,7 @@ export default function Runs() {
                 <td><StepBar r={r} /><div className="mut" style={{ marginTop: 3 }}>{isLive(r) ? `${r.done || 0}/${r.total}` : `${r.passed_steps}/${r.total} passed`}</div></td>
                 <td className="mono">{secs(r.duration_ms)}</td>
                 <td onClick={(e) => e.stopPropagation()}><div className="links" style={{ flexWrap: "nowrap" }}>
-                  {isLive(r) ? <button onClick={() => nav("studio", r.run_id)}>● Watch</button> : <>
+                  {isLive(r) ? <><button onClick={() => nav("studio", r.run_id)}>● Watch</button><StopButton ids={[r.run_id]} /></> : <>
                     <a href={art(r.run_id, "report.html")} target="_blank" rel="noreferrer">Report</a>
                     {r.video && <button onClick={() => openRun(r.run_id, "video")}>Video</button>}
                     <button onClick={() => openRun(r.run_id, "code")}>Code</button>

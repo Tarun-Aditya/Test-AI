@@ -113,7 +113,7 @@ def main(argv=None):
 
     if a.cmd in ("run", "parse"):
         from .nlp.parser import parse_text
-        text = Path(a.file).read_text() if a.file else (a.text or sys.stdin.read())
+        text = Path(a.file).read_text(encoding="utf-8") if a.file else (a.text or sys.stdin.read())
         data = load_data(getattr(a, "data", None))
         test, info = parse_text(text, data, name=getattr(a, "name", None), use_llm=not a.no_llm,
                                 sensitive=getattr(a, "sensitive", []))

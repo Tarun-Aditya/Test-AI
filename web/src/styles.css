@@ -327,3 +327,14 @@ pre.code:not(:has(.ln)){padding:12px 14px;white-space:pre-wrap}
 .mpick-spread{border-top:1px solid var(--line);margin-top:6px;padding:10px 8px 4px;display:flex;flex-direction:column;gap:6px}
 .mpick-spread small,.mpick-foot{color:var(--mut);font-size:12px}
 .mpick-foot{padding:8px 8px 2px}
+
+/* stop */
+button.stop{color:var(--bad)}
+.links button.stop{background:none;border:0;font:inherit;cursor:pointer;padding:0 6px}
+.btn.stop{border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
+.status.cancelled{color:var(--mut)}
+/* settings: provider list */
+.prov-list{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:10px;padding:4px}
+.field .prov-list input[type=radio]{width:16px;height:16px;flex:none;margin:0;padding:0;border:0;background:none;box-shadow:none;accent-color:var(--acc)}
+.prov-list .mrow{align-items:center}
+.prov-list .mrow small{white-space:normal}

@@ -24,7 +24,7 @@ def parse_text(text: str, data: dict | None = None, name: str | None = None, use
         if result and result[1]:
             test_name = test_name or result[0]
             steps = result[1]
-            info["parser"] = f"llm:{llm.MODEL}"
+            info["parser"] = f"llm:{llm.model_label()}"
 
     if not steps:
         steps, unparsed = rules.parse(text)

@@ -1,0 +1,43 @@
+# Real Windows and macOS (and Linux) machines: every engine x browser the runner has, the generated scripts,
+# headed mode, remote agents with parallel slots, and cancel.
+#   Windows: Chromium, Chrome, Edge, Firefox (Playwright + Selenium), WebKit (Playwright)
+#   macOS:   the same plus Safari through Selenium (safaridriver)
+name: cross-platform browsers
+on:
+  push:
+    paths: ["aiauto/**", "tests/**", "requirements.txt", ".github/workflows/cross-platform.yml"]
+  workflow_dispatch:
+
+jobs:
+  browsers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -r requirements.txt pytest
+      - name: Playwright browsers
+        if: runner.os != 'Linux'
+        run: python -m playwright install chromium firefox webkit
+      - name: Playwright browsers (with system libraries)
+        if: runner.os == 'Linux'
+        run: python -m playwright install --with-deps chromium firefox webkit
+      - name: Enable Safari WebDriver
+        if: runner.os == 'macOS'
+        run: sudo safaridriver --enable
+      - name: Browser matrix (engine x browser, generated scripts, headed)
+        run: python -m pytest -q tests/test_browsers.py -rs
+      - name: Remote agents, parallel slots, grids, cancel
+        run: python -m pytest -q tests/test_agent.py -rs
+      - name: Unit tests
+        run: python -m pytest -q tests/test_parsing.py tests/test_llm.py -rs

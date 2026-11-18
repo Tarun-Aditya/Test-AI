@@ -160,7 +160,8 @@ export default function RunDrawer({ id, tab: initialTab, onClose }) {
         {TABS.map(([k, l]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
       </div>
       <div className={"drawer-b" + (tab === "code" ? " flush" : "")}>
-        {!r ? <div className="empty-state">Loading…</div> : isLive(r) ? <div className="empty-state">This run is still in progress. <a href={`#/studio/${encodeURIComponent(r.run_id)}`} onClick={onClose}>Watch it live</a></div> : <>
+        {!r ? <div className="empty-state">Loading…</div> : isLive(r) ? <div className="empty-state">This run is still in progress. <a href={`#/studio/${encodeURIComponent(r.run_id)}`} onClick={onClose}>Watch it live</a>
+          {" "}or <StopButton ids={[r.run_id]} label="Stop it" className="btn sm" /></div> : <>
           {tab === "overview" && <Overview r={r} />}
           {tab === "code" && <CodeExplorer runId={r.run_id} />}
           {tab === "video" && (r.video ? <video controls autoPlay muted src={art(r.run_id, r.video)} /> : <div className="empty-state">No video was recorded for this run.</div>)}

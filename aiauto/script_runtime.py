@@ -12,7 +12,7 @@ It gives a plain script the same output as a run in the tool:
 
 No AI and no self-healing: a script either passes or fails.
 
-Environment overrides: BROWSER, HEADLESS=1|0, NO_VIDEO=1, STEP_TIMEOUT (ms), RESULTS_DIR, STORAGE_STATE,
+Environment overrides: BROWSER, REMOTE_URL + REMOTE_CAPS (grid / cloud browser), HEADLESS=1|0, NO_VIDEO=1, STEP_TIMEOUT (ms), RESULTS_DIR, STORAGE_STATE,
 CHROME_PROFILE_DIR, CHROME_PROFILE_NAME, HIGHLIGHT=0, AIAUTO_CHROME_BINARY, AIAUTO_CHROMEDRIVER.
 """
 from __future__ import annotations
@@ -88,6 +88,62 @@ def _env_bool(name, default):
 
 def _slug(s):
     return re.sub(r"[^a-z0-9]+", "-", (s or "test").lower()).strip("-")[:50] or "test"
+
+
+def selenium_browser(name):
+    """Which browser binary and driver Selenium uses for a browser name: (kind, binary or None, driver or None).
+    chromium -> AIAUTO_CHROME_BINARY (Playwright's Chromium) + AIAUTO_CHROMEDRIVER; chrome -> Google Chrome (falls
+    back to that Chromium when Chrome is not installed); msedge -> Edge + AIAUTO_EDGEDRIVER; firefox -> Firefox
+    (AIAUTO_FIREFOX_BINARY) + AIAUTO_GECKODRIVER. Unset drivers are resolved by Selenium Manager."""
+    name = (name or "chrome").lower()
+    if name == "safari":
+        if sys.platform != "darwin":
+            raise RuntimeError("Safari runs only on a Mac (for its engine elsewhere use Playwright WebKit)")
+        return "safari", None, None
+    if name == "webkit":
+        if sys.platform == "darwin":
+            return "safari", None, None      # Selenium's WebKit on a Mac is Safari
+        raise RuntimeError("WebKit runs only with Playwright here (Selenium can drive Safari only on a Mac)")
+    if name == "firefox":
+        return "firefox", os.getenv("AIAUTO_FIREFOX_BINARY"), os.getenv("AIAUTO_GECKODRIVER")
+    if name in ("msedge", "edge"):
+        return "edge", os.getenv("AIAUTO_EDGE_BINARY"), os.getenv("AIAUTO_EDGEDRIVER")
+    chromium = os.getenv("AIAUTO_CHROME_BINARY")
+    chromium = chromium if chromium and os.path.exists(chromium) else None
+    real = os.getenv("AIAUTO_GOOGLE_CHROME") or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+    if name == "chromium" or (name == "chrome" and chromium and not real):
+        return "chrome", chromium, os.getenv("AIAUTO_CHROMEDRIVER")
+    return "chrome", real if os.getenv("AIAUTO_GOOGLE_CHROME") else None, os.getenv("AIAUTO_GOOGLE_CHROMEDRIVER")
+
+
+_SM_CACHE = {}
+
+
+def _matching_driver(kind, binary):
+    """Selenium Manager's driver for this browser, ignoring any (possibly outdated) driver on PATH."""
+    key = (kind, binary)
+    if key not in _SM_CACHE:
+        try:
+            from selenium.webdriver.common.selenium_manager import SeleniumManager
+            args = ["--browser", {"chrome": "chrome", "edge": "MicrosoftEdge", "firefox": "firefox"}[kind], "--skip-driver-in-path"]
+            if binary:
+                args += ["--browser-path", binary]
+            _SM_CACHE[key] = SeleniumManager().binary_paths(args).get("driver_path")
+        except Exception:
+            _SM_CACHE[key] = None        # let Selenium resolve it the usual way
+    return _SM_CACHE[key]
+
+
+def selenium_service(kind, driver, binary=None):
+    if kind == "safari":
+        return None                      # safaridriver ships with macOS
+    driver = driver or _matching_driver(kind, binary)
+    if not driver:
+        return None
+    from selenium.webdriver.chrome.service import Service as ChromeService
+    from selenium.webdriver.edge.service import Service as EdgeService
+    from selenium.webdriver.firefox.service import Service as FirefoxService
+    return {"chrome": ChromeService, "edge": EdgeService, "firefox": FirefoxService}[kind](driver)
 
 
 class StepSkipped(Exception):
@@ -171,7 +227,11 @@ class Run:
                 args = [f"--profile-directory={os.environ['CHROME_PROFILE_NAME']}"] if os.getenv("CHROME_PROFILE_NAME") else []
                 self._browser = None
                 return bt.launch_persistent_context(os.environ["CHROME_PROFILE_DIR"], **launch, args=args, **o)
-            self._browser = bt.launch(**launch)
+            remote = os.getenv("REMOTE_URL")      # Playwright browser server (ws://) or DevTools endpoint (http://)
+            if remote:
+                self._browser = bt.connect(remote) if remote.startswith(("ws://", "wss://")) else self._pw.chromium.connect_over_cdp(remote)
+            else:
+                self._browser = bt.launch(**launch)
             if os.getenv("STORAGE_STATE"):
                 o = {**o, "storage_state": os.environ["STORAGE_STATE"]}
             return self._browser.new_context(**o)
@@ -195,39 +255,57 @@ class Run:
         self.ctx.set_default_timeout(self.timeout_ms)
         self.ctx.on("page", lambda p: setattr(self, "_page", p))
 
+    def _remote(self, o):
+        """Selenium Grid / BrowserStack / Sauce Labs / LambdaTest: REMOTE_URL + REMOTE_CAPS (JSON capabilities)."""
+        from selenium import webdriver
+        for k, v in json.loads(os.getenv("REMOTE_CAPS") or "{}").items():
+            o.set_capability(k, v)
+        return webdriver.Remote(command_executor=os.environ["REMOTE_URL"], options=o)
+
     def _start_selenium(self):
         from selenium import webdriver
         b = self.browser_name
-        if b == "firefox":
+        if os.getenv("REMOTE_URL") and b in ("safari", "webkit"):
+            kind, binary, driver = "safari", None, None
+        else:
+            kind, binary, driver = selenium_browser(b)
+        service = None if os.getenv("REMOTE_URL") else selenium_service(kind, driver, binary)
+        if kind == "safari":
+            self.driver = self._remote(webdriver.SafariOptions()) if os.getenv("REMOTE_URL") else webdriver.Safari()
+        elif kind == "firefox":
             o = webdriver.FirefoxOptions()
             if self.headless:
                 o.add_argument("-headless")
+            if binary:
+                o.binary_location = binary
             o.set_capability("unhandledPromptBehavior", "ignore")
-            self.driver = webdriver.Firefox(options=o)
+            if os.getenv("REMOTE_URL"):
+                self.driver = self._remote(o)
+            else:
+                self.driver = webdriver.Firefox(options=o, service=service) if service else webdriver.Firefox(options=o)
         else:
-            edge = b in ("msedge", "edge")
+            edge = kind == "edge"
             o = webdriver.EdgeOptions() if edge else webdriver.ChromeOptions()
             o.add_argument(f"--window-size={self.viewport[0]},{self.viewport[1]}")
             o.set_capability("unhandledPromptBehavior", "ignore")
             if self.headless:
                 o.add_argument("--headless=new")
                 o.add_argument("--no-sandbox")
-            if os.getenv("AIAUTO_CHROME_BINARY") and not edge:
-                o.binary_location = os.environ["AIAUTO_CHROME_BINARY"]
+            if binary:
+                o.binary_location = binary
             if os.getenv("CHROME_PROFILE_DIR"):
                 o.add_argument("--user-data-dir=" + os.environ["CHROME_PROFILE_DIR"])
                 if os.getenv("CHROME_PROFILE_NAME"):
                     o.add_argument("--profile-directory=" + os.environ["CHROME_PROFILE_NAME"])
-            service = None
-            if os.getenv("AIAUTO_CHROMEDRIVER") and not edge:
-                from selenium.webdriver.chrome.service import Service
-                service = Service(os.environ["AIAUTO_CHROMEDRIVER"])
             cls = webdriver.Edge if edge else webdriver.Chrome
-            self.driver = cls(options=o, service=service) if service else cls(options=o)
+            if os.getenv("REMOTE_URL"):
+                self.driver = self._remote(o)
+            else:
+                self.driver = cls(options=o, service=service) if service else cls(options=o)
             try:
                 self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": OPEN_SHADOW_JS})
                 if os.getenv("STORAGE_STATE"):
-                    state = json.loads(Path(os.environ["STORAGE_STATE"]).read_text())
+                    state = json.loads(Path(os.environ["STORAGE_STATE"]).read_text(encoding="utf-8"))
                     self.driver.execute_cdp_cmd("Network.setCookies", {"cookies": [
                         {k: c[k] for k in ("name", "value", "domain", "path", "secure", "httpOnly") if k in c} for c in state.get("cookies", [])]})
             except Exception:
@@ -303,7 +381,7 @@ class Run:
             nxt = frames[i + 1][0] if i + 1 < len(frames) else t + 1.5
             lines.append(f"file '{p.name}'\nduration {max(0.05, min(nxt - t, 5)):.3f}")
         lines.append(f"file '{frames[-1][1].name}'")
-        lst.write_text("\n".join(lines))
+        lst.write_text("\n".join(lines), encoding="utf-8")
         out = self.dir / "video.webm"
         vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12"
         for codec in (["-c:v", "libvpx-vp9", "-b:v", "1M", "-deadline", "realtime", "-cpu-used", "8"], ["-c:v", "libx264", "-pix_fmt", "yuv420p"]):
@@ -441,16 +519,23 @@ class Run:
                 raise
         finally:
             rec["ms"] = int((time.time() - t0) * 1000)
-            try:
-                shot = self.dir / "shots" / f"step_{n:02d}.png"
-                if self.engine == "playwright":
-                    self._page.screenshot(path=str(shot))
-                else:
-                    self.driver.switch_to.default_content()
-                    self.driver.save_screenshot(str(shot))
-                rec["shot"] = f"shots/{shot.name}"
-            except Exception:
-                pass
+            shot = self.dir / "shots" / f"step_{n:02d}.png"
+            for attempt in range(4):        # a step that navigates can leave the page mid-load: wait and retry
+                try:
+                    if self.engine == "playwright":
+                        self._page.screenshot(path=str(shot))
+                    else:
+                        self.driver.switch_to.default_content()
+                        self.driver.save_screenshot(str(shot))
+                    rec["shot"] = f"shots/{shot.name}"
+                    break
+                except Exception:
+                    time.sleep(0.4)
+                    if self.engine == "playwright":
+                        try:
+                            self._page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
             self.clear_box()
             try:
                 rec["url"] = self._m(self._page.url if self.engine == "playwright" else self.driver.current_url)
@@ -466,7 +551,7 @@ class Run:
                    "started_at": datetime.fromtimestamp(self.started or time.time(), timezone.utc).isoformat(timespec="seconds"),
                    "finished_at": finished, "duration_ms": dur, "video": video,
                    "steps": [{k: v for k, v in r.items() if k != "trace"} for r in self.results]}
-        (self.dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        (self.dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         self._junit(summary)
         (self.dir / "report.html").write_text(self._report(summary, video), encoding="utf-8")
 

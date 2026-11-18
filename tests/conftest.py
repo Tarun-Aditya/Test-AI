@@ -10,6 +10,35 @@ import pytest
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "live_ai: calls a real AI provider (your subscription / key); run with --live-ai")
+
+
+def pytest_addoption(parser):
+    parser.addoption("--live-ai", action="store_true", help="run tests that call a real AI provider")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--live-ai"):
+        return
+    skip = pytest.mark.skip(reason="needs --live-ai (calls a real AI provider)")
+    for item in items:
+        if "live_ai" in item.keywords:
+            item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ai(request, monkeypatch):
+    """Tests never reach a real AI provider (a logged-in CLI or a key on the machine) unless marked live_ai;
+    tests of the AI path inject a fake provider instead."""
+    from aiauto.nlp import providers
+    providers.configure(None)
+    if "live_ai" not in request.keywords:
+        monkeypatch.setenv("AIAUTO_DISABLE_LLM", "1")
+    yield
+    providers.configure(None)
+
+
 @pytest.fixture
 def demo_page(tmp_path):
     """Copy of the demo app in a temp dir (so tests can mutate it)."""
@@ -47,10 +76,3 @@ def xorigin_url():
     yield url
     srv.shutdown()
 
-
-@pytest.fixture(autouse=True)
-def no_llm(monkeypatch):
-    monkeypatch.setenv("AIAUTO_DISABLE_LLM", "1")
-    from aiauto.nlp import llm
-    monkeypatch.setattr(llm, "_client", None)
-    monkeypatch.setattr(llm, "_disabled_reason", None)

@@ -59,8 +59,8 @@ def load_env(path):
 
 
 def main():
-    cfg = json.loads((ROOT / "config.json").read_text())
-    its = json.loads((ROOT / "iterations.json").read_text())
+    cfg = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    its = json.loads((ROOT / "iterations.json").read_text(encoding="utf-8"))
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--engine", choices=["playwright", "selenium"])
     ap.add_argument("--browser")
@@ -201,7 +201,7 @@ def build_project(artifacts: Path, run: dict, members: list[dict]) -> tuple[str,
     pdir = artifacts / primary["run_id"]
     if not (pdir / "test_playwright.py").exists():
         raise FileNotFoundError("This run has no generated scripts yet (still running, or its machine never uploaded artifacts)")
-    script = json.loads((pdir / "script.json").read_text())
+    script = json.loads((pdir / "script.json").read_text(encoding="utf-8"))
     base_name = re.sub(r"\s*\[#\d+.*?\]$", "", script.get("name") or run.get("test_name") or "test")
     name = _slug(base_name)
     cfg = json.loads(primary.get("config_json") or "{}")
@@ -215,7 +215,7 @@ def build_project(artifacts: Path, run: dict, members: list[dict]) -> tuple[str,
     for n, m in enumerate(members, 1):
         mdir = artifacts / m["run_id"]
         data = json.loads(m["data_json"]) if m.get("data_json") else (
-            json.loads((mdir / "data.json").read_text()) if (mdir / "data.json").exists() else {})
+            json.loads((mdir / "data.json").read_text(encoding="utf-8")) if (mdir / "data.json").exists() else {})
         sensitive |= set(json.loads(m.get("sensitive_json") or "[]"))
         mcfg = json.loads(m.get("config_json") or "{}")
         path = f"data/iteration_{n}.json"
@@ -243,10 +243,10 @@ def build_project(artifacts: Path, run: dict, members: list[dict]) -> tuple[str,
         "run.sh": "#!/usr/bin/env bash\nset -e\ncd \"$(dirname \"$0\")\"\npython3 run.py \"$@\"\n",
         "run.bat": "@echo off\ncd /d %~dp0\npython run.py %*\n",
         ".gitignore": ".env\nresults/\nvideos/\n__pycache__/\n.venv/\n",
-        "tests/test_playwright.py": (pdir / "test_playwright.py").read_text(),
-        "tests/test_selenium.py": (pdir / "test_selenium.py").read_text(),
+        "tests/test_playwright.py": (pdir / "test_playwright.py").read_text(encoding="utf-8"),
+        "tests/test_selenium.py": (pdir / "test_selenium.py").read_text(encoding="utf-8"),
         "tests/script.json": json.dumps(script, indent=2),
-        "tests/autopilot_runtime.py": Path(__file__).with_name("script_runtime.py").read_text(),
+        "tests/autopilot_runtime.py": Path(__file__).with_name("script_runtime.py").read_text(encoding="utf-8"),
     })
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

@@ -125,7 +125,7 @@ class Engine(ABC):
             nxt = frames[i + 1][0] if i + 1 < len(frames) else t + 1.5
             lines.append(f"file '{p.name}'\nduration {max(0.05, min(nxt - t, 5)):.3f}")
         lines.append(f"file '{frames[-1][1].name}'")
-        lst.write_text("\n".join(lines))
+        lst.write_text("\n".join(lines), encoding="utf-8")
         out = self.run_dir / "video.webm"
         vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12"
         cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-vf", vf,

@@ -29,7 +29,7 @@ the script**, on any engine, browser or machine, with the same data or new data.
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium        # Selenium finds or downloads its own driver
-export ANTHROPIC_API_KEY=sk-ant-...          # optional: Claude for intent extraction + element disambiguation
+# AI (optional): uses your logged-in Claude Code / Cursor / Copilot CLI by default; or ANTHROPIC_API_KEY, or LiteLLM
 
 python -m aiauto server --port 8000          # web app + machine hub → http://localhost:8000
 ```
@@ -90,7 +90,7 @@ dialogs, tabs, optional steps ("Click Accept cookies if shown") and pauses for m
 
 ## Where AI is used
 
-| Stage | With Claude (`ANTHROPIC_API_KEY` set on the hub) | Without it |
+| Stage | With AI (any provider below) | Without it |
 |---|---|---|
 | **1. English → steps** | Claude reads the whole description and returns structured steps (action, element description, value, ordinal, optional) | Built-in parser: splits prose into clauses and expands common intents (search, log in, add to cart, go to cart, make sure / should see, set/choose …) |
 | **2. Which element on the page** | Candidates are scored by heuristics. **When the top matches are close, Claude picks** | Heuristic scoring only |
@@ -104,7 +104,29 @@ The UI shows this for every run and step:
 * Step chips: `step: AI/rules/edited` (who made the step) and `element: AI/heuristic/script locator/fallback`
   (how the element was found). The same chips appear in `report.html`.
 
-The AI status chip at the bottom of the sidebar shows whether Claude is configured on this hub.
+The AI status chip at the bottom of the sidebar shows which provider is in use; click it for **Settings → AI**.
+
+### AI providers: your subscription by default, a key, or any model
+
+| Provider | What it uses | Setup |
+|---|---|---|
+| **Claude subscription** (default when found) | Claude Code CLI in headless mode (`claude -p --json-schema`): the plan you are logged into | install Claude Code, run `claude` once to log in |
+| **Cursor subscription** | Cursor CLI (`cursor-agent -p --output-format json`) | install the Cursor CLI, `cursor-agent login` |
+| **GitHub Copilot subscription** | Copilot CLI (`copilot -p`) | `npm i -g @github/copilot`, log in |
+| **Anthropic API key** | Anthropic SDK, structured outputs, server-side refusal fallback | key in Settings, or `ANTHROPIC_API_KEY` |
+| **Any model via LiteLLM** | `litellm.completion` (OpenAI, Gemini, Azure, Bedrock, Mistral, Ollama, a LiteLLM proxy …) | model (`openai/gpt-4o`, `gemini/gemini-2.5-pro` …), key, optional base URL |
+
+**Auto** (the default) tries them in that order. One that is not installed, not logged in, out of credits or
+rejects the key is skipped for the rest of the session and the next one answers; with none, tests still run on
+the rule parser and heuristics. **Model** can be anything the provider offers (default `claude-opus-5-5`).
+Settings → AI has **Test connection**, which makes one small real call. Keys live only on the hub and are never
+sent back to the browser. Remote machines use their own CLI login or env key, unless you allow sending keys with
+each run. Environment variables: `AIAUTO_AI_PROVIDER`, `AIAUTO_MODEL`, `AIAUTO_LITELLM_MODEL`, `AIAUTO_LITELLM_BASE`,
+`AIAUTO_LITELLM_KEY`, `ANTHROPIC_API_KEY`.
+
+Subscription mode drives the official CLI that you installed and logged into on your own machine. If you build
+a product on this for other people, use API keys (or LiteLLM) instead: Anthropic doesn't let third-party products
+offer Claude.ai login without approval.
 
 ### Test data and iterations
 
@@ -158,7 +180,7 @@ content (never part of page text or locators), it works in shadow DOM and iframe
 | Ties between different elements | Claude decides, otherwise the step **fails and lists them** (never a silent guess) | both |
 | Numbers in the step ("order 750") | must match exactly; "order 5" is not a candidate | both |
 | Replay fallbacks | a fallback (or structural CSS/XPath) must still match the step's description, so "the second row's button" can't click a different row after re-rendering | both |
-| **Canvas / pixels only** | Claude locates it on a screenshot and the engine acts at that position (needs `ANTHROPIC_API_KEY`; replays look again). Without AI the error says it's a canvas | both |
+| **Canvas / pixels only** | The AI locates it on a screenshot and the engine acts at that position (any AI provider; replays look again). Without AI the error says it's a canvas | both |
 
 Still out of reach: content inside browser plugins / native OS dialogs, and canvas content when AI is off.
 
@@ -223,10 +245,46 @@ streams live frames and step results, uploads artifacts when each run ends, and 
 * A machine that disconnects marks its running tests *interrupted*; queued runs for "any"/pool move to the
   machines still online, and runs pinned to it wait until it reconnects.
 
+### Stopping runs
+
+Every queued or running run has a **Stop** button (dashboard, Runs table, live view, run details; **Stop all**
+for everything running). A queued run is removed from the queue. A running one stops after its current step (a
+`Wait` or manual `Pause` is cut short), closes its browser, keeps its screenshots, video and report, and is
+marked **cancelled**. Its machine slot frees up for the next run. This works on the hub, on agents and on grids.
+API: `POST /api/runs/{id}/cancel` or `POST /api/runs/cancel {"run_ids": [...]} | {"batch_id": "..."}`.
+
+### Windows, macOS and cloud browsers (grids)
+
+Three ways to run on Windows / macOS:
+
+1. **An agent on the machine itself**: `python -m aiauto agent --server http://HUB:8000 --slots 2` on any
+   Windows or Mac computer (everything is cross-platform; Safari works through Selenium on a Mac after
+   `sudo safaridriver --enable`).
+2. **A remote browser grid** (Machines → *Remote browser grids*): your own Selenium Grid with Windows/Mac nodes,
+   BrowserStack, Sauce Labs, LambdaTest, or a Playwright browser server (`ws://`) or DevTools endpoint
+   (`http://`). A grid shows up in the machine picker like a machine, with **slots** = how many sessions to open
+   at once. The hub drives the remote browser, so live view, highlight, screenshots, video, report and generated
+   scripts are the same as for a local run. Credentials in the URL are stored on the hub and shown masked.
+   Exported scripts run on a grid with `REMOTE_URL=… REMOTE_CAPS='{"platformName": "Windows 11"}' python tests/test_selenium.py`.
+3. **CI on real Windows / macOS**: `.github/workflows/cross-platform.yml` runs the browser matrix (including
+   Safari on macOS and Edge on Windows), the agent, parallel and cancel tests on `windows-latest`, `macos-latest`
+   and `ubuntu-latest`.
+
+Docker cannot run Windows or macOS here. Windows containers need a Windows host. Projects that boot Windows or
+macOS as a VM inside a container need KVM and a Windows licence, and Apple's licence allows macOS only on Apple
+hardware. For Windows/Mac coverage, use options 1–3.
+
 ### Docker
 
-One image (based on Microsoft's Playwright image: Chromium, Firefox, WebKit, a matching chromedriver for
-Selenium, and Xvfb) runs either role:
+One image runs either role. It is based on Microsoft's Playwright image and contains **every browser both
+engines can drive on Linux**, with matching drivers: Playwright: Chromium, Google Chrome, Microsoft Edge, Firefox,
+WebKit. Selenium: Chromium, Google Chrome, Microsoft Edge, Firefox. It also has Xvfb for headed runs. All nine
+combinations, plus headed mode, are tested inside the image by `tests/test_browsers.py`:
+
+```bash
+docker run --rm --shm-size=2g -v "$PWD:/src" -w /src autopilot sh -c "pip install pytest && pytest tests/test_browsers.py"
+```
+
 
 ```bash
 docker build -t autopilot .
@@ -235,8 +293,12 @@ docker run -d --shm-size=2g autopilot agent --server http://HUB:8000 --name dock
 docker compose up --build --scale agent=3      # hub + 3 agents with 2 slots each = 6 tests at once
 ```
 
-* **Headed runs inside the container** go to a virtual screen (Xvfb, started by the entrypoint), so the
-  Headless toggle works in both positions. The live view, screenshots and video show that screen.
+* **Headed runs inside the container** open a real, full browser window, not the headless build. A container
+  has no monitor, so the window is drawn on a virtual screen (Xvfb, started by the entrypoint). You watch it
+  through the live view, screenshots and video. To watch a headed browser on your own monitor, run an agent on
+  your own computer instead.
+* **AI inside Docker**: the subscription CLIs aren't in the image. Use an API key or LiteLLM (Settings → AI, or
+  `-e ANTHROPIC_API_KEY=…`). The hub's choice of AI is sent to agents with each job; keys are sent only if you allow it.
 * The hub keeps its SQLite DB and artifacts in the `/data` volume, so history survives container restarts.
 * `--shm-size` matters: Chromium crashes with Docker's default 64 MB `/dev/shm` (about 1 GB per slot).
 * Inside Docker the agent has no access to your desktop Chrome profile. Use **saved sessions** for SSO
@@ -310,7 +372,9 @@ python -m aiauto parse "Open example.com then click More information"
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | – | Turns on Claude (`ant auth login` profiles work too) |
+| `AIAUTO_AI_PROVIDER` | `auto` | `auto`, `claude-code`, `cursor`, `copilot`, `anthropic`, `litellm` (also in Settings → AI) |
+| `AIAUTO_MODEL` | `claude-opus-5-5` | Model for the chosen provider |
+| `ANTHROPIC_API_KEY` | – | Anthropic API key (`ant auth login` profiles work too) |
 | `AIAUTO_MODEL` / `AIAUTO_EFFORT` | `claude-opus-5-5` / `low` | Model and effort for parsing and disambiguation |
 | `AIAUTO_DB` | `aiauto.db` | SQLite database of the hub |
 | `AIAUTO_ARTIFACTS` | `artifacts` | Run folders |

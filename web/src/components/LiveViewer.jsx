@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
-import { Prov, Status } from "../views/Dashboard.jsx";
+import { Prov, Status, StopButton } from "../views/Dashboard.jsx";
 
 const ICON = { passed: "✓", failed: "✕", skipped: "–" };
 
@@ -49,6 +49,7 @@ export default function LiveViewer({ runId }) {
       case "healing": setCaption(`↻ Self-healing “${e.target}”: ${e.how || ""}`); break;
       case "paused": setCaption(`⏸ ${e.message} (${e.seconds}s)`); break;
       case "run_finished": setRun((r) => ({ ...(r || {}), status: e.status, healed_steps: e.healed })); setCaption(""); setFrame(null);
+        if (e.status === "cancelled") setSteps((all) => Object.fromEntries(Object.entries(all).map(([k, st]) => [k, st.status === "running" ? { ...st, status: "skipped", error: "Cancelled by user" } : st])));
         api(`/api/runs/${encodeURIComponent(runId)}`).then((r) => setRun(r)).catch(() => {}); break;
       default:
     }
@@ -97,6 +98,7 @@ export default function LiveViewer({ runId }) {
             {failed > 0 && <span style={{ color: "var(--bad)" }}><b style={{ color: "inherit" }}>{failed}</b> failed</span>}
             {healed > 0 && <span style={{ color: "var(--warn)" }}><b style={{ color: "inherit" }}>{healed}</b> healed</span>}</span>}
           {sel && <button className="btn sm" onClick={() => setSelected(null)}>{live ? "Follow live" : "Latest"}</button>}
+          {live && <StopButton ids={[run.run_id]} label="Stop run" className="btn sm" />}
         </div>
       </div>
 

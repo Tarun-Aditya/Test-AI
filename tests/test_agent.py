@@ -199,3 +199,108 @@ def test_pool_spreads_iterations_over_free_machines(cluster, shop_url):
     assert all(runs[i]["status"] == "passed" for i in ids), [runs[i].get("error") for i in ids]
     per = {m: sum(runs[i]["agent"] == m for i in ids) for m in ("box-a", "box-b")}
     assert per["box-a"] >= 1 and per["box-b"] >= 1 and sum(per.values()) == 4, per
+
+
+def test_cancel_queued_and_running_runs(cluster, shop_url):
+    """Cancel from the web: a queued run never starts, a running one stops after its current step (on an agent
+    and on the hub itself), keeping its report; the machine's slot is freed for the next run."""
+    base, _ = cluster({"box-a": 1})
+    slow = f"Open {shop_url}/index.html\nWait 20 seconds\nWait 20 seconds"        # stopped inside its last step
+    post = lambda agent: httpx.post(base + "/api/runs", timeout=30, json={
+        "text": slow, "agent": agent, "config": {"engine": "playwright", "headless": True, "use_llm": False, "record_video": False}}
+    ).json()["run_ids"][0]
+    status = lambda rid: next(x for x in httpx.get(base + "/api/runs").json() if x["run_id"] == rid)["status"]
+
+    def wait_for(rid, want, t=60):
+        end = time.time() + t
+        while time.time() < end:
+            if status(rid) in want:
+                return status(rid)
+            time.sleep(0.3)
+        raise AssertionError(f"{rid} stayed {status(rid)}")
+
+    running, queued, local = post("box-a"), post("box-a"), post("local")
+    wait_for(running, {"running"})
+    wait_for(local, {"running"})
+    assert status(queued) == "queued"                       # box-a has one slot
+
+    t0 = time.time()
+    r = httpx.post(base + "/api/runs/cancel", json={"run_ids": [queued, running, local]}).json()["cancelled"]
+    assert r[queued] == "removed from queue" and r[running].startswith("stopping") and r[local] == "stopping"
+    assert wait_for(queued, {"cancelled"}, 10) == "cancelled"
+    assert wait_for(running, {"cancelled", "passed", "failed"}) == "cancelled"
+    assert wait_for(local, {"cancelled", "passed", "failed"}) == "cancelled"
+    assert time.time() - t0 < 30, "a cancelled run must not wait out its 40 s of steps"
+    steps = httpx.get(base + f"/api/runs/{running}").json()["steps"]
+    assert any(st["status"] == "skipped" and "Cancelled" in (st["error"] or "") for st in steps)
+    after = post("box-a")                                    # the slot is free again
+    wait_for(after, {"running"}, 30)
+    httpx.post(base + f"/api/runs/{after}/cancel")
+    wait_for(after, {"cancelled"})
+
+
+def _free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def remote_browsers(tmp_path):
+    """Two stand-ins for a cloud grid: chromedriver as a W3C remote end (what Selenium Grid / BrowserStack /
+    Sauce Labs speak) and a Chromium with a DevTools endpoint (Playwright connect_over_cdp)."""
+    chromium, driver = os.getenv("AIAUTO_CHROME_BINARY"), os.getenv("AIAUTO_CHROMEDRIVER")
+    if not (chromium and driver):
+        pytest.skip("needs AIAUTO_CHROME_BINARY and AIAUTO_CHROMEDRIVER")
+    sp, cp = _free_port(), _free_port()
+    procs = [subprocess.Popen([driver, f"--port={sp}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+             subprocess.Popen([chromium, "--headless=new", "--no-sandbox", f"--remote-debugging-port={cp}",
+                               f"--user-data-dir={tmp_path / 'cdp-profile'}", "about:blank"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)]
+    for port in (sp, cp):
+        for _ in range(60):
+            try:
+                httpx.get(f"http://127.0.0.1:{port}/" + ("status" if port == sp else "json/version"), timeout=1)
+                break
+            except httpx.HTTPError:
+                time.sleep(0.25)
+    yield {"selenium": f"http://127.0.0.1:{sp}", "cdp": f"http://127.0.0.1:{cp}", "chromium": chromium}
+    for p in procs:
+        p.kill()
+
+
+def test_remote_grids_appear_as_machines_and_run(cluster, remote_browsers, shop_url):
+    base, _ = cluster({})
+    sel = {"name": "win-chrome", "engine": "selenium", "url": remote_browsers["selenium"], "browser": "chrome", "slots": 2,
+           "platform": "Windows 11 · Chrome (stand-in)",
+           "caps": {"goog:chromeOptions": {"binary": remote_browsers["chromium"], "args": ["--headless=new", "--no-sandbox"]}}}
+    pw = {"name": "mac-cdp", "engine": "playwright", "url": remote_browsers["cdp"], "slots": 1, "platform": "macOS (stand-in)"}
+    for g in (sel, pw):
+        r = httpx.put(base + f"/api/grids/{g['name']}", json=g)
+        assert r.status_code == 200, r.text
+    # a key in the URL is never shown again
+    r = httpx.put(base + "/api/grids/cloud", json={"name": "cloud", "engine": "selenium", "url": "https://me:SECRETKEY@hub.example.com/wd/hub"})
+    assert "SECRETKEY" not in r.text and "SECRETKEY" not in httpx.get(base + "/api/grids").text
+    httpx.delete(base + "/api/grids/cloud")
+    machines = {m["name"]: m for m in httpx.get(base + "/api/agents").json()}
+    assert machines["win-chrome"]["kind"] == "grid" and machines["win-chrome"]["slots"] == 2 and machines["mac-cdp"]["engines"] == ["playwright"]
+
+    text = (EXAMPLES / "shop_natural.txt").read_text()
+    data = {"base_url": shop_url, "product": "wireless mouse", "brand": "Logitech", "qty": "2"}
+    bad = httpx.post(base + "/api/runs", json={"text": text, "data": data, "agent": "mac-cdp", "config": {"engine": "selenium", "use_llm": False}})
+    assert bad.status_code == 400 and "Playwright grid" in bad.text
+
+    def submit():
+        ids = []
+        for agent, engine in (("win-chrome", "selenium"), ("mac-cdp", "playwright")):
+            r = httpx.post(base + "/api/runs", timeout=30, json={"text": text, "data": data, "agent": agent,
+                           "config": {"engine": engine, "use_llm": False, "record_video": True, "live_view": True}})
+            assert r.status_code == 200, r.text
+            ids += r.json()["run_ids"]
+        return ids
+    ids, frames, _, _ = _collect(base, submit)
+    runs = {x["run_id"]: x for x in httpx.get(base + "/api/runs").json()}
+    for rid in ids:
+        assert runs[rid]["status"] == "passed", (runs[rid]["agent"], runs[rid].get("error"))
+        assert runs[rid]["video"] and frames.get(rid, 0) >= 2
+    assert {runs[i]["agent"] for i in ids} == {"win-chrome", "mac-cdp"}

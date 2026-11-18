@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS library (
   source_run TEXT, created REAL, updated REAL
 );
 CREATE TABLE IF NOT EXISTS sessions (name TEXT PRIMARY KEY, state_json TEXT, domains TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS machines (
   name TEXT PRIMARY KEY, hostname TEXT, platform TEXT, engines TEXT, browsers TEXT, version TEXT,
   first_seen REAL, last_seen REAL, online INTEGER DEFAULT 0
@@ -153,7 +154,7 @@ class DB:
         p = Path(run_dir) / "summary.json"
         if not p.exists():
             return
-        s = json.loads(p.read_text())
+        s = json.loads(p.read_text(encoding="utf-8"))
         res = s.get("results", [])
         shots = [r["screenshot"] for r in res if r.get("screenshot")]
         err = next((r.get("error") for r in res if r.get("status") == "failed"), None)
@@ -297,6 +298,13 @@ class DB:
         self.x("INSERT OR REPLACE INTO sessions (name, state_json, domains, updated) VALUES (?,?,?,?)",
                (name, json.dumps(state), json.dumps((domains + origins)[:12]), time.time()))
 
+    def setting_get(self, key: str, default: Any = None) -> Any:
+        r = self.one("SELECT value_json FROM settings WHERE key=?", (key,))
+        return json.loads(r["value_json"]) if r else default
+
+    def setting_put(self, key: str, value: Any) -> None:
+        self.x("INSERT OR REPLACE INTO settings (key, value_json, updated) VALUES (?,?,?)", (key, json.dumps(value), time.time()))
+
     def session_get(self, name: str) -> dict | None:
         r = self.one("SELECT state_json FROM sessions WHERE name=?", (name,))
         return json.loads(r["state_json"]) if r else None
@@ -337,7 +345,7 @@ def _parser_of(run_dir: Path, mode: str | None) -> str:
     if mode == "replay":
         return "script"
     try:
-        srcs = {st.get("source") for st in json.loads((run_dir / "script.json").read_text()).get("steps", [])}
+        srcs = {st.get("source") for st in json.loads((run_dir / "script.json").read_text(encoding="utf-8")).get("steps", [])}
         if "ai" in srcs:
             return "ai"
         if "user" in srcs:
@@ -348,12 +356,12 @@ def _parser_of(run_dir: Path, mode: str | None) -> str:
 
 
 def _read(p: Path) -> str | None:
-    return p.read_text() if p.exists() else None
+    return p.read_text(encoding="utf-8") if p.exists() else None
 
 
 def _script_sensitive(run_dir: Path) -> list:
     try:
-        return json.loads((run_dir / "script.json").read_text()).get("sensitive", [])
+        return json.loads((run_dir / "script.json").read_text(encoding="utf-8")).get("sensitive", [])
     except Exception:
         return []
 

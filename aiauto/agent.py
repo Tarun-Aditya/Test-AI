@@ -53,6 +53,14 @@ def _browsers() -> list[str]:
     return found
 
 
+def _local_ai() -> dict:
+    """AI settings set on this machine win over the hub's (e.g. its own API key or CLI path)."""
+    import os
+    m = {"AIAUTO_AI_PROVIDER": "provider", "AIAUTO_MODEL": "model", "AIAUTO_LITELLM_MODEL": "litellm_model",
+         "AIAUTO_LITELLM_BASE": "litellm_base", "AIAUTO_LITELLM_KEY": "litellm_key", "ANTHROPIC_API_KEY": "anthropic_key"}
+    return {v: os.environ[k] for k, v in m.items() if os.getenv(k)}
+
+
 def _zip_dir(d: Path) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -60,6 +68,24 @@ def _zip_dir(d: Path) -> bytes:
             if f.is_file():
                 z.write(f, f.relative_to(d))
     return buf.getvalue()
+
+
+class _Holder(list):
+    """Receives the job's Runner; a cancel that arrives before the Runner exists is applied when it does."""
+
+    def __init__(self):
+        super().__init__()
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+        for r in self:
+            r.cancel.set()
+
+    def append(self, r):
+        if self.cancelled:
+            r.cancel.set()
+        super().append(r)
 
 
 class _Link:
@@ -81,6 +107,7 @@ def run_agent(server: str, name: str | None, token: str | None, out_dir: str, sl
     slots = max(1, int(slots or os.getenv("AIAUTO_SLOTS") or 1))
     workers = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="job")
     link = _Link()
+    runners: dict[str, list] = {}           # run id -> [Runner] of the jobs in progress (for cancel)
 
     server = server.rstrip("/")
     ws_url = server.replace("https://", "wss://").replace("http://", "ws://") + "/ws/agent"
@@ -104,9 +131,16 @@ def run_agent(server: str, name: str | None, token: str | None, out_dir: str, sl
                 link.ws = ws
                 for raw in ws:
                     msg = json.loads(raw)
+                    if msg.get("type") == "cancel":
+                        h = runners.get(msg.get("run_id"))
+                        if h is not None:
+                            h.cancel()
+                            log.info("cancelling %s", msg["run_id"])
+                        continue
                     if msg.get("type") != "job":
                         continue
-                    workers.submit(_handle_job, link, msg["job"], server, token, out, welcome["name"])
+                    runners[msg["job"]["run_id"]] = _Holder()
+                    workers.submit(_handle_job, link, msg["job"], server, token, out, welcome["name"], runners)
         except KeyboardInterrupt:
             return
         except Exception as e:
@@ -116,7 +150,15 @@ def run_agent(server: str, name: str | None, token: str | None, out_dir: str, sl
             backoff = min(backoff * 2, 30)
 
 
-def _handle_job(link: _Link, job: dict, server: str, token: str | None, out: Path, agent_name: str) -> None:
+def _handle_job(link: _Link, job: dict, server: str, token: str | None, out: Path, agent_name: str,
+                runners: dict | None = None) -> None:
+    try:
+        _do_job(link, job, server, token, out, agent_name, (runners or {}).get(job["run_id"], []))
+    finally:
+        (runners or {}).pop(job["run_id"], None)
+
+
+def _do_job(link: _Link, job: dict, server: str, token: str | None, out: Path, agent_name: str, holder: list) -> None:
     run_id = job["run_id"]
     log.info("job %s received (%s)", run_id, job.get("config", {}).get("engine"))
 
@@ -129,6 +171,9 @@ def _handle_job(link: _Link, job: dict, server: str, token: str | None, out: Pat
     test = TestCase.model_validate(job["test"])
     cfg = RunConfig.model_validate(job["config"])
     cfg.session_state = job.get("session_state")
+    if job.get("ai") is not None:        # the hub's AI choice; this machine's own CLIs / env keys still apply
+        from .nlp import providers
+        providers.configure({**job["ai"], **_local_ai()})
     final = {}
 
     def on_event(ev: dict) -> None:
@@ -138,7 +183,6 @@ def _handle_job(link: _Link, job: dict, server: str, token: str | None, out: Pat
             send_event(ev)
 
     summary = None
-    holder: list = []
     try:
         summary = run_test(test, cfg, out, mode=job.get("mode", "ai"), on_event=on_event,
                            agent=agent_name, run_id=run_id, runner_out=holder)

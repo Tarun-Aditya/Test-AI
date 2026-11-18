@@ -1,6 +1,81 @@
+import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
+
+
+const PRESETS = {
+  "Selenium Grid (your own)": { engine: "selenium", url: "http://grid-host:4444/wd/hub", browser: "chrome", platform: "Windows · Chrome", caps: { platformName: "windows" } },
+  "BrowserStack · Windows 11 Chrome": { engine: "selenium", url: "https://USERNAME:ACCESS_KEY@hub-cloud.browserstack.com/wd/hub", browser: "chrome", platform: "Windows 11 · Chrome",
+    caps: { browserVersion: "latest", "bstack:options": { os: "Windows", osVersion: "11" } } },
+  "BrowserStack · macOS Safari": { engine: "selenium", url: "https://USERNAME:ACCESS_KEY@hub-cloud.browserstack.com/wd/hub", browser: "safari", platform: "macOS · Safari",
+    caps: { browserVersion: "latest", "bstack:options": { os: "OS X", osVersion: "Sequoia" } } },
+  "Sauce Labs · Windows 11 Edge": { engine: "selenium", url: "https://USERNAME:ACCESS_KEY@ondemand.us-west-1.saucelabs.com/wd/hub", browser: "msedge", platform: "Windows 11 · Edge",
+    caps: { platformName: "Windows 11", browserVersion: "latest", "sauce:options": {} } },
+  "LambdaTest · macOS Chrome": { engine: "selenium", url: "https://USERNAME:ACCESS_KEY@hub.lambdatest.com/wd/hub", browser: "chrome", platform: "macOS · Chrome",
+    caps: { platformName: "macOS Sonoma", browserVersion: "latest", "LT:Options": {} } },
+  "Playwright browser server": { engine: "playwright", url: "ws://host:3000/", browser: "chromium", platform: "remote Playwright", caps: {} },
+};
+
+function Grids() {
+  const { toast, loadMachines } = useApp();
+  const [grids, setGrids] = useState([]);
+  const [edit, setEdit] = useState(null);
+  const load = async () => setGrids(await api("/api/grids"));
+  useEffect(() => { load().catch(() => {}); }, []);
+  const start = (preset) => {
+    const p = PRESETS[preset];
+    setEdit({ name: preset.split("·").pop().trim().toLowerCase().replace(/[^a-z0-9]+/g, "-"), slots: 2, ...p, caps: JSON.stringify(p.caps, null, 2), isNew: true });
+  };
+  const save = async () => {
+    try {
+      let caps = {};
+      try { caps = edit.caps.trim() ? JSON.parse(edit.caps) : {}; } catch (e) { throw new Error("Capabilities are not valid JSON: " + e.message); }
+      const body = { name: edit.name, engine: edit.engine, browser: edit.browser || null, platform: edit.platform || null, slots: +edit.slots || 1, caps,
+        url: edit.urlEdited || edit.isNew ? edit.url : null };
+      await api(`/api/grids/${encodeURIComponent(edit.name)}`, { method: "PUT", body });
+      setEdit(null); load(); loadMachines(); toast(`Grid "${edit.name}" saved. It is now in the machine picker`);
+    } catch (e) { toast(e.message, true); }
+  };
+  const remove = async (n) => { await api(`/api/grids/${encodeURIComponent(n)}`, { method: "DELETE" }); load(); loadMachines(); };
+  const f = (k, v) => setEdit((e) => ({ ...e, [k]: v, ...(k === "url" ? { urlEdited: true } : {}) }));
+  return (
+    <div className="panel" style={{ marginTop: 18 }}>
+      <div className="panel-h"><h3>Remote browser grids: Windows, macOS, cloud</h3><span className="spacer" />
+        <select value="" onChange={(e) => e.target.value && start(e.target.value)} aria-label="Add a grid">
+          <option value="">+ Add a grid…</option>{Object.keys(PRESETS).map((k) => <option key={k}>{k}</option>)}</select></div>
+      <div className="panel-b">
+        <p className="hint" style={{ marginTop: 0 }}>A grid runs the browser somewhere else: your own Selenium Grid with Windows / Mac nodes, a cloud service
+          (BrowserStack, Sauce Labs, LambdaTest) or a Playwright browser server. Grids appear in the machine picker like machines; <b>slots</b> is how many
+          sessions to open on it at once (your plan's concurrency). The hub drives the browser over the network, so the report, video and generated scripts are the same.</p>
+        {grids.length > 0 && <table className="dt"><thead><tr><th>Name</th><th>Engine</th><th>Platform / browser</th><th>URL</th><th>Slots</th><th /></tr></thead><tbody>
+          {grids.map((g) => <tr key={g.name}><td><b>{g.name}</b></td><td>{g.engine}</td><td>{g.platform || "—"} · {g.browser || "default"}</td>
+            <td className="mono ellipsis" style={{ maxWidth: 260 }}>{g.url}</td><td>{g.slots}</td>
+            <td style={{ whiteSpace: "nowrap" }}><button className="btn sm" onClick={() => setEdit({ ...g, caps: JSON.stringify(g.caps || {}, null, 2) })}>Edit</button>
+              <button className="btn sm ghost danger" onClick={() => remove(g.name)}>Remove</button></td></tr>)}</tbody></table>}
+        {edit && <div className="card" style={{ marginTop: 12 }}>
+          <div className="grid2">
+            <div className="field"><span>Name</span><input value={edit.name} disabled={!edit.isNew} onChange={(e) => f("name", e.target.value)} /></div>
+            <div className="field"><span>Engine</span><div className="seg">{["selenium", "playwright"].map((x) =>
+              <button key={x} className={edit.engine === x ? "on" : ""} onClick={() => f("engine", x)}>{x === "selenium" ? "Selenium" : "Playwright"}</button>)}</div></div>
+          </div>
+          <div className="field"><span>URL {!edit.isNew && <small>(leave as is to keep the stored URL and key)</small>}</span>
+            <input className="mono" value={edit.url} onChange={(e) => f("url", e.target.value)} spellCheck={false} />
+            <small>Selenium: the hub URL (credentials may go in it, they are stored on the hub only). Playwright: ws://… browser server or http://… DevTools endpoint.</small></div>
+          <div className="grid2">
+            <div className="field"><span>Browser</span><input value={edit.browser || ""} onChange={(e) => f("browser", e.target.value)} placeholder="chrome / msedge / firefox / safari" /></div>
+            <div className="field"><span>Label (platform)</span><input value={edit.platform || ""} onChange={(e) => f("platform", e.target.value)} placeholder="Windows 11 · Chrome" /></div>
+          </div>
+          <div className="grid2">
+            <div className="field"><span>Capabilities (JSON, Selenium)</span><textarea className="mono" rows={6} value={edit.caps} onChange={(e) => f("caps", e.target.value)} /></div>
+            <div className="field"><span>Slots (parallel sessions)</span><input type="number" min={1} max={100} value={edit.slots} onChange={(e) => f("slots", e.target.value)} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}><button className="btn primary" onClick={save}>Save grid</button><button className="btn" onClick={() => setEdit(null)}>Cancel</button></div>
+        </div>}
+      </div>
+    </div>
+  );
+}
 
 export default function Machines() {
   const { machines, health, form, setForm, nav, toast, loadMachines } = useApp();
@@ -27,7 +102,8 @@ export default function Machines() {
   );
   return (
     <section className="view on">
-      <div className="cards"><Card local />{machines.map((m) => <Card key={m.name} m={m} />)}</div>
+      <div className="cards"><Card local />{machines.filter((m) => m.kind !== "grid").map((m) => <Card key={m.name} m={m} />)}</div>
+      <Grids />
       <div className="panel" style={{ marginTop: 18 }}>
         <div className="panel-h"><h3>Add a machine</h3></div>
         <div className="panel-b">

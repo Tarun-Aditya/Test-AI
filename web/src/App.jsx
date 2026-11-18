@@ -8,6 +8,7 @@ import Runs from "./views/Runs.jsx";
 import Library from "./views/Library.jsx";
 import Machines from "./views/Machines.jsx";
 import Sessions from "./views/Sessions.jsx";
+import Settings from "./views/Settings.jsx";
 import MachinePicker, { agentsOf } from "./components/MachinePicker.jsx";
 import RunDrawer from "./components/RunDrawer.jsx";
 
@@ -21,6 +22,7 @@ const VIEWS = {
   library: ["Script library", "Reusable scripts with native locators. Run them on any engine or machine", "lib"],
   machines: ["Machines", "Computers that can run tests", "pc"],
   sessions: ["Sessions", "Saved logins (cookies + localStorage) a run can start with", "key"],
+  settings: ["Settings", "AI provider: your subscription, an API key, or any model", "spark"],
 };
 const THEMES = ["auto", "light", "dark"];
 
@@ -80,7 +82,7 @@ export default function App() {
 
   useEffect(() => subscribe((e) => {
     if (["run_started", "run_finished", "runs_changed", "artifacts_uploaded"].includes(e.type)) loadRuns();
-    if (e.type === "agents_changed") loadMachines();
+    if (e.type === "agents_changed" || e.type === "ai_changed") loadMachines();
     if (e.type === "session_saved") { loadSessions(); toast(`Session “${e.name}” saved`); }
   }), [subscribe, loadRuns, loadMachines, loadSessions, toast]);
 
@@ -142,7 +144,7 @@ export default function App() {
             ))}
           </nav>
           <div className="side-foot">
-            <span className="chip" title={health.llm}><span className={"dotc " + (health.llm_on ? "ok" : "")} />AI {health.llm_on ? "on" : "off (rules)"}</span>
+            <button className="chip" title={health.llm} onClick={() => nav("settings")}><span className={"dotc " + (health.llm_on ? "ok" : "")} />AI {health.llm_on ? "on" : "off (rules)"}</button>
             <button className="theme" onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3])}><Icon name="moon" size={14} />Theme: {theme}</button>
           </div>
         </aside>
@@ -167,6 +169,7 @@ export default function App() {
           {route.view === "library" && <Library />}
           {route.view === "machines" && <Machines />}
           {route.view === "sessions" && <Sessions />}
+          {route.view === "settings" && <Settings />}
         </div>
       </div>
       {drawer && <RunDrawer {...drawer} onClose={() => setDrawer(null)} />}

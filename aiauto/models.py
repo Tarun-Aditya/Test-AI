@@ -106,6 +106,7 @@ class StepStatus(str, Enum):
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    CANCELLED = "cancelled"          # run-level only: stopped by the user
 
 
 class StepResult(BaseModel):
@@ -127,6 +128,10 @@ class RunConfig(BaseModel):
     engine: str = "playwright"            # playwright | selenium
     headless: bool = True
     browser: str = "chromium"             # chromium | chrome | msedge | firefox | webkit
+    # remote browser (Selenium Grid / BrowserStack / Sauce Labs / LambdaTest, or a Playwright browser server):
+    # Selenium: the hub URL; Playwright: ws(s):// (browser server) or http(s):// (Chrome DevTools endpoint)
+    remote_url: Optional[str] = None
+    remote_caps: dict[str, Any] = Field(default_factory=dict)   # Selenium capabilities (platformName, bstack:options, ...)
     record_video: bool = True
     screenshot_each_step: bool = True
     full_page_screenshots: bool = False

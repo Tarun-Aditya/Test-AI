@@ -25,7 +25,7 @@ def _path(name: str) -> Path:
 def save(name: str, state: dict) -> Path:
     ROOT.mkdir(parents=True, exist_ok=True)
     p = _path(name)
-    p.write_text(json.dumps(state))
+    p.write_text(json.dumps(state), encoding="utf-8")
     try:
         os.chmod(p, 0o600)
     except OSError:
@@ -35,7 +35,7 @@ def save(name: str, state: dict) -> Path:
 
 def load(name: str) -> dict | None:
     p = _path(name)
-    return json.loads(p.read_text()) if p.exists() else None
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
 def delete(name: str) -> None:
@@ -48,7 +48,7 @@ def list_all() -> list[dict]:
     out = []
     for p in sorted(ROOT.glob("*.json")):
         try:
-            st = json.loads(p.read_text())
+            st = json.loads(p.read_text(encoding="utf-8"))
             domains = sorted({c.get("domain", "").lstrip(".") for c in st.get("cookies", [])})
         except Exception:
             domains = []

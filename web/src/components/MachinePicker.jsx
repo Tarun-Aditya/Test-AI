@@ -37,7 +37,7 @@ export default function MachinePicker({ agents, spread, onChange, compact }) {
   };
   const rows = [
     { name: "local", label: health.local_name, sub: "this server", slots: health.local_slots || 1, running: health.local_running || 0 },
-    ...online.map((m) => ({ name: m.name, label: m.name, sub: [m.platform, (m.engines || []).join(" + ")].filter(Boolean).join(" · "),
+    ...online.map((m) => ({ name: m.name, label: m.kind === "grid" ? `${m.name} (grid)` : m.name, sub: [m.platform, (m.engines || []).join(" + ")].filter(Boolean).join(" · "),
       slots: m.slots || 1, running: m.running || 0, queued: m.queued || 0 })),
   ];
   const offline = agents.filter((a) => a !== "local" && a !== "any" && !online.some((m) => m.name === a));
@@ -53,7 +53,7 @@ export default function MachinePicker({ agents, spread, onChange, compact }) {
         <div className="mpick-pop" role="dialog" aria-label="Choose machines">
           <label className={"mrow" + (any ? " on" : "")}>
             <input type="checkbox" checked={any} onChange={() => onChange({ agents: any ? ["local"] : ["any"], spread })} />
-            <div><b>Any free machine</b><small>Each run goes to whichever connected machine has a free slot{online.length ? "" : " (none connected: runs here)"}</small></div>
+            <div><b>Any free machine</b><small>Each run goes to whichever connected machine has a free slot (grids only when picked){online.length ? "" : " (none connected: runs here)"}</small></div>
           </label>
           <div className="mpick-sep">or pick machines</div>
           {rows.map((r) => {

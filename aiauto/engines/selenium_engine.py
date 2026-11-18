@@ -98,19 +98,35 @@ class SeleniumEngine(Engine):
 
     def start(self) -> None:
         from selenium import webdriver
+        from ..script_runtime import selenium_browser, selenium_service
         c = self.config
         b = c.browser
-        if b == "firefox":
+        if c.remote_url and (b or "").lower() in ("safari", "webkit"):
+            kind, binary, driver = "safari", None, None     # Safari on a cloud Mac: nothing to resolve locally
+        else:
+            kind, binary, driver = selenium_browser(b)
+        service = None if c.remote_url else selenium_service(kind, driver, binary)
+        if c.remote_url:             # Selenium Grid / cloud: the browser runs there, not here
+            binary, service = None, None
+        if kind == "safari":         # macOS: safaridriver (enable once: sudo safaridriver --enable); no headless mode
+            opts = webdriver.SafariOptions()
+            self.driver = self._remote(opts) if c.remote_url else webdriver.Safari(options=opts)
+        elif kind == "firefox":
             opts = webdriver.FirefoxOptions()
+            if binary:
+                opts.binary_location = binary
             if c.headless:
                 opts.add_argument("-headless")
             if c.profile_dir:
                 opts.add_argument("-profile")
                 opts.add_argument(c.profile_dir)
             opts.set_capability("unhandledPromptBehavior", "ignore")
-            self.driver = webdriver.Firefox(options=opts)
+            if c.remote_url:
+                self.driver = self._remote(opts)
+            else:
+                self.driver = webdriver.Firefox(options=opts, service=service) if service else webdriver.Firefox(options=opts)
         else:
-            opts = webdriver.EdgeOptions() if b in ("edge", "msedge") else webdriver.ChromeOptions()
+            opts = webdriver.EdgeOptions() if kind == "edge" else webdriver.ChromeOptions()
             if c.headless:
                 opts.add_argument("--headless=new")
             for a in ("--no-sandbox", "--disable-dev-shm-usage", f"--window-size={c.viewport_width},{c.viewport_height}"):
@@ -124,17 +140,16 @@ class SeleniumEngine(Engine):
                 if c.profile_name:
                     opts.add_argument(f"--profile-directory={c.profile_name}")
             opts.set_capability("unhandledPromptBehavior", "ignore")
-            if chrome_binary() and b not in ("edge", "msedge"):
-                opts.binary_location = chrome_binary()
-            service = None
-            if os.getenv("AIAUTO_CHROMEDRIVER") and b not in ("edge", "msedge"):
-                from selenium.webdriver.chrome.service import Service
-                service = Service(os.getenv("AIAUTO_CHROMEDRIVER"))
-            cls = webdriver.Edge if b in ("edge", "msedge") else webdriver.Chrome
-            self.driver = cls(options=opts, service=service) if service else cls(options=opts)
+            if binary:
+                opts.binary_location = binary
+            cls = webdriver.Edge if kind == "edge" else webdriver.Chrome
+            if c.remote_url:
+                self.driver = self._remote(opts)
+            else:
+                self.driver = cls(options=opts, service=service) if service else cls(options=opts)
         self.driver.set_window_size(c.viewport_width, c.viewport_height)
         self.driver.set_page_load_timeout(max(30, c.timeout_ms // 1000 * 3))
-        self._chromium = b != "firefox" and hasattr(self.driver, "execute_cdp_cmd")
+        self._chromium = kind != "firefox" and hasattr(self.driver, "execute_cdp_cmd")
         self._apply_session(c.session_state)
         if c.open_closed_shadow_roots and self._chromium:
             try:
@@ -155,6 +170,14 @@ class SeleniumEngine(Engine):
         if self._continuous:
             self._video_thread = threading.Thread(target=self._video_loop, daemon=True)
             self._video_thread.start()
+
+    def _remote(self, opts):
+        """webdriver.Remote against a grid; capabilities (platformName "Windows 11" / "macOS", browserVersion,
+        vendor options such as bstack:options / sauce:options / LT:Options) come from remote_caps."""
+        from selenium import webdriver
+        for k, v in (self.config.remote_caps or {}).items():
+            opts.set_capability(k, v)
+        return webdriver.Remote(command_executor=self.config.remote_url, options=opts)
 
     def _cdp(self, cmd: str, params: dict):
         return self.driver.execute_cdp_cmd(cmd, params) if hasattr(self.driver, "execute_cdp_cmd") else None
