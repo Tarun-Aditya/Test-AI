@@ -11,9 +11,9 @@ import threading
 import time
 from pathlib import Path
 
-from ..locators import DESCRIBE_EL_JS, SNAPSHOT_JS
+from ..locators import DESCRIBE_EL_JS, VERIFY_JS, snapshot_js
 from ..models import Locator
-from .base import (DND_JS, INFO_JS, JS_VALUE_TYPES, PAGE_TEXT_JS, SET_VALUE_JS, Engine, chrome_binary,
+from .base import (OPEN_SHADOW_JS, DND_JS, INFO_JS, JS_VALUE_TYPES, PAGE_TEXT_JS, SET_VALUE_JS, Engine, chrome_binary,
                    localstorage_init_script)
 
 KEYS = {
@@ -74,8 +74,8 @@ def by_for(loc: Locator, in_shadow: bool):
         return (By.CSS_SELECTOR, f'[{s}="{cq(v)}"]')
     if s == "css":
         return (By.CSS_SELECTOR, v)
-    if s == "playwright":
-        return None                      # Playwright-only selector; Selenium uses the fallbacks
+    if s in ("playwright", "point"):
+        return None                      # Playwright-only selector / screen position: not a Selenium locator
     if in_shadow:
         return None                      # role / label / text / xpath can't be evaluated inside shadow roots
     if s == "xpath":
@@ -138,6 +138,11 @@ class SeleniumEngine(Engine):
         self.driver.set_page_load_timeout(max(30, c.timeout_ms // 1000 * 3))
         self._chromium = b != "firefox" and hasattr(self.driver, "execute_cdp_cmd")
         self._apply_session(c.session_state)
+        if c.open_closed_shadow_roots and self._chromium:
+            try:
+                self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": OPEN_SHADOW_JS})
+            except Exception:
+                pass
         # serialise all WebDriver commands so the video thread never interleaves mid-command
         self._lock = threading.RLock()
         orig = self.driver.execute
@@ -207,23 +212,35 @@ class SeleniumEngine(Engine):
             t0 = time.time()
             try:
                 with self._lock:
-                    png = self.driver.get_screenshot_as_png()
-                p = self._frame_dir / f"{len(self._frames):05d}.png"
-                p.write_bytes(png)
+                    img, ext = self._grab_fast()
+                p = self._frame_dir / f"{len(self._frames):05d}.{ext}"
+                p.write_bytes(img)
                 self._frames.append((time.time(), p))
-                self._last_png = png
+                self._last_png = (ext, img)
                 self.live_tick()
             except Exception:
                 pass     # e.g. an alert is open
             self._stop_video.wait(max(0.0, interval - (time.time() - t0)))
 
+    def _grab_fast(self):
+        """JPEG via CDP on Chromium (much cheaper to encode than WebDriver's PNG); PNG otherwise."""
+        if getattr(self, "_chromium", False):
+            try:
+                import base64
+                data = self.driver.execute_cdp_cmd("Page.captureScreenshot", {"format": "jpeg", "quality": 70})["data"]
+                return base64.b64decode(data), "jpg"
+            except Exception:
+                pass
+        return self.driver.get_screenshot_as_png(), "png"
+
     def live_image(self):
-        png = getattr(self, "_last_png", None) if getattr(self, "_continuous", False) else None
-        if png is None:
+        last = getattr(self, "_last_png", None) if getattr(self, "_continuous", False) else None
+        if last is None:
             with self._lock:
-                png = self.driver.get_screenshot_as_png()
+                last = self._grab_fast()[::-1]
         self._last_png = None
-        return "image/png", png
+        ext, img = last
+        return ("image/jpeg" if ext == "jpg" else "image/png"), img
 
     def stop(self) -> str | None:
         if getattr(self, "_continuous", False):
@@ -270,24 +287,113 @@ class SeleniumEngine(Engine):
         self._top()
         return self.driver.execute_script(f"return ({PAGE_TEXT_JS})()")
 
-    def snapshot(self):
+    def _enter(self, chain):
+        from selenium.webdriver.common.by import By
+        self.driver.switch_to.default_content()
+        for css in chain:
+            self.driver.switch_to.frame(self.driver.find_element(By.CSS_SELECTOR, css))
+
+    def snapshot(self, words=None):
+        """DOM walk of the page; cross-origin iframes (which page scripts can't look into) are entered with
+        switch_to.frame and walked from inside, nested ones too."""
         self._follow_new_window()
         self._top()
-        return self.driver.execute_script(SNAPSHOT_JS)
+        js = snapshot_js(words)
+        out = self.driver.execute_script(js) or []
+        queue = list(self.driver.execute_script("return window.__aiautoBlocked || []") or [])
+        n = 0
+        while queue and n < 25:
+            chain = queue.pop(0)
+            n += 1
+            try:
+                self._enter(chain)
+                cands = self.driver.execute_script(js) or []
+                nested = self.driver.execute_script("return window.__aiautoBlocked || []") or []
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug("could not enter frame %s: %s", chain, e)
+                continue
+            off = 100000 * n
+            for c in cands:
+                c["xchain"], c["local_uid"], c["uid"] = chain, c["uid"], off + c["uid"]
+                c["frames"] = chain + c.get("frames", [])
+                c["anc"] = [off + a for a in c.get("anc", [])]
+            out.extend(cands)
+            queue.extend(chain + nb for nb in nested)
+        self._top()
+        return out
+
+    def _local(self, cand):
+        """Enter the candidate's cross-origin frame (if any); return its uid in that frame's window."""
+        if cand.get("xchain"):
+            self._enter(cand["xchain"])
+            return cand["local_uid"]
+        self._top()
+        return cand["uid"]
+
+    def verify_locators(self, cand, locs):
+        """One in-page call: which of these locators (as Selenium would run them) match exactly this element."""
+        specs = []
+        for l in locs:
+            by = by_for(l, bool(l.shadow))
+            specs.append([by[0], by[1]] if by else None)
+        try:
+            return self.driver.execute_script(VERIFY_JS, self._local(cand), specs)
+        finally:
+            self._top()
 
     def refine(self, cands):
         """After a first ranking: Chrome's real role + accessible name (CDP) for the top candidates."""
         if not (self.config.use_ax_tree and getattr(self, "_chromium", False)):
             return 0
         from .ax import refine
-        self.ax_hits = refine(self._cdp, cands)
+        # cross-origin frames run in another process: their elements keep the snapshot's values
+        self.ax_hits = refine(self._cdp, [c for c in cands if not c.get("xchain")])
         return self.ax_hits
 
-    def describe(self, cand):
+    def _pointer(self, x, y):
+        from selenium.webdriver.common.actions.action_builder import ActionBuilder
+        ab = ActionBuilder(self.driver)
+        ab.pointer_action.move_to_location(int(x), int(y))
+        return ab
+
+    def click_point(self, x, y, button="left", double=False):
         self._top()
-        d = self.driver.execute_script(
-            "const el = (window.__aiautoEls || [])[arguments[0] - 1]; if (!el) return null; return (" + DESCRIBE_EL_JS + ")(el, arguments[1]);",
-            cand["uid"], cand.get("marker"))
+        ab = self._pointer(x, y)
+        if button == "right":
+            ab.pointer_action.context_click()
+        else:
+            ab.pointer_action.click()
+            if double:
+                ab.pointer_action.click()
+        ab.perform()
+        self.frame()
+
+    def hover_point(self, x, y):
+        self._top(); self._pointer(x, y).perform(); self.frame()
+
+    def type_text(self, text):
+        from selenium.webdriver.common.action_chains import ActionChains
+        ActionChains(self.driver).send_keys(text).perform(); self.frame()
+
+    def viewport(self):
+        self._top()
+        w, h = self.driver.execute_script("return [innerWidth, innerHeight]")
+        return int(w), int(h)
+
+    def eval_js(self, script):
+        self._top()
+        return self.driver.execute_script(script)
+
+    def describe(self, cand):
+        try:
+            d = self.driver.execute_script(
+                "const el = (window.__aiautoEls || [])[arguments[0] - 1]; if (!el) return null; return (" + DESCRIBE_EL_JS + ")(el, arguments[1]);",
+                self._local(cand), cand.get("marker"))
+        finally:
+            self._top()
+        if d and cand.get("xchain"):
+            d["frames"] = cand["xchain"] + d.get("frames", [])
         if d and cand.get("ax"):        # keep Chrome's accessible role/name (CDP) for the role locator
             from .ax import _rebuild_role_locator
             d["role"], d["name"] = cand.get("role"), cand.get("name")
@@ -421,7 +527,8 @@ class SeleniumEngine(Engine):
         from selenium.webdriver.common.action_chains import ActionChains
         el = self._el(loc)
         self._wait_clickable(el)
-        self.driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'})", el)
+        # 'nearest' doesn't move an element that is already visible (moving it re-renders virtual lists)
+        self.driver.execute_script("arguments[0].scrollIntoView({block:'nearest', inline:'nearest'})", el)
         if double:
             ActionChains(self.driver).double_click(el).perform()
         elif button == "right":
@@ -501,3 +608,25 @@ class SeleniumEngine(Engine):
         else:
             ActionChains(self.driver).drag_and_drop(s, d).perform()
         self.frame()
+
+
+def _stale_retry(fn):
+    """Re-find and retry when the page re-rendered the element between finding and acting (stale reference)."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *a, **k):
+        from selenium.common.exceptions import StaleElementReferenceException
+        for attempt in range(3):
+            try:
+                return fn(self, *a, **k)
+            except StaleElementReferenceException:
+                if attempt == 2:
+                    raise
+                time.sleep(0.15)
+    return wrapper
+
+
+for _name in ("click", "fill", "hover", "select", "set_checked", "text_of", "scroll_into_view", "upload", "drag",
+              "run_js_on", "info", "marker", "press"):
+    setattr(SeleniumEngine, _name, _stale_retry(getattr(SeleniumEngine, _name)))

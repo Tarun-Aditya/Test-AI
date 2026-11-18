@@ -16,6 +16,7 @@ import re
 import zlib
 
 from .data import MASK, env_secret_name
+from .engines.base import OPEN_SHADOW_JS
 from .models import Action, Locator, Step, TestCase
 
 SPEC_MARK = "# AIAUTO-SPEC:"
@@ -36,6 +37,8 @@ import sys
 
 DATA = {data}
 SENSITIVE = {sensitive}
+# Makes closed shadow roots open before page scripts run, so locators can reach inside them (same as the recorder).
+OPEN_SHADOW_JS = {open_shadow}
 if len(sys.argv) > 1:
     with open(sys.argv[1], encoding="utf-8") as fh:
         DATA.update(json.load(fh))
@@ -97,6 +100,7 @@ def _header(test: TestCase, fname: str, engine: str) -> str:
     secrets = "".join(f"\n    {env_secret_name(k)}  ({k})" for k in test.sensitive) or " (none)"
     return HEADER.format(name=test.name.replace('"""', "'''"), fname=fname, source=source.replace('"""', "'''"),
                          engine=engine, secrets=secrets, mask=MASK,
+                         open_shadow=repr(OPEN_SHADOW_JS),
                          data=pprint.pformat(test.data, indent=4, sort_dicts=False) if test.data else "{}",
                          sensitive=repr(list(test.sensitive)))
 
@@ -176,6 +180,7 @@ if __name__ == "__main__":
                 ctx_opts["storage_state"] = os.environ["STORAGE_STATE"]
             browser = btype.launch(**launch)
             context = browser.new_context(**ctx_opts)
+        context.add_init_script(OPEN_SHADOW_JS)
         context.set_default_timeout(int(os.getenv("STEP_TIMEOUT", "15000")))
         page = context.pages[0] if context.pages else context.new_page()
         try:
@@ -202,7 +207,33 @@ def _pw_nth(st: Step) -> str:
     return f"{base}.{kind}.filter(has_text={_val(st.target)}){pick}"
 
 
+def _point_lines(st: Step, engine: str) -> list[str] | None:
+    """Steps located visually (canvas): act at the recorded screen position."""
+    if not (st.locator and st.locator.strategy == "point"):
+        return None
+    x, y = st.locator.value.split(",")
+    a, val = st.action, _val(st.value)
+    note = "# located visually by Claude (canvas): screen position, re-check if the layout changes"
+    if engine == "playwright":
+        act = {Action.CLICK: [f"page.mouse.click({x}, {y})"], Action.DOUBLE_CLICK: [f"page.mouse.dblclick({x}, {y})"],
+               Action.RIGHT_CLICK: [f'page.mouse.click({x}, {y}, button="right")'], Action.HOVER: [f"page.mouse.move({x}, {y})"],
+               Action.TYPE: [f"page.mouse.click({x}, {y})", f"page.keyboard.type({val})"],
+               Action.APPEND: [f"page.mouse.click({x}, {y})", f"page.keyboard.type({val})"]}
+    else:
+        pre = ["top(driver)", "ab = ActionBuilder(driver)", f"ab.pointer_action.move_to_location({x}, {y})"]
+        act = {Action.CLICK: pre + ["ab.pointer_action.click()", "ab.perform()"],
+               Action.DOUBLE_CLICK: pre + ["ab.pointer_action.click()", "ab.pointer_action.click()", "ab.perform()"],
+               Action.RIGHT_CLICK: pre + ["ab.pointer_action.context_click()", "ab.perform()"],
+               Action.HOVER: pre + ["ab.perform()"],
+               Action.TYPE: pre + ["ab.pointer_action.click()", "ab.perform()", f"ActionChains(driver).send_keys({val}).perform()"],
+               Action.APPEND: pre + ["ab.pointer_action.click()", "ab.perform()", f"ActionChains(driver).send_keys({val}).perform()"]}
+    return [note] + act.get(a, [f"# unsupported on a visually located element: {a.value}"])
+
+
 def _pw_lines(st: Step) -> list[str]:
+    pts = _point_lines(st, "playwright")
+    if pts:
+        return pts
     a, val = st.action, _val(st.value)
     one = f"{pw_locator(st.locator)}.first" if st.locator else "None"
     if st.locator and st.nth is not None and st.target:
@@ -297,7 +328,9 @@ def se_find(loc: Locator | None, clickable: bool = False) -> str:
     if not loc:
         return "None"
     from .engines.selenium_engine import by_for
-    by = by_for(loc, bool(loc.shadow)) or ("css selector", loc.value)
+    by = by_for(loc, bool(loc.shadow))
+    if by is None:
+        return f"_no_selenium_locator({_q(loc.label())})"
     args = f"{BY_NAME.get(by[0], repr(by[0]))}, {_q(by[1])}"
     if loc.frames:
         args += f", frames={loc.frames!r}"
@@ -310,6 +343,7 @@ def se_find(loc: Locator | None, clickable: bool = False) -> str:
 
 SE_HELPERS = '''from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.actions.action_builder import ActionBuilder
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select, WebDriverWait
@@ -347,6 +381,10 @@ def xq(s):
         return "'" + s + "'"
     q = chr(34)
     return "concat(" + (", '" + q + "', ").join(q + p + q for p in s.split(q)) + ")"
+
+
+def _no_selenium_locator(what):
+    raise RuntimeError("this step was recorded with a Playwright-only locator and no Selenium fallback: " + what)
 
 
 def top(driver):
@@ -450,6 +488,7 @@ if __name__ == "__main__":
             service = Service(os.environ["AIAUTO_CHROMEDRIVER"])
         cls = webdriver.Edge if edge else webdriver.Chrome
         driver = cls(options=options, service=service) if service else cls(options=options)
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": OPEN_SHADOW_JS})
         if os.getenv("STORAGE_STATE"):          # saved login session (cookies + localStorage)
             with open(os.environ["STORAGE_STATE"], encoding="utf-8") as fh:
                 state = json.load(fh)
@@ -475,6 +514,9 @@ def _se_nth(st: Step, clickable: bool) -> str:
 
 
 def _se_lines(st: Step) -> list[str]:
+    pts = _point_lines(st, "selenium")
+    if pts:
+        return pts
     a, val = st.action, _val(st.value)
     F, FC = se_find(se_locator(st)), se_find(se_locator(st), clickable=True)
     if st.locator and st.nth is not None and st.target and not st.locator.shadow:

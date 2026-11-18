@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Lazy and virtual content</title>
+<style>body{font-family:sans-serif} #list{height:240px;overflow-y:auto;border:1px solid #ccc;position:relative;width:320px}
+.row{position:absolute;left:0;right:0;height:30px;line-height:30px;padding:0 8px;border-bottom:1px solid #eee}
+.spacer{height:2400px} #log{position:fixed;top:0;right:0;background:#ffe;padding:6px}</style></head>
+<body><h1>Orders</h1><div id="log"></div>
+<!-- virtualised list: 1,000 rows, only the visible ones exist in the DOM -->
+<div id="list" role="list" aria-label="Orders list"><div id="inner" style="height:30000px"></div></div>
+<div class="spacer"></div>
+<!-- lazy section: rendered only when scrolled into view -->
+<section id="footer"><h2>Newsletter</h2><div id="lazy"></div></section>
+<script>
+const log = t => document.getElementById('log').textContent += t + ' ';
+const list = document.getElementById('list'), inner = document.getElementById('inner');
+function render() {
+  const first = Math.floor(list.scrollTop / 30), count = Math.ceil(240 / 30) + 1;
+  inner.innerHTML = '';
+  for (let i = first; i < Math.min(1000, first + count); i++) {
+    const r = document.createElement('div'); r.className = 'row'; r.setAttribute('role', 'listitem'); r.style.top = (i * 30) + 'px';
+    r.innerHTML = '<span>Order ' + (i + 1) + '</span> <button type="button">Open order ' + (i + 1) + '</button>';
+    r.querySelector('button').onclick = () => log('Opened order ' + (i + 1));
+    inner.appendChild(r);
+  }
+}
+list.addEventListener('scroll', render); render();
+new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting && !document.getElementById('sub')) {
+  document.getElementById('lazy').innerHTML = '<button id="sub" type="button">Subscribe to newsletter</button>';
+  document.getElementById('sub').onclick = () => log('Subscribed'); } })).observe(document.getElementById('footer'));
+</script></body></html>

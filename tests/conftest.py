@@ -18,17 +18,33 @@ def demo_page(tmp_path):
     return p
 
 
-@pytest.fixture(scope="session")
-def shop_url():
-    """Serve examples/shop over HTTP (multi-page shop: search -> product -> cart)."""
+def _serve(directory):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(EXAMPLES / "shop"))
-    handler.log_message = lambda *a, **k: None
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a, **k):
+            pass
+    handler = functools.partial(Quiet, directory=str(directory))
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{port}"
+    return srv, f"http://127.0.0.1:{port}"
+
+
+@pytest.fixture(scope="session")
+def shop_url():
+    """Serve examples/shop over HTTP (multi-page shop: search -> product -> cart)."""
+    srv, url = _serve(EXAMPLES / "shop")
+    yield url
+    srv.shutdown()
+
+
+@pytest.fixture(scope="session")
+def xorigin_url():
+    """examples/xorigin: page on 127.0.0.1 embedding an iframe from localhost (a different origin)."""
+    srv, url = _serve(EXAMPLES / "xorigin")
+    yield url
     srv.shutdown()
 
 

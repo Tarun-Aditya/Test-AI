@@ -201,6 +201,53 @@ def _sentence(s: dict) -> str:
     return " ".join(x for x in (a.replace("_", " "), tgt, f'"{v}"' if v else "") if x).strip()
 
 
+VISUAL_SYSTEM = """You locate a UI element on a screenshot of a web page for a browser test.
+The element was not found in the page's DOM or accessibility tree, so it is probably drawn on a <canvas>, inside
+an image, or in a plugin. Given the step and the screenshot, return the pixel coordinates of the CENTER of the
+element the step refers to, in the screenshot's coordinate system (top-left is 0,0). If the element is not
+visible on the screenshot, or you are not confident which element is meant, return found=false."""
+
+VISUAL_SCHEMA = {
+    "type": "object",
+    "properties": {"found": {"type": "boolean"}, "x": {"type": "integer"}, "y": {"type": "integer"}, "reason": {"type": "string"}},
+    "required": ["found", "x", "y", "reason"],
+    "additionalProperties": False,
+}
+
+
+def locate_visual(png: bytes, step: Step, width: int, height: int) -> dict | None:
+    """Claude looks at a screenshot and returns {found, x, y, reason} for the step's element (canvas fallback)."""
+    client = _get_client()
+    if client is None:
+        return None
+    import base64
+    import anthropic
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(png).decode()}},
+        {"type": "text", "text": f"Screenshot size: {width}x{height} pixels.\nStep: action={step.action.value} target={step.target!r} "
+                                 f"value={step.value!r}\nOriginal sentence: {step.raw!r}"},
+    ]
+    try:
+        resp = client.beta.messages.create(
+            model=MODEL, max_tokens=4000, system=VISUAL_SYSTEM, messages=[{"role": "user", "content": content}],
+            output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": VISUAL_SCHEMA}},
+            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+        )
+    except anthropic.APIError as e:
+        log.warning("visual locate failed: %s", e)
+        return None
+    if resp.stop_reason in ("refusal", "max_tokens"):
+        return None
+    text = next((b.text for b in resp.content if b.type == "text"), None)
+    try:
+        out = json.loads(text) if text else None
+    except json.JSONDecodeError:
+        return None
+    if not out or not out.get("found") or not (0 <= out["x"] < width and 0 <= out["y"] < height):
+        return None
+    return out
+
+
 def pick_candidate(step: Step, candidates: list[dict]) -> int | None:
     if not candidates:
         return None

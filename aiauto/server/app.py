@@ -51,6 +51,9 @@ app = FastAPI(title="Autopilot - AI Test Automation", version="0.3.0")
 if (APP_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=APP_DIR / "assets"), name="assets")
 pool = ThreadPoolExecutor(max_workers=LOCAL_WORKERS)
+# All database writes for run events go through ONE thread, in the order the events were emitted
+# (a run's step updates and its final summary sync must never apply out of order).
+db_writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="db-writer")
 
 
 # --------------------------------------------------------------------- live state
@@ -63,9 +66,16 @@ class Hub:
 
     async def broadcast(self, event: dict) -> None:
         rid, t = event.get("run_id"), event.get("type")
+        if t == "_finalize":       # internal: sync the DB with summary.json after all of the run's events
+            try:
+                await asyncio.get_running_loop().run_in_executor(db_writer, db.finalize_from_summary, ARTIFACTS / rid)
+            except Exception as e:
+                log.warning("finalize failed for %s: %s", rid, e)
+            event = {"type": "runs_changed"}
+            rid, t = None, "runs_changed"
         if rid and t not in TRANSIENT:
             try:
-                await asyncio.to_thread(db.on_event, event)
+                await asyncio.get_running_loop().run_in_executor(db_writer, db.on_event, event)
             except Exception as e:
                 log.warning("db update failed for %s: %s", t, e)
             self.events.setdefault(rid, []).append(event)
@@ -469,11 +479,10 @@ def _run_local(job: dict) -> None:
         holder: list = []
         run_test(test, cfg, ARTIFACTS, mode=job["mode"], on_event=hub.emit_threadsafe, agent=LOCAL_NAME,
                  run_id=job["run_id"], runner_out=holder)
-        db.finalize_from_summary(ARTIFACTS / job["run_id"])
+        hub.emit_threadsafe({"type": "_finalize", "run_id": job["run_id"]})   # ordered after the run's events
         if cfg.save_session and holder and holder[0].saved_session:
             db.session_put(cfg.save_session, holder[0].saved_session)
             hub.emit_threadsafe({"type": "session_saved", "name": cfg.save_session})
-        hub.emit_threadsafe({"type": "runs_changed"})
     except Exception as e:
         log.exception("local run failed")
         hub.emit_threadsafe({"type": "run_finished", "run_id": job["run_id"], "status": "failed", "error": str(e)})
@@ -557,9 +566,8 @@ async def agent_upload(run_id: str, file: UploadFile = File(...), x_agent_token:
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(z.read(m))
-    await asyncio.to_thread(db.finalize_from_summary, dest)
+    await hub.broadcast({"type": "_finalize", "run_id": run_id})
     await hub.broadcast({"type": "artifacts_uploaded", "run_id": run_id})
-    await hub.broadcast({"type": "runs_changed"})
     return {"ok": True}
 
 

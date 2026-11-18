@@ -30,10 +30,10 @@ export function ModeBadge({ mode, parser }) {
 /** Who did what for one step: AI or rules split the English, AI or heuristics picked the element. */
 export function Prov({ parsed, picked }) {
   const P = { ai: "AI", rules: "rules", user: "edited" };
-  const K = { ai: "AI", heuristic: "heuristic", script: "script locator", fallback: "fallback locator" };
+  const K = { ai: "AI", heuristic: "heuristic", script: "script locator", fallback: "fallback locator", "ai-vision": "AI · screenshot" };
   return <>
     {parsed && <span className={"prov " + (parsed === "ai" ? "ai" : "")} title="Who turned the English into this step">step: {P[parsed] || parsed}</span>}
-    {picked && <span className={"prov " + (picked === "ai" ? "ai" : "")} title="How the element was identified">element: {K[picked] || picked}</span>}
+    {picked && <span className={"prov " + (picked === "ai" || picked === "ai-vision" ? "ai" : "")} title="How the element was identified">element: {K[picked] || picked}</span>}
   </>;
 }
 

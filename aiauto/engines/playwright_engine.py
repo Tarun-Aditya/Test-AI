@@ -8,9 +8,9 @@ from pathlib import Path
 import logging
 import uuid
 
-from ..locators import DESCRIBE_EL_JS, SNAPSHOT_JS
+from ..locators import CSS_PATH_JS, DESCRIBE_EL_JS, snapshot_js
 from ..models import Locator
-from .base import (INFO_JS, JS_VALUE_TYPES, PAGE_TEXT_JS, SET_VALUE_JS, Engine, chrome_binary,
+from .base import (OPEN_SHADOW_JS, INFO_JS, JS_VALUE_TYPES, PAGE_TEXT_JS, SET_VALUE_JS, Engine, chrome_binary,
                    localstorage_init_script)
 
 
@@ -84,6 +84,8 @@ class PlaywrightEngine(Engine):
             js = localstorage_init_script(c.session_state)
             if js:
                 self._ctx.add_init_script(js)
+        if c.open_closed_shadow_roots:
+            self._ctx.add_init_script(OPEN_SHADOW_JS)
         self._ctx.set_default_timeout(c.timeout_ms)
         self._ctx.on("page", self._on_new_page)
         self._watch(self.page)
@@ -143,7 +145,7 @@ class PlaywrightEngine(Engine):
     def url(self): return self.page.url
     def title(self): return self.page.title()
     def page_text(self): return self.page.evaluate(PAGE_TEXT_JS)
-    def snapshot(self):
+    def snapshot(self, words=None):
         """Playwright's own accessibility snapshot (roles/names per the ARIA spec, shadow DOM + iframes)."""
         if self.config.use_playwright_snapshot:
             try:
@@ -151,16 +153,43 @@ class PlaywrightEngine(Engine):
                 return parse(self.page.aria_snapshot(mode="ai"))
             except Exception as e:
                 logging.getLogger(__name__).debug("aria snapshot failed, using DOM snapshot: %s", e)
-        return self.snapshot_dom()
+        return self.snapshot_dom(words)
 
-    def snapshot_dom(self):
-        return self.page.evaluate("() => {" + SNAPSHOT_JS + "}")
+    def snapshot_dom(self, words=None):
+        return self.page.evaluate("() => {" + snapshot_js(words) + "}")
+
+    def click_point(self, x, y, button="left", double=False):
+        self.page.mouse.click(x, y, button=button, click_count=2 if double else 1)
+        self.frame()
+
+    def hover_point(self, x, y):
+        self.page.mouse.move(x, y); self.frame()
+
+    def type_text(self, text):
+        self.page.keyboard.type(text); self.frame()
+
+    def viewport(self):
+        vs = self.page.viewport_size or {}
+        return vs.get("width", self.config.viewport_width), vs.get("height", self.config.viewport_height)
+
+    def eval_js(self, script):
+        return self.page.evaluate("() => {" + script + "}")
 
     def describe(self, cand):
         marker = cand.get("marker") or f"pw{uuid.uuid4().hex[:8]}:{cand['uid']}"
         if cand.get("ref"):
             loc = self.page.get_by_ref(cand["ref"])
             d = loc.evaluate(DESCRIBE_EL_JS, marker, timeout=5000)
+            if not d.get("frames"):
+                # cross-origin iframes hide their parents from page scripts: build the iframe chain via Playwright
+                try:
+                    chain, fr = [], loc.element_handle(timeout=3000).owner_frame()
+                    while fr and fr.parent_frame:
+                        chain.insert(0, fr.frame_element().evaluate(CSS_PATH_JS))
+                        fr = fr.parent_frame
+                    d["frames"] = chain
+                except Exception as e:
+                    logging.getLogger(__name__).debug("frame chain failed: %s", e)
             try:   # Playwright's own locator generator (as in codegen): unique by construction
                 n = loc.normalize()
                 impl = getattr(n, "_impl_obj", n)

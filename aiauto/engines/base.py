@@ -168,12 +168,12 @@ class Engine(ABC):
     def page_text(self) -> str:
         """Visible text of the page, including open shadow roots and same-origin iframes."""
     @abstractmethod
-    def snapshot(self) -> list[dict]:
-        """Candidate elements for the current page (engine's best source)."""
+    def snapshot(self, words: list[str] | None = None) -> list[dict]:
+        """Candidate elements for the current page (engine's best source); `words` lets big pages pre-filter."""
 
-    def snapshot_dom(self) -> list[dict]:
+    def snapshot_dom(self, words: list[str] | None = None) -> list[dict]:
         """Fallback candidates from the DOM walk (SNAPSHOT_JS). Same as snapshot() unless overridden."""
-        return self.snapshot()
+        return self.snapshot(words)
 
     @abstractmethod
     def describe(self, cand: dict) -> dict | None:
@@ -188,6 +188,23 @@ class Engine(ABC):
     def wait_for_load(self) -> None: ...
     @abstractmethod
     def switch_tab(self, which: str) -> None: ...
+
+    def eval_js(self, script: str):
+        """Run a script body (may `return`) in the top-level page."""
+        raise NotImplementedError
+
+    # actions at a screen position (elements drawn on a canvas, found visually)
+    def click_point(self, x: int, y: int, button: str = "left", double: bool = False) -> None:
+        raise NotImplementedError
+
+    def hover_point(self, x: int, y: int) -> None:
+        raise NotImplementedError
+
+    def type_text(self, text: str) -> None:
+        raise NotImplementedError
+
+    def viewport(self) -> tuple[int, int]:
+        return self.config.viewport_width, self.config.viewport_height
 
     def after_action(self) -> None:
         """Hook for engines that must handle dialogs explicitly (Selenium)."""
@@ -267,6 +284,39 @@ def make_engine(config: RunConfig, run_dir: Path) -> Engine:
     from .playwright_engine import PlaywrightEngine
     return PlaywrightEngine(config, run_dir)
 
+
+# Injected before any page script: closed shadow roots are created open, so locators (and Playwright's
+# snapshot) can see inside them. Applies to every frame of every page in the session.
+OPEN_SHADOW_JS = """(() => { const proto = Element.prototype; if (proto.attachShadow && !proto.attachShadow.__aiauto) {
+  const orig = proto.attachShadow; const patched = function (init) { return orig.call(this, Object.assign({}, init, { mode: 'open' })); };
+  patched.__aiauto = true; proto.attachShadow = patched; } })();"""
+
+# One scroll step while searching for an element that isn't rendered yet: the page first, then the largest
+# scrollable container that isn't at its end. Returns what scrolled, or null when everything is at the end.
+SCROLL_MORE_JS = """const doc = document.scrollingElement || document.documentElement;
+if (doc.scrollTop + innerHeight < doc.scrollHeight - 4) { window.scrollBy(0, Math.round(innerHeight * 0.8)); return 'page'; }
+const boxes = Array.from(document.querySelectorAll('*')).filter(e => e.clientHeight > 40 && e.scrollHeight > e.clientHeight + 20
+  && /(auto|scroll)/.test(getComputedStyle(e).overflowY) && e.scrollTop + e.clientHeight < e.scrollHeight - 4);
+boxes.sort((a, b) => b.clientHeight * b.clientWidth - a.clientHeight * a.clientWidth);
+if (boxes.length) { const e = boxes[0]; e.scrollTop += Math.round(e.clientHeight * 0.8); e.dispatchEvent(new Event('scroll')); return 'container'; }
+return null;"""
+
+# Scrollable containers (virtualised lists, panes): pick the largest one and remember it as window.__aiautoBox.
+BOX_JS = """const boxes = Array.from(document.querySelectorAll('*')).filter(e => e.clientHeight > 40 && e.scrollHeight > e.clientHeight + 20
+  && /(auto|scroll)/.test(getComputedStyle(e).overflowY));
+boxes.sort((a, b) => b.clientHeight * b.clientWidth - a.clientHeight * a.clientWidth);
+window.__aiautoBox = boxes[0] || null;
+return boxes[0] ? {max: boxes[0].scrollHeight - boxes[0].clientHeight, step: boxes[0].clientHeight} : null;"""
+
+# Set the box's scroll position, return the numbers visible in it (to binary-search an ordered list).
+BOX_SEEK_JS = """const b = window.__aiautoBox; if (!b) return null; b.scrollTop = arguments[0]; b.dispatchEvent(new Event('scroll'));
+return true;"""
+BOX_NUMS_JS = """const b = window.__aiautoBox; if (!b) return null; const r = b.getBoundingClientRect();
+const nums = []; const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+for (let n = walker.nextNode(); n; n = walker.nextNode()) { const p = n.parentElement; if (!p) continue;
+  const q = p.getBoundingClientRect(); if (q.bottom < r.top || q.top > r.bottom || q.height === 0) continue;
+  for (const m of (n.nodeValue.match(/\\d+/g) || [])) nums.push(Number(m)); }
+return nums;"""
 
 PAGE_TEXT_JS = """() => { const parts = [];
   const walk = (root) => { try { if (root.body) parts.push(root.body.innerText); } catch (e) {}

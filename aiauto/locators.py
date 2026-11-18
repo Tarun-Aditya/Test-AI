@@ -160,7 +160,7 @@ SNAPSHOT_JS = r"""
 return (function(){
 """ + JS_LIB + r"""
   const MAX = 25000;
-  const out = []; const ELS = []; let uid = 0; const TOK = Math.random().toString(36).slice(2, 10);
+  const out = []; const ELS = []; const BLOCKED = []; let uid = 0; const TOK = Math.random().toString(36).slice(2, 10);
   function ownText(el){ let t=''; for (const n of el.childNodes) if (n.nodeType===3) t += n.nodeValue; return norm(t); }
   function interesting(el, tag){
     if (FORM.has(tag) || ['button','a','summary','option','label','img','svg','iframe'].includes(tag)) return true;
@@ -177,7 +177,9 @@ return (function(){
       const tag = el.tagName.toLowerCase();
       if (el.shadowRoot) walk(el.shadowRoot, frames, shadow.concat([cssPathIn(el)]));
       if (tag==='iframe' || tag==='frame') {
-        try { const d = el.contentDocument; if (d && d.documentElement) walk(d, frames.concat([cssPathIn(el)]), []); } catch(e) {}
+        let d = null; try { d = el.contentDocument; } catch(e) {}
+        if (d && d.documentElement) walk(d, frames.concat([cssPathIn(el)]), []);
+        else if (shadow.length === 0 && visible(el)) BLOCKED.push(frames.concat([cssPathIn(el)]));   // cross-origin: engine enters it
       }
       if (SKIP.has(tag) || !interesting(el, tag)) continue;
       const type = (el.getAttribute('type')||'').toLowerCase();
@@ -194,10 +196,56 @@ return (function(){
     }
   }
   walk(document, [], []);
-  try { window.__aiautoEls = ELS; } catch (e) {}   // the chosen element is looked up by uid afterwards
+  try { window.__aiautoEls = ELS; window.__aiautoBlocked = BLOCKED; } catch (e) {}   // chosen element looked up by uid afterwards
+  // large pages: only send back elements sharing a word with the step (less data over the wire)
+  const W = /*WORDS*/[];
+  if (W.length && out.length > 300) {
+    const f = out.filter(i => { const h = [i.name, i.text, i.label, i.aria_label, i.placeholder, i.value, i.alt, i.title, i.testid, i.id, i.nameattr]
+      .join(' ').toLowerCase().replace(/[_-]/g, ' '); return W.some(w => h.includes(w)); });
+    if (f.length) return f;
+  }
   return out;
 })();
 """
+
+
+def snapshot_js(words: list[str] | None = None) -> str:
+    """SNAPSHOT_JS that, on pages with many elements, returns only elements sharing one of `words`."""
+    import json
+    return SNAPSHOT_JS.replace("/*WORDS*/[]", json.dumps([w.lower() for w in (words or [])]))
+
+
+def step_words(target: str | None) -> list[str]:
+    """Words used to pre-filter candidates on big pages (empty = no filtering, e.g. 'the first result')."""
+    return [w for w in _content_tokens(target or "") if len(w) > 2 or w.isdigit()]
+
+
+# In-page check of Selenium locator specs against ONE element: [by, value] -> matches exactly that element?
+VERIFY_JS = r"""
+const el = (window.__aiautoEls || [])[arguments[0] - 1]; if (!el) return null;
+const root = el.getRootNode(), doc = el.ownerDocument;
+const q = s => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+const only = list => list.length === 1 && list[0] === el;
+return arguments[1].map(spec => {
+  if (!spec) return false;
+  const [by, v] = spec;
+  try {
+    if (by === 'css selector') return only(root.querySelectorAll(v));
+    if (by === 'id') return only(root.querySelectorAll('[id="' + q(v) + '"]'));
+    if (by === 'name') return only(root.querySelectorAll('[name="' + q(v) + '"]'));
+    if (by === 'link text') return only(Array.from(root.querySelectorAll('a')).filter(a => (a.innerText || '').trim() === v));
+    if (by === 'xpath') { const r = doc.evaluate(v, doc, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      return r.snapshotLength === 1 && r.snapshotItem(0) === el; }
+  } catch (e) { return false; }
+  return false;
+});
+"""
+
+# Human-facing info of one element (to check that a replayed fallback still points at what the step means).
+INFO_EL_JS = "(el) => {" + JS_LIB + " return info(el); }"
+
+# CSS path of an element within its own document / shadow root (used for iframe chains).
+CSS_PATH_JS = "(el) => {" + JS_LIB + " return cssPathIn(el); }"
 
 # Builds the full description + unique locators of a single element (the one a step picked).
 # Called as a function of the element: (el, marker) => {...}
@@ -322,7 +370,14 @@ def _norm_attr(f: str, v: str) -> str:
 def score(step: Step, c: dict, target: str | None = None) -> float:
     target = target if target is not None else (step.target or "")
     best = max((w * _sim(target, _norm_attr(f, c.get(f) or "")) for f, w in FIELD_WEIGHTS.items()), default=0.0)
+    c["_text_match"] = best
     s = best * 3.0
+    # numbers the user wrote ("order 750", "row 3", "$25") must appear exactly; "Open order 5" is not order 750
+    nums = [w for w in _content_tokens(target) if any(ch.isdigit() for ch in w)]
+    if nums:
+        hay = set(_tokens(" ".join(str(c.get(f) or "") for f in ("name", "text", "label", "aria_label", "value", "title", "alt", "placeholder", "context"))))
+        if any(n not in hay for n in nums):
+            s -= 2.5
     # an element whose visible name/text/label is exactly what the user wrote beats near-matches
     core = " ".join(_content_tokens(target))
     if core and any(" ".join(_tokens(c.get(f) or "")) == core for f in ("name", "text", "label", "aria_label", "placeholder", "value", "alt", "title")):
@@ -433,7 +488,11 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
         w, ranked = nth_match(step, candidates, target, step.nth)
         return w, ranked, None if w else "no match for that position"
     ranked = rank(step, candidates, target)
-    winner = ranked[0] if ranked and ranked[0]["score"] >= 1.0 else None
+    # a winner needs textual evidence: being the right kind of element (the only textbox…) is not enough,
+    # unless the description has no specific words at all ("the textbox")
+    specific = any(w not in STOP for w in _tokens(target))
+    eligible = [c for c in ranked if not specific or c.get("_text_match", 0) > 0.25]
+    winner = eligible[0] if eligible and eligible[0]["score"] >= 1.0 else None
     if winner:
         winner["picked_by"] = "heuristic"
     close = len(ranked) > 1 and (winner is None or ranked[0]["score"] - ranked[1]["score"] < 0.35)
@@ -448,7 +507,7 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
                 return winner, ranked, None
     if winner is None:
         return None, ranked, "nothing on the page matches well enough"
-    rivals = [c for c in ranked[1:4] if winner["score"] - c["score"] < TIE and not _related(winner, c)]
+    rivals = [c for c in eligible[1:4] if winner["score"] - c["score"] < TIE and not _related(winner, c)]
     if rivals and on_ambiguous == "fail":
         names = "; ".join(describe(c) + (f" in {c['context']}" if c.get("context") else "") for c in [winner] + rivals)
         return None, ranked, (f"{len(rivals) + 1} different elements match equally well ({names}). "

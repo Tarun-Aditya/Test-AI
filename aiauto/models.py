@@ -140,6 +140,8 @@ class RunConfig(BaseModel):
     live_fps: float = 1.5
     use_ax_tree: bool = True
     use_playwright_snapshot: bool = True  # Playwright: candidates from page.aria_snapshot + Playwright's locator generator
+    open_closed_shadow_roots: bool = True  # inject a script that creates shadow roots open (closed ones are otherwise invisible)
+    visual_fallback: bool = True          # element not in DOM/accessibility tree (canvas…): ask Claude on a screenshot (needs AI)
     on_ambiguous: str = "fail"            # two different elements tie and nothing settles it: "fail" (say which) | "best"              # Selenium on Chrome/Edge: take roles + accessible names from the CDP accessibility tree
     # --- logged-in sessions ---------------------------------------------------
     profile_dir: Optional[str] = None     # Chrome user-data-dir to reuse (saved passwords, SSO cookies)

@@ -128,6 +128,24 @@ For every step that targets an element, at the moment the step runs (the page ch
 | **Locator** | `get_by_ref(ref).normalize()`: Playwright's own locator generator (as in codegen), unique by construction, e.g. `get_by_role("button", name="Pay now")` inside `frame_locator` chains. Plus verified engine-neutral fallbacks | Most robust of test-id › id › role+name › label › placeholder › name › text › CSS › XPath, mapped to `By.*` |
 | **Verification** | The engine must find exactly one element and it must be the chosen one (primary + 2 fallbacks kept) | same |
 
+### Hard cases covered
+
+| Case | How it's handled | Engines |
+|---|---|---|
+| Open shadow roots, any depth | walked by the snapshot; Playwright locators pierce them, Selenium uses `shadow_root` + CSS | both |
+| **Closed** shadow roots | a script injected before page scripts creates shadow roots open (`open_closed_shadow_roots`); generated scripts inject it too | Playwright; Selenium on Chrome/Edge (CDP) |
+| Same-origin iframes, nested | walked by the snapshot; `frame_locator` / `switch_to.frame` chains | both |
+| **Cross-origin** iframes (payment widgets…) | Playwright's snapshot covers them; Selenium switches into each one and scans it from inside | both |
+| Late elements | re-snapshot every 0.5 s until the step timeout | both |
+| **Not rendered yet**: virtualised lists, lazy sections | scroll the page, then the largest scrollable container; ordered lists are **binary-searched** by the numbers they show | both |
+| Re-rendered elements (stale references) | re-find and retry | Selenium |
+| Ties between different elements | Claude decides, otherwise the step **fails and lists them** (never a silent guess) | both |
+| Numbers in the step ("order 750") | must match exactly; "order 5" is not a candidate | both |
+| Replay fallbacks | a fallback (or structural CSS/XPath) must still match the step's description, so "the second row's button" can't click a different row after re-rendering | both |
+| **Canvas / pixels only** | Claude locates it on a screenshot and the engine acts at that position (needs `ANTHROPIC_API_KEY`; replays look again). Without AI the error says it's a canvas | both |
+
+Still out of reach: content inside browser plugins / native OS dialogs, and canvas content when AI is off.
+
 ### Time to locate (measured)
 
 Per element step; non-element steps (open, press, wait, page-text checks) don't locate anything.
@@ -135,14 +153,20 @@ Per element step; non-element steps (open, press, wait, page-text checks) don't 
 | Page | Engine | First run (AI mode) | Replay (Script mode) |
 |---|---|---|---|
 | Small form/app page (~100 DOM nodes) | Playwright | ~0.1 s | ~0.01 s |
-|  | Selenium | ~0.15 s | ~0.03 s |
+|  | Selenium | ~0.09 s | ~0.03 s |
 | Very large page (Wikipedia article, ~9,000 DOM nodes) | Playwright | ~0.9 s | ~0.15 s |
-|  | Selenium | ~1.25 s | ~0.5 s |
+|  | Selenium (Chrome) | ~0.35 s | ~0.3 s |
 
-A 600-step test with ~420 element steps adds roughly **40 s – 9 min** of locating on the first run, depending on page size,
-and **~5 s – 4 min** when replaying the generated script; the browser actions and page loads themselves come on top.
-Claude tie-breaks (only for genuinely close candidates) add the API's response time per call. Every report and
-`summary.json` records `locate_ms` per step and snapshot / rank / verify timings per run.
+Why Selenium was slow, and what changed: every WebDriver command is an HTTP round trip to the driver, so locating
+used to cost ~10 round trips per step (one per locator check, plus frame/shadow switching) and shipped every
+candidate on the page as JSON. Now each locator check for the chosen element runs in one in-page call (then a single
+native `find_elements` confirms the winner), big pages send back only elements sharing a word with the step, and
+video frames are JPEG via CDP. Playwright's per-step cost on huge pages is mostly its accessibility snapshot (~0.5 s).
+
+A 600-step test with ~420 element steps adds roughly **40 s – 6 min** of locating on the first run, depending on
+page size, and **~5 s – 2 min** when replaying the generated script. Page loads and the actions come on top.
+Claude calls (tie-breaks, canvas) add the API's response time each. Reports and `summary.json` record `locate_ms`
+per step and snapshot / rank / verify / scroll-search timings per run.
 
 ### Self-healing (engine only)
 

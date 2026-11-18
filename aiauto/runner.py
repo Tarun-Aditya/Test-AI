@@ -138,7 +138,7 @@ class Runner:
                 res.locate_ms = int((time.perf_counter() - t_loc) * 1000)
                 res.healed = healed
                 res.picked_by = self._picked
-                if self.config.screenshot_each_step:
+                if self.config.screenshot_each_step and loc.strategy != "point":
                     e.highlight(loc)
                 if secret and step.action in (Action.TYPE, Action.APPEND):
                     e.mask(loc)
@@ -182,17 +182,36 @@ class Runner:
         stored = ([stored_primary] + (template.fallbacks if attr == "locator" else [])) if stored_primary else []
         if template.nth is not None and attr == "locator":
             stored = []          # positional picks ("first result containing X") depend on live data: always re-pick
+        if stored and stored_primary.strategy == "point":
+            # visually located last time: look again (the layout may have moved); stored position without AI
+            again = self._visual(live, template, attr, stored) if self._ai() else None
+            if again:
+                return again[0], False
+            self._picked = "script"
+            return stored_primary, False
         if stored:
+            fits = lambda loc, idx: self._fits(loc, idx, live, target)
+            # locators this engine can't run (a Playwright-generated one on Selenium) are skipped, not "healed"
+            usable0 = next((i for i, l in enumerate(stored) if not (e.name == "selenium" and l.strategy == "playwright")), 0)
             for idx, loc in enumerate(stored):
-                if e.exists(loc, max(1500, self.config.timeout_ms // 2) if idx == 0 else 700) and \
-                        (e.count(loc) == 1 or loc.strategy in ("css", "xpath")):
-                    if idx > 0 and attr == "locator":
+                if e.exists(loc, 1200 if idx == 0 else 300) and \
+                        (e.count(loc) == 1 or loc.strategy in ("css", "xpath")) and fits(loc, idx):
+                    if idx > usable0 and attr == "locator":
                         # promote the working fallback so the regenerated script is already healed
                         template.locator, template.fallbacks = loc, [l for l in stored if l is not loc][:3]
-                    if idx > 0:
+                    if idx > usable0:
                         self._emit("healing", target=self.mask(target), how=f"fallback locator {loc.label()}")
-                    self._picked = "script" if idx == 0 else "fallback"
-                    return loc, idx > 0
+                    self._picked = "script" if idx <= usable0 else "fallback"
+                    return loc, idx > usable0
+            # not rendered yet (virtualised list, lazy section)? scroll and look for the stored locators
+            found = self._scroll_search(lambda: next((l for i, l in enumerate(stored) if e.count(l) >= 1 and fits(l, i)), None),
+                                        number=_number_in(target)) if not template.optional else None
+            if not found and e.exists(stored_primary, max(1500, self.config.timeout_ms // 2)):
+                found = stored_primary          # it was just slow to appear
+            if found:
+                healed = stored.index(found) > usable0
+                self._picked = "fallback" if healed else "script"
+                return found, healed
             if not self.config.self_heal:
                 raise StepError(f"Element not found with stored locator {stored_primary.label()} (self-heal off)")
             self._emit("healing", target=self.mask(target), how="re-identifying from description")
@@ -204,6 +223,7 @@ class Runner:
         deadline = time.time() + wait_ms / 1000
         ranked: list[dict] = []
         problem = None
+        scrolled = False
         # sources, best first: the engine's snapshot (Playwright: its own ARIA snapshot), then the DOM walk
         # (reaches elements without an accessible role, e.g. plain-text <div>s with click handlers)
         sources = [e.snapshot] + ([e.snapshot_dom] if getattr(e, "has_dom_fallback", False) else [])
@@ -212,7 +232,7 @@ class Runner:
             for source in sources:
                 try:
                     t0 = time.perf_counter()
-                    candidates = source()
+                    candidates = source(None if probe.nth is not None else L.step_words(target))
                     self._timing("snapshot", t0)
                 except Exception as ex:
                     log.debug("snapshot failed: %s", ex)
@@ -242,12 +262,164 @@ class Runner:
                     break                    # a real tie: don't let a weaker source pick one of them silently
             if problem and "match equally well" in problem:
                 raise StepError(self.mask(f"Ambiguous '{target}': {problem}"))
+            if not scrolled and not template.optional:
+                scrolled = True
+                # not rendered yet (virtualised list, lazy-loaded section)? scroll step by step and search again
+                hit = self._scroll_search(lambda: self._pick(sources, probe, target, attr, template, stored),
+                                          number=_number_in(target))
+                if hit:
+                    return hit
             if time.time() > deadline:
                 break
             e.live_tick()
             time.sleep(0.5)
+        vis = self._visual(live, template, attr, stored)
+        if vis:
+            return vis
         near = "; ".join(f'{L.describe(c)} (score {c.get("score")})' for c in ranked[:3])
-        raise StepError(self.mask(f"Could not identify element for '{target}'. Closest: {near or 'none'}"))
+        hint = ""
+        try:
+            if e.eval_js("return Array.from(document.querySelectorAll('canvas')).some(c => c.width * c.height > 40000)"):
+                hint = (" This page draws content on a <canvas>, which has no DOM elements to locate."
+                        + (" The visual fallback found nothing either." if self.config.visual_fallback else "")
+                        + ("" if self._ai() else " Set ANTHROPIC_API_KEY to let Claude locate it on a screenshot."))
+        except Exception:
+            pass
+        raise StepError(self.mask(f"Could not identify element for '{target}'. Closest: {near or 'none'}.{hint}"))
+
+    POINT_ACTIONS = (Action.CLICK, Action.DOUBLE_CLICK, Action.RIGHT_CLICK, Action.HOVER, Action.TYPE, Action.APPEND)
+
+    def _ai(self) -> bool:
+        from .nlp import llm
+        return self.config.use_llm and llm.available()
+
+    def _visual(self, live: Step, template: Step, attr: str, stored: list) -> tuple[Locator, bool] | None:
+        """Last resort for elements that exist only as pixels (canvas, images, plugins): Claude looks at a
+        screenshot and returns where the element is; the step then acts at that position."""
+        if not (self.config.visual_fallback and self._ai() and live.action in self.POINT_ACTIONS and attr == "locator"):
+            return None
+        from .nlp import llm
+        e = self.engine
+        shot = self.run_dir / "_visual.png"
+        try:
+            e.screenshot(shot)
+            png = shot.read_bytes()
+            img_w, img_h = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+            vw, vh = e.viewport()
+        except Exception as ex:
+            log.debug("visual fallback screenshot failed: %s", ex)
+            return None
+        finally:
+            shot.unlink(missing_ok=True)
+        out = llm.locate_visual(png, live, img_w, img_h)
+        if not out:
+            return None
+        x, y = round(out["x"] * vw / img_w), round(out["y"] * vh / img_h)        # screenshot px -> CSS px
+        loc = Locator(strategy="point", value=f"{x},{y}", picked_by="ai-vision",
+                      description=f"screen position chosen by Claude from a screenshot: {out.get('reason', '')[:120]}")
+        template.locator, template.fallbacks = loc, []
+        self._picked = "ai-vision"
+        self._emit("healing", target=self.mask(live.target), how=f"located visually at {x},{y}")
+        return loc, bool(stored)
+
+    def _fits(self, loc: Locator, idx: int, step: Step, target: str | None) -> bool:
+        """Replay safety: a fallback (or a structural CSS/XPath path) must still point at an element matching the
+        step's description (numbers included), otherwise e.g. 'second row's button' would click the wrong row
+        of a re-rendered list. The primary, name-bearing locator is trusted as is."""
+        if not target or (idx == 0 and loc.strategy not in ("css", "xpath")):
+            return True
+        try:
+            info = self.engine.run_js_on(loc, L.INFO_EL_JS)
+        except Exception:
+            return False
+        cand = {**info, "visible": True}
+        specific = any(w not in L.STOP for w in L._tokens(target))
+        ok = L.score(step, cand, target) >= 1.0 and (not specific or cand.get("_text_match", 0) > 0.25)
+        if not ok:
+            log.debug("fallback %s rejected: points at %s", loc.label(), L.describe(info) if info else None)
+        return ok
+
+    def _pick(self, sources, probe, target, attr, template, stored):
+        """One identification pass (used while scroll-searching): returns (locator, healed) or None."""
+        e = self.engine
+        for source in sources:
+            try:
+                cands = source(None if probe.nth is not None else L.step_words(target))
+            except Exception:
+                continue
+            winner, ranked, problem = L.choose(probe, cands, target=target, use_llm=self.config.use_llm,
+                                               on_ambiguous=self.config.on_ambiguous)
+            if problem and "match equally well" in problem:
+                raise StepError(self.mask(f"Ambiguous '{target}': {problem}"))
+            if winner:
+                verified = self._verify(winner)
+                if verified:
+                    self._picked = winner.get("picked_by") or "heuristic"
+                    if attr == "locator":
+                        template.locator, template.fallbacks = verified[0], verified[1:4]
+                    else:
+                        template.target_locator = verified[0]
+                    return verified[0], bool(stored)
+        return None
+
+    def _scroll_search(self, probe_fn, number: int | None = None, budget_s: float | None = None):
+        """Find content that isn't rendered yet. 1) scroll the page down step by step (lazy sections);
+        2) if the step names a number, binary-search the largest scrollable container by the numbers it shows
+        (ordered virtualised lists); 3) scan containers a screen at a time. probe_fn() is called after each
+        move; its first truthy result is returned. The page goes back to the top if nothing is found."""
+        from .engines.base import BOX_JS, BOX_NUMS_JS, BOX_SEEK_JS, SCROLL_MORE_JS
+        e = self.engine
+        t0 = time.perf_counter()
+        end = time.time() + (budget_s or max(20.0, self.config.timeout_ms / 1000 * 3))
+        settle = lambda: (time.sleep(0.12), e.live_tick())
+        try:
+            # 1) the page itself
+            for _ in range(60):
+                if time.time() > end or e.eval_js(SCROLL_MORE_JS) != "page":
+                    break
+                settle()
+                res = probe_fn()
+                if res:
+                    return res
+            box = e.eval_js(BOX_JS)
+            # 2) ordered list + a number in the step: binary search
+            if box and number is not None:
+                lo, hi = 0, box["max"]
+                for _ in range(24):
+                    mid = (lo + hi) // 2
+                    e.eval_js(f"return (function(){{ {BOX_SEEK_JS} }}).apply(null, [{mid}])")
+                    settle()
+                    nums = [n for n in (e.eval_js(BOX_NUMS_JS) or []) if n > 0]
+                    if not nums:
+                        break
+                    if number < min(nums) and hi - lo > 1:
+                        hi = mid
+                    elif number > max(nums) and hi - lo > 1:
+                        lo = mid
+                    else:
+                        res = probe_fn()
+                        if res:
+                            return res
+                        break
+            # 3) containers, a screen at a time
+            if box:
+                e.eval_js("return (function(){ " + BOX_SEEK_JS + " }).apply(null, [0])")
+                pos = 0
+                while time.time() < end and pos < box["max"]:
+                    pos += box["step"]
+                    e.eval_js(f"return (function(){{ {BOX_SEEK_JS} }}).apply(null, [{pos}])")
+                    settle()
+                    res = probe_fn()
+                    if res:
+                        return res
+            e.eval_js("window.scrollTo(0, 0); return true;")
+        except StepError:
+            raise
+        except Exception as ex:
+            log.debug("scroll search failed: %s", ex)
+        finally:
+            self._timing("scroll_search", t0)
+        return None
 
     def _timing(self, what: str, t0: float) -> None:
         self.timings.setdefault(what, []).append((time.perf_counter() - t0) * 1000)
@@ -262,7 +434,29 @@ class Runner:
             info["name"] = desc["name"]
         cand = info
         all_locs = L.to_locators(cand)
+        if hasattr(e, "verify_locators"):
+            # one in-page check of every locator, then a native find_elements confirmation of the winners
+            try:
+                flags = e.verify_locators(cand, all_locs) or []
+            except Exception as ex:
+                log.debug("batch verify failed: %s", ex)
+                flags = []
+            if flags:
+                for loc, ok in zip(all_locs, flags):
+                    if ok and len(good) < 3:
+                        try:
+                            if not good and e.count(loc) != 1:   # the step's primary: confirm with the engine itself
+                                continue
+                        except Exception:
+                            continue
+                        good.append(loc)
+                if good:
+                    return good
+        from .engines.selenium_engine import by_for
+        portable = lambda l: by_for(l, bool(l.shadow)) is not None
         for loc in all_locs:
+            if len(good) >= 3 and (any(portable(g) for g in good) or not portable(loc)):
+                continue           # enough, unless we still need one the other engine (Selenium) can run
             try:
                 if e.count(loc) != 1:
                     continue
@@ -273,11 +467,14 @@ class Runner:
                 good.append(loc)
             except Exception as ex:
                 log.debug("verify %s failed: %s", loc.label(), ex)
-            # primary + 2 verified fallbacks (at least one engine-neutral, so the other engine can replay)
-            if len(good) >= 3:
+            # primary + 2 verified fallbacks, and at least one Selenium can run (portable scripts / replays)
+            if len(good) >= 3 and any(portable(g) for g in good):
                 break
         if not good:
             good = [l for l in all_locs if l.strategy in ("css", "xpath")][:1]
+        if len(good) > 3:          # keep primary + 2, but make sure a portable one is among the kept
+            port = next((g for g in good if portable(g)), None)
+            good = good[:2] + [port] if port and port not in good[:3] else good[:3]
         return good
 
     def _perform(self, s: Step, template: Step, loc: Locator | None) -> None:
@@ -295,6 +492,17 @@ class Runner:
             e.refresh()
         elif a == Action.SWITCH_TAB:
             e.switch_tab(v or "last")
+        elif loc is not None and loc.strategy == "point":
+            x, y = (int(v) for v in loc.value.split(","))
+            if a in (Action.CLICK, Action.DOUBLE_CLICK, Action.RIGHT_CLICK):
+                e.click_point(x, y, button="right" if a == Action.RIGHT_CLICK else "left", double=a == Action.DOUBLE_CLICK)
+            elif a == Action.HOVER:
+                e.hover_point(x, y)
+            elif a in (Action.TYPE, Action.APPEND):
+                e.click_point(x, y)
+                e.type_text(v or "")
+            else:
+                raise StepError(f"'{a.value}' is not possible on an element located only visually (canvas)")
         elif a == Action.CLICK:
             e.click(loc)
         elif a == Action.DOUBLE_CLICK:
@@ -422,6 +630,11 @@ class Runner:
             self.on_event({"type": kind, "run_id": self.run_id, **kw})
         except Exception:
             pass
+
+
+def _number_in(target: str | None) -> int | None:
+    m = re.search(r"\d+", target or "")
+    return int(m.group(0)) if m else None
 
 
 def _norm(s: str) -> str:

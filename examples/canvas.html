@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Canvas checkout</title>
+<style>body{font-family:sans-serif;margin:0} canvas{position:absolute;left:50px;top:80px;border:1px solid #ccc} #log{position:absolute;left:50px;top:400px}</style></head>
+<body><h1 style="margin:16px 50px">Canvas checkout</h1>
+<!-- the buttons exist only as pixels: no DOM elements, nothing in the accessibility tree -->
+<canvas id="c" width="600" height="300"></canvas><p id="log"></p>
+<script>
+const c = document.getElementById('c'), g = c.getContext('2d');
+const buttons = [{label: 'Buy now', x: 100, y: 100, w: 160, h: 50, fill: '#2a7'}, {label: 'Cancel', x: 320, y: 100, w: 160, h: 50, fill: '#c44'}];
+for (const b of buttons) { g.fillStyle = b.fill; g.fillRect(b.x, b.y, b.w, b.h); g.fillStyle = '#fff'; g.font = '22px sans-serif'; g.fillText(b.label, b.x + 30, b.y + 33); }
+c.addEventListener('click', ev => { const r = c.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  const b = buttons.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  document.getElementById('log').textContent = b ? 'Clicked ' + b.label : 'Missed at ' + Math.round(x) + ',' + Math.round(y); });
+</script></body></html>

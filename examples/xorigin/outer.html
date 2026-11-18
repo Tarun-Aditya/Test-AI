@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Cross-origin host</title></head>
+<body style="font-family:sans-serif">
+<h1>Checkout</h1>
+<p id="log"></p>
+<!-- the payment widget comes from a different origin (127.0.0.1 <-> localhost), as real payment iframes do -->
+<iframe id="pay" title="Payment widget" style="width:480px;height:200px"></iframe>
+<secret-box></secret-box>
+<script>
+  const other = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+  document.getElementById('pay').src = location.protocol + '//' + other + ':' + location.port + '/inner.html';
+  window.addEventListener('message', e => { document.getElementById('log').textContent += e.data + ' '; });
+  // a CLOSED shadow root: invisible to page scripts and normal locators
+  customElements.define('secret-box', class extends HTMLElement {
+    constructor() { super(); const r = this.attachShadow({mode: 'closed'});
+      r.innerHTML = '<label>Promo code <input></label> <button type="button">Apply promo</button>';
+      r.querySelector('button').onclick = () => { document.getElementById('log').textContent += 'Promo ' + r.querySelector('input').value + ' applied '; }; }
+  });
+</script></body></html>
