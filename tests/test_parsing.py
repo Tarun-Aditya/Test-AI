@@ -153,3 +153,15 @@ def test_masking_json_keeps_it_valid():
     json.dumps(out)
     assert Masker({"q": "2"}, ["q"]).deep({"agent": "box-2", "run_id": "x-2", "error": "on box-2 at 127.0.0.1"}) == \
         {"agent": "box-2", "run_id": "x-2", "error": "on box-2 at 127.0.0.1"}
+
+
+def test_links_to_the_same_page_are_not_ambiguous():
+    """Header "Cart" and a banner's "Go to Cart" both open cart.html: clicking either is right, so no tie error."""
+    from aiauto.locators import _same_destination
+    from aiauto.models import Step
+    a = {"uid": 1, "tag": "a", "href": "cart.html"}
+    b = {"uid": 2, "tag": "a", "href": "cart.html"}
+    assert _same_destination(a, b, Step(action=Action.CLICK, target="Cart link"))
+    assert not _same_destination(a, {**b, "href": "checkout.html"}, Step(action=Action.CLICK, target="Cart link"))
+    assert not _same_destination({**a, "href": "#"}, {**b, "href": "#"}, Step(action=Action.CLICK, target="x"))
+    assert not _same_destination(a, b, Step(action=Action.ASSERT_TEXT, value="x"))

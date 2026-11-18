@@ -60,15 +60,15 @@ def test_llm_refusal_falls_back_to_rules(monkeypatch):
 
 
 def _fake_cli(tmp_path, name, stdout, exit_code=0):
-    """A stand-in for a provider CLI: records its argv/stdin and prints a canned answer."""
-    import stat
-    p = tmp_path / name
+    """A stand-in for a provider CLI: records its argv/stdin and prints a canned answer.
+    Returned as a command list (python + script) so it runs the same way on Windows, macOS and Linux."""
+    import sys
+    p = tmp_path / f"{name}.py"
     log = tmp_path / f"{name}.args"
-    p.write_text("#!/usr/bin/env python3\nimport json, sys\n"
-                 f"open({str(log)!r}, 'w').write(json.dumps({{'argv': sys.argv[1:], 'stdin': sys.stdin.read()}}))\n"
-                 f"sys.stdout.write({stdout!r})\nsys.exit({exit_code})\n")
-    p.chmod(p.stat().st_mode | stat.S_IEXEC)
-    return p, log
+    p.write_text("import json, sys\n"
+                 f"open({str(log)!r}, 'w', encoding='utf-8').write(json.dumps({{'argv': sys.argv[1:], 'stdin': sys.stdin.read()}}))\n"
+                 f"sys.stdout.write({stdout!r})\nsys.exit({exit_code})\n", encoding="utf-8")
+    return [sys.executable, str(p)], log
 
 
 STEPS = {"name": "Login", "steps": [{"action": "click", "target": "Sign in button", "value": None, "nth": None,
@@ -78,10 +78,10 @@ STEPS = {"name": "Login", "steps": [{"action": "click", "target": "Sign in butto
 def test_claude_subscription_cli(tmp_path):
     out = json.dumps({"type": "result", "is_error": False, "result": json.dumps(STEPS), "structured_output": STEPS})
     exe, log = _fake_cli(tmp_path, "claude", out)
-    providers.configure({"provider": "claude-code", "aiauto_claude_cli": str(exe), "model": "claude-sonnet-5-5"})
+    providers.configure({"provider": "claude-code", "aiauto_claude_cli": exe, "model": "claude-sonnet-5-5"})
     test, info = parser.parse_text("sign in")
     assert info["parser"] == "llm:claude-code:claude-sonnet-5-5" and test.steps[0].target == "Sign in button"
-    call = json.loads(log.read_text())
+    call = json.loads(log.read_text(encoding='utf-8'))
     a = call["argv"]
     assert a[0] == "-p" and a[a.index("--output-format") + 1] == "json" and "--json-schema" in a
     assert a[a.index("--model") + 1] == "claude-sonnet-5-5" and a[a.index("--tools") + 1] == ""   # no tools: answer only
@@ -90,11 +90,11 @@ def test_claude_subscription_cli(tmp_path):
 
 def test_cursor_and_copilot_clis_parse_json_from_text(tmp_path):
     exe, log = _fake_cli(tmp_path, "cursor-agent", json.dumps({"type": "result", "result": "Here you go:\n```json\n" + json.dumps(STEPS) + "\n```"}))
-    providers.configure({"provider": "cursor", "aiauto_cursor_cli": str(exe), "model": "gpt-5"})
+    providers.configure({"provider": "cursor", "aiauto_cursor_cli": exe, "model": "gpt-5"})
     assert parser.parse_text("sign in")[1]["parser"] == "llm:cursor:gpt-5"
-    assert "JSON Schema" in json.loads(log.read_text())["argv"][-1]          # schema travels in the prompt
+    assert "JSON Schema" in json.loads(log.read_text(encoding='utf-8'))["argv"][-1]          # schema travels in the prompt
     exe, _ = _fake_cli(tmp_path, "copilot", "Sure. " + json.dumps(STEPS))
-    providers.configure({"provider": "copilot", "aiauto_copilot_cli": str(exe)})
+    providers.configure({"provider": "copilot", "aiauto_copilot_cli": exe})
     test, info = parser.parse_text("sign in")
     assert info["parser"] == "llm:copilot:default" and test.steps[0].action == Action.CLICK
 
@@ -104,7 +104,7 @@ def test_auto_skips_a_subscription_that_is_not_logged_in(tmp_path, monkeypatch):
     bad, _ = _fake_cli(tmp_path, "claude", json.dumps({"type": "result", "is_error": True, "api_error_status": 401,
                                                        "result": "Not logged in. Please run /login"}))
     seen = []
-    providers.configure({"aiauto_claude_cli": str(bad), "anthropic_key": "sk-test"})
+    providers.configure({"aiauto_claude_cli": bad, "anthropic_key": "sk-test"})
     for k in ("cursor", "copilot"):
         providers._failed[k] = "not installed"                      # pretend these are absent on this machine
     monkeypatch.setattr(providers, "_anthropic_client", _mock_client(STEPS, seen))

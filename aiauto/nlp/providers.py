@@ -88,10 +88,39 @@ def model_for(name: str) -> str | None:
 
 
 # ----------------------------------------------------------------------------------- detection
-def _cli(name: str) -> str | None:
+def _cli(name: str) -> list[str] | None:
+    """The command that starts a provider CLI. The setting may be a path, a command line ("npx …"), or a list."""
     env = {"claude-code": "AIAUTO_CLAUDE_CLI", "cursor": "AIAUTO_CURSOR_CLI", "copilot": "AIAUTO_COPILOT_CLI"}[name]
     exe = {"claude-code": "claude", "cursor": "cursor-agent", "copilot": "copilot"}[name]
-    return setting(env.lower(), env) or shutil.which(exe)
+    raw = setting(env.lower(), env)
+    if isinstance(raw, (list, tuple)):
+        return [str(x) for x in raw] or None
+    if raw:
+        if os.path.exists(raw):
+            return _unshim(raw)
+        import shlex
+        parts = shlex.split(raw, posix=os.name != "nt")
+        return [p.strip('"') for p in parts] or None
+    found = shutil.which(exe)
+    return _unshim(found) if found else None
+
+
+def _unshim(path: str) -> list[str]:
+    """Windows: npm installs CLIs as .cmd shims. Arguments to a .cmd pass through cmd.exe, which mangles quotes,
+    ">" and "&" in prompts and JSON schemas, so run the shim's node script directly when we can find it."""
+    if os.name != "nt" or not path.lower().endswith((".cmd", ".bat")):
+        return [path]
+    try:
+        text = open(path, encoding="utf-8", errors="ignore").read()
+    except OSError:
+        return [path]
+    m = re.search(r'%~?dp0%?\\?([^"%\r\n]+?\.(?:m?js|cjs))', text)
+    node = shutil.which("node")
+    if m and node:
+        script = os.path.join(os.path.dirname(path), m.group(1).lstrip("\\"))
+        if os.path.exists(script):
+            return [node, script]
+    return [path]
 
 
 def _anthropic_cred() -> bool:
@@ -106,8 +135,8 @@ def detect(name: str) -> tuple[bool, str]:
     if name in _failed:
         return False, _failed[name]
     if name in ("claude-code", "cursor", "copilot"):
-        path = _cli(name)
-        return (True, f"CLI found: {path}") if path else (False, "CLI not installed on this machine")
+        cmd = _cli(name)
+        return (True, f"CLI found: {' '.join(cmd)}") if cmd else (False, "CLI not installed on this machine")
     if name == "anthropic":
         try:
             import anthropic  # noqa: F401
@@ -248,7 +277,7 @@ def _claude_code(system, user, schema, png, max_tokens, effort):
     with tempfile.TemporaryDirectory(prefix="aiauto-ai-") as d:
         img = _image_file(png, d)
         prompt = user + (f"\n\nThe screenshot is the image file {img} - read it." if img else "")
-        cmd = [exe, "-p", "--output-format", "json", "--json-schema", json.dumps(schema), "--system-prompt", system,
+        cmd = [*exe, "-p", "--output-format", "json", "--json-schema", json.dumps(schema), "--system-prompt", system,
                "--no-session-persistence", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config",
                "--tools", "Read" if img else ""]
         if img:
@@ -279,7 +308,7 @@ def _cursor(system, user, schema, png, max_tokens, effort):
     with tempfile.TemporaryDirectory(prefix="aiauto-ai-") as d:
         img = _image_file(png, d)
         prompt = _instructions(system, schema) + "\n\n" + user + (f"\n\nThe screenshot is the image file {img}." if img else "")
-        cmd = [exe, "-p", "--output-format", "json"]
+        cmd = [*exe, "-p", "--output-format", "json"]
         m = model_for("cursor")
         if m:
             cmd += ["--model", m]
@@ -307,7 +336,7 @@ def _copilot(system, user, schema, png, max_tokens, effort):
     with tempfile.TemporaryDirectory(prefix="aiauto-ai-") as d:
         img = _image_file(png, d)
         prompt = _instructions(system, schema) + "\n\n" + user + (f"\n\nThe screenshot is the image file {img}." if img else "")
-        cmd = [exe, "-p", prompt]
+        cmd = [*exe, "-p", prompt]
         m = model_for("copilot")
         if m:
             cmd += ["--model", m]

@@ -476,6 +476,16 @@ def _related(a: dict, b: dict) -> bool:
     return a["uid"] in b.get("anc", []) or b["uid"] in a.get("anc", [])
 
 
+def _same_destination(a: dict, b: dict, step: Step) -> bool:
+    """Clicking either of two links to the same address does the same thing ("Cart" in the header and
+    "Go to Cart" in a banner): not an ambiguity worth failing the step for."""
+    if step.action not in (Action.CLICK, Action.HOVER):
+        return False
+    ha, hb = (a.get("href") or "").strip(), (b.get("href") or "").strip()
+    useless = ("", "#")
+    return a.get("tag") == b.get("tag") == "a" and ha == hb and ha not in useless and not ha.lower().startswith("javascript:")
+
+
 def choose(step: Step, candidates: list[dict], target: str | None = None, use_llm: bool = True,
            on_ambiguous: str = "fail") -> tuple[dict | None, list[dict], str | None]:
     """Pick the element for this step. Returns (winner, ranked_candidates, problem).
@@ -507,7 +517,8 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
                 return winner, ranked, None
     if winner is None:
         return None, ranked, "nothing on the page matches well enough"
-    rivals = [c for c in eligible[1:4] if winner["score"] - c["score"] < TIE and not _related(winner, c)]
+    rivals = [c for c in eligible[1:4] if winner["score"] - c["score"] < TIE and not _related(winner, c)
+              and not _same_destination(winner, c, step)]
     if rivals and on_ambiguous == "fail":
         names = "; ".join(describe(c) + (f" in {c['context']}" if c.get("context") else "") for c in [winner] + rivals)
         return None, ranked, (f"{len(rivals) + 1} different elements match equally well ({names}). "
