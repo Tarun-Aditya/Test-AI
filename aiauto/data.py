@@ -163,8 +163,13 @@ def mask_text(text: str, values: Iterable[str]) -> str:
         if len(v) >= 4:
             text = text.replace(v, MASK)
         else:
-            text = re.sub(rf"(?<![\w.]){re.escape(v)}(?![\w.])", MASK, text)
+            text = re.sub(rf"(?<![\w.\-/:@]){re.escape(v)}(?![\w.\-/:@])", MASK, text)
     return text
+
+
+# run metadata, never user data: masking a short secret inside these would only corrupt them
+_NEVER_MASK = {"run_id", "agent", "engine", "browser", "mode", "status", "started_at", "finished_at", "artifacts",
+               "video", "screenshot", "batch_id", "source_run"}
 
 
 class Masker:
@@ -178,6 +183,16 @@ class Masker:
         if not isinstance(text, str) or not self.values:
             return text
         return mask_text(text, self.values)
+
+    def deep(self, obj: Any) -> Any:
+        """Mask every string inside a JSON-like structure (numbers and keys untouched, so the JSON stays valid)."""
+        if isinstance(obj, str):
+            return self(obj)
+        if isinstance(obj, dict):
+            return {k: v if k in _NEVER_MASK else self.deep(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self.deep(v) for v in obj]
+        return obj
 
     def is_sensitive_template(self, template: str | None) -> bool:
         return any(k in self.sensitive for k in referenced_keys(template))

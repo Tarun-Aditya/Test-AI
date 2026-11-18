@@ -410,7 +410,7 @@ class Run:
             if len(s) >= 4:
                 text = text.replace(s, MASK)
             else:        # short secrets only as a whole token: don't mangle "127.0.0.1" for a secret "2"
-                text = re.sub(rf"(?<![\w.]){re.escape(s)}(?![\w.])", MASK, text)
+                text = re.sub(rf"(?<![\w.\-/:@]){re.escape(s)}(?![\w.\-/:@])", MASK, text)
         return text
 
     def skip(self, n, title, reason):

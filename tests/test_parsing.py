@@ -142,3 +142,14 @@ def test_count_tolerant_locators_for_live_counts():
     assert [l.strategy for l in out] == ["xpath", "xpath"]
     assert 'starts-with(normalize-space(.), "Cart")' in out[0].value and '"Inbox"' in out[1].value
     assert Runner._count_tolerant([Locator(strategy="text", value="Order 750")], "Open order 750") == []   # number was asked for
+
+
+def test_masking_json_keeps_it_valid():
+    import json
+    from aiauto.data import Masker
+    m = Masker({"qty": "2"}, ["qty"])
+    out = m.deep({"index": 2, "steps": [{"value": "2", "note": "add 2 items"}]})
+    assert out == {"index": 2, "steps": [{"value": "••••••", "note": "add •••••• items"}]}
+    json.dumps(out)
+    assert Masker({"q": "2"}, ["q"]).deep({"agent": "box-2", "run_id": "x-2", "error": "on box-2 at 127.0.0.1"}) == \
+        {"agent": "box-2", "run_id": "x-2", "error": "on box-2 at 127.0.0.1"}

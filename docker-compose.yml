@@ -1,0 +1,19 @@
+# docker compose up --build          -> hub on http://localhost:8000 plus one agent
+# docker compose up --scale agent=3  -> three agents (each registers with its container hostname)
+services:
+  hub:
+    build: .
+    command: hub
+    ports: ["8000:8000"]
+    environment:
+      AIAUTO_AGENT_TOKEN: ${AIAUTO_AGENT_TOKEN:-change-me}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes: ["autopilot-data:/data"]
+  agent:
+    build: .
+    command: ["agent", "--server", "http://hub:8000", "--token", "${AIAUTO_AGENT_TOKEN:-change-me}"]
+    shm_size: 1gb            # Chromium needs more than Docker's default 64 MB /dev/shm
+    depends_on: [hub]
+    restart: unless-stopped
+volumes:
+  autopilot-data:

@@ -661,8 +661,8 @@ class Runner:
         }
         if summary.video:
             summary.artifacts["video"] = summary.video
-        summary_json = summary.model_dump_json(indent=2)
-        (d / "summary.json").write_text(self.mask(summary_json))
+        # mask values, not the JSON text: a secret "2" must not turn "index": 2 into invalid JSON
+        (d / "summary.json").write_text(json.dumps(self.mask.deep(summary.model_dump(mode="json")), indent=2))
         (d / "report.html").write_text(report.render(summary, resolved, d, self.mask), encoding="utf-8")
 
     def _emit(self, kind: str, **kw) -> None:

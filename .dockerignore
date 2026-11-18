@@ -1,0 +1,11 @@
+.git
+**/__pycache__
+*.pyc
+.venv
+artifacts
+agent_artifacts
+library
+sessions
+*.db*
+web/node_modules
+tests
