@@ -139,7 +139,8 @@ function Options() {
       </div>
       <div className="opts">
         <Toggle k="video" label="Record video" /><Toggle k="shots" label="Screenshot every step" />
-        <Toggle k="live" label="Live view" /><Toggle k="fullpage" label="Full-page screenshots" />
+        <Toggle k="live" label="Live view" /><Toggle k="highlight" label="Highlight elements (green box)" />
+        <Toggle k="fullpage" label="Full-page screenshots" />
         <Toggle k="heal" label="Self-heal locators" /><Toggle k="useLlm" label="Use AI (Claude)" />
         <Toggle k="headless" label="Headless" />
       </div>

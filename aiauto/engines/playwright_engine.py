@@ -282,8 +282,8 @@ class PlaywrightEngine(Engine):
     def info(self, loc):
         return self._one(loc).evaluate(INFO_JS)
 
-    def run_js_on(self, loc, fn, arg=None):
-        return self._one(loc).evaluate(fn, arg, timeout=self.config.timeout_ms)
+    def run_js_on(self, loc, fn, arg=None, timeout_ms=None):
+        return self._one(loc).evaluate(fn, arg, timeout=timeout_ms or self.config.timeout_ms)
 
     # actions --------------------------------------------------------------
     def click(self, loc, button="left", double=False):

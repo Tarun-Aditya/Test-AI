@@ -125,11 +125,12 @@ class Runner:
                    target=self.mask(target), value=shown)
         res = StepResult(index=i, step=step, status=StepStatus.PASSED, shown_value=shown)
         e.last_dialog = None
+        loc = None
+        verb, done = _VERBS.get(step.action, (step.action.value.replace("_", " "), "done"))
         try:
             for field, v in (("value", value), ("target", target)):
                 if v and _UNRESOLVED.search(v):
                     raise StepError(f"No test data for {', '.join(_UNRESOLVED.findall(v))} (in step {field})")
-            loc = None
             needs_el = step.action in ELEMENT_ACTIONS or (step.target and step.action in (
                 Action.PRESS, Action.WAIT, Action.SCROLL, Action.ASSERT_TEXT))
             if needs_el:
@@ -138,8 +139,10 @@ class Runner:
                 res.locate_ms = int((time.perf_counter() - t_loc) * 1000)
                 res.healed = healed
                 res.picked_by = self._picked
-                if self.config.screenshot_each_step and loc.strategy != "point":
-                    e.highlight(loc)
+                # dashed green box: "this is the element", shown briefly before acting (video / live view)
+                if e.show_box(loc, "located", f"Step {i + 1} · {verb}") and self.config.highlight_ms and \
+                        (self.config.record_video or (self.config.live_view and self._listening)):
+                    time.sleep(self.config.highlight_ms / 1000)
                 if secret and step.action in (Action.TYPE, Action.APPEND):
                     e.mask(loc)
             self._perform(live, step, loc)
@@ -147,7 +150,10 @@ class Runner:
             if e.last_dialog:
                 self._prev_dialog = e.last_dialog
             e.wait_for_load()
+            # solid green box: action done (stays for the step's screenshot; skipped if the element is gone)
+            e.show_box(loc, "done", f"✓ Step {i + 1} · {done}", timeout_ms=800)
         except Exception as ex:
+            e.show_box(loc, "failed", f"✗ Step {i + 1} · {verb} failed", timeout_ms=800)
             res.status = StepStatus.SKIPPED if step.optional else StepStatus.FAILED
             res.error = ("optional step skipped: " if step.optional else "") + self.mask(_short_error(ex))
             log.debug(traceback.format_exc())
@@ -171,6 +177,8 @@ class Runner:
                     self._emit("step_shot", index=i, mime="image/png", image=base64.b64encode(shot.read_bytes()).decode())
             except Exception:
                 pass
+        if loc is not None:
+            e.clear_box(loc)       # never left on the page for the next step
         return res
 
     def _resolve(self, live: Step, template: Step, target: str | None, attr: str = "locator") -> tuple[Locator, bool]:
@@ -630,6 +638,16 @@ class Runner:
             self.on_event({"type": kind, "run_id": self.run_id, **kw})
         except Exception:
             pass
+
+
+_VERBS = {
+    Action.CLICK: ("click", "clicked"), Action.DOUBLE_CLICK: ("double-click", "double-clicked"),
+    Action.RIGHT_CLICK: ("right-click", "right-clicked"), Action.TYPE: ("type", "typed"), Action.APPEND: ("type", "typed"),
+    Action.PRESS: ("press key", "key pressed"), Action.HOVER: ("hover", "hovered"), Action.SELECT: ("select", "selected"),
+    Action.CHECK: ("check", "checked"), Action.UNCHECK: ("uncheck", "unchecked"), Action.DRAG: ("drag", "dragged"),
+    Action.UPLOAD: ("upload", "uploaded"), Action.SCROLL: ("scroll to", "scrolled to"), Action.WAIT: ("wait for", "appeared"),
+    Action.ASSERT_VISIBLE: ("check visible", "visible"), Action.ASSERT_TEXT: ("check text", "text matches"),
+}
 
 
 def _number_in(target: str | None) -> int | None:

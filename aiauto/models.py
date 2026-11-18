@@ -136,7 +136,9 @@ class RunConfig(BaseModel):
     self_heal: bool = True                # when replaying, re-resolve broken locators
     dialogs: str = "accept"               # default answer to alert/confirm/prompt: accept | dismiss
     slow_mo_ms: int = 0
-    live_view: bool = True                # stream live frames + per-step screenshots to the web UI
+    live_view: bool = True
+    highlight: bool = True                # green box on the element: dashed when located, solid once the action is done
+    highlight_ms: int = 300               # how long the "located" box is shown before acting (visible in video / live view)                # stream live frames + per-step screenshots to the web UI
     live_fps: float = 1.5
     use_ax_tree: bool = True
     use_playwright_snapshot: bool = True  # Playwright: candidates from page.aria_snapshot + Playwright's locator generator

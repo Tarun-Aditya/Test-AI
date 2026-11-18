@@ -123,10 +123,15 @@ def _set_any(m):
 
 
 @macro(r"^(?:make\s+sure|ensure|check|confirm|verify|validate|expect|assert)\s+(?:that\s+)?"
-       r"(?!(?:the\s+)?(?:page\s+)?(?:url|address|title|alert|dialog|popup|prompt|confirm)\b)(?:(?:the|my|a|an)\s+)?(?:[\w'-]+\s+){0,3}?"
+       r"(?!(?:the\s+)?(?:page\s+)?(?:url|address|title|alert|dialog|popup|prompt|confirm)\b)(?:(?:the|my|a|an)\s+)?(?P<subj>(?:[\w'-]+\s+){0,4}?)"
        r"(?:shows?|displays?|contains?|has|have|includes?|lists?|says?|reads?|is\s+showing|are\s+showing|"
        r"should\s+(?:show|display|contain|have|say|list|include|read)|can\s+see|see|appears?)\s+(?P<x>.+)$")
 def _verify(m):
+    subj = (m["subj"] or "").strip()
+    if subj and not re.fullmatch(r"(?:web\s*)?(?:page|screen|site|it|there|you|we|i|they|cart|basket|result|results|"
+                                 r"everything|this|that|window|app|dashboard|ui)", subj, re.I):
+        # a specific element is named ("the username field contains …"): check that element's text/value
+        return [f'Verify the {subj} contains "{_clean_expect(m["x"])}"']
     return [f'Verify page contains "{_clean_expect(m["x"])}"']
 
 

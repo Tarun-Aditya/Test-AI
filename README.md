@@ -128,6 +128,14 @@ For every step that targets an element, at the moment the step runs (the page ch
 | **Locator** | `get_by_ref(ref).normalize()`: Playwright's own locator generator (as in codegen), unique by construction, e.g. `get_by_role("button", name="Pay now")` inside `frame_locator` chains. Plus verified engine-neutral fallbacks | Most robust of test-id › id › role+name › label › placeholder › name › text › CSS › XPath, mapped to `By.*` |
 | **Verification** | The engine must find exactly one element and it must be the chosen one (primary + 2 fallbacks kept) | same |
 
+### Highlighting
+
+Each element a step acts on gets an overlay box (`config.highlight`, on by default; *Highlight elements* in Studio → Options):
+dashed green "Step N · click" when located (held `highlight_ms`, 300 ms, so it shows in the video and live view), solid
+green "✓ Step N · clicked" after the action (this is what the step screenshot shows), red "✗ Step N · … failed" when
+the action fails. The box is an overlay above the page (not an outline, so it can't be clipped), its label is CSS
+content (never part of page text or locators), it works in shadow DOM and iframes, and it's removed after the step.
+
 ### Hard cases covered
 
 | Case | How it's handled | Engines |

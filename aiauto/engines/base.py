@@ -25,6 +25,41 @@ INFO_JS = """(el) => ({tag: el.tagName.toLowerCase(), type: (el.getAttribute('ty
 MASK_JS = """(el) => { el.style.setProperty('-webkit-text-security', 'disc', 'important');
   el.style.setProperty('text-security', 'disc', 'important'); }"""
 
+# Element highlight: an overlay box drawn above the page (not an outline on the element, so it can't be clipped by
+# overflow or change layout). Its label is CSS-generated content, so it never shows up in page text or locators.
+BOX_CSS = (
+    "[data-aiauto-box]{position:fixed!important;pointer-events:none!important;z-index:2147483647!important;box-sizing:border-box!important;"
+    "border:3px solid #16a34a!important;border-radius:5px!important;box-shadow:0 0 0 3px rgba(22,163,74,.28)!important;"
+    "background:rgba(22,163,74,.07)!important;margin:0!important;padding:0!important;transition:none!important;display:block!important}"
+    "[data-aiauto-box=located]{border-style:dashed!important;background:transparent!important}"
+    "[data-aiauto-box=failed]{border-color:#dc2626!important;box-shadow:0 0 0 3px rgba(220,38,38,.28)!important;background:rgba(220,38,38,.07)!important}"
+    "[data-aiauto-box]::before{content:attr(data-label);position:absolute;left:-3px;bottom:100%;margin-bottom:3px;background:#16a34a;"
+    "color:#fff;font:600 11px/18px system-ui,-apple-system,'Segoe UI',sans-serif;padding:0 7px;border-radius:4px;white-space:nowrap}"
+    "[data-aiauto-box][data-below]::before{bottom:auto;top:100%;margin:3px 0 0}"
+    "[data-aiauto-box=failed]::before{background:#dc2626}"
+    "[data-aiauto-box][data-point]{border-radius:50%!important}"
+)
+HL_BOX_JS = """(el, o) => {
+  const doc = el ? el.ownerDocument : document;
+  if (!doc.getElementById('__aiauto_box_css')) { const st = doc.createElement('style'); st.id = '__aiauto_box_css';
+    st.textContent = """ + repr(BOX_CSS) + """; (doc.head || doc.documentElement).appendChild(st); }
+  doc.querySelectorAll('[data-aiauto-box]').forEach(b => b.remove());
+  let r;
+  if (el) { const q = el.getBoundingClientRect(); if (!q.width && !q.height) return false; r = {x: q.left, y: q.top, w: q.width, h: q.height}; }
+  else r = {x: o.x - 15, y: o.y - 15, w: 30, h: 30};
+  const b = doc.createElement('div'), pad = 3;
+  b.setAttribute('data-aiauto-box', o.state); b.setAttribute('aria-hidden', 'true'); b.setAttribute('data-label', o.label || '');
+  if (r.y < 26) b.setAttribute('data-below', '1');
+  if (!el) b.setAttribute('data-point', '1');
+  b.style.cssText = 'left:' + (r.x - pad) + 'px;top:' + (r.y - pad) + 'px;width:' + (r.w + pad * 2) + 'px;height:' + (r.h + pad * 2) + 'px';
+  doc.documentElement.appendChild(b);
+  setTimeout(() => b.remove(), o.ttl || 20000);      // safety net; normally removed right after the step's screenshot
+  return true;
+}"""
+HL_CLEAR_JS = """(el) => { const docs = [el ? el.ownerDocument : document];
+  for (const f of document.querySelectorAll('iframe')) { try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) {} }
+  for (const d of docs) d.querySelectorAll('[data-aiauto-box]').forEach(b => b.remove()); return true; }"""
+
 HIGHLIGHT_JS = """(el) => { if (!el) return; const prev = el.style.outline, off = el.style.outlineOffset;
   el.style.outline = '3px solid #ff3b6b'; el.style.outlineOffset = '2px';
   setTimeout(() => { el.style.outline = prev; el.style.outlineOffset = off; }, 900); }"""
@@ -236,7 +271,7 @@ class Engine(ABC):
     @abstractmethod
     def drag(self, src: Locator, dst: Locator) -> None: ...
     @abstractmethod
-    def run_js_on(self, locator: Locator, fn: str, arg=None): ...
+    def run_js_on(self, locator: Locator, fn: str, arg=None, timeout_ms: int | None = None): ...
 
     def is_visible(self, locator: Locator) -> bool:
         try:
@@ -257,9 +292,32 @@ class Engine(ABC):
             time.sleep(0.25)
 
     def highlight(self, locator: Locator) -> None:
+        self.show_box(locator, "located", "")
+
+    def show_box(self, locator: Locator | None, state: str, label: str, timeout_ms: int = 1500) -> bool:
+        """Draw the highlight box: state 'located' (dashed green), 'done' (solid green) or 'failed' (red)."""
+        if not self.config.highlight or locator is None:
+            return False
+        import json
         try:
-            self.run_js_on(locator, HIGHLIGHT_JS)
+            if locator.strategy == "point":
+                x, y = (int(v) for v in locator.value.split(","))
+                ok = self.eval_js(f"return ({HL_BOX_JS})(null, {json.dumps({'state': state, 'label': label, 'x': x, 'y': y})})")
+            else:
+                ok = self.run_js_on(locator, HL_BOX_JS, {"state": state, "label": label}, timeout_ms=timeout_ms)
             self.frame()
+            return bool(ok)
+        except Exception:
+            return False          # element gone (navigation, removed): nothing to draw
+
+    def clear_box(self, locator: Locator | None = None) -> None:
+        try:
+            if locator is not None and locator.strategy != "point":
+                try:
+                    self.run_js_on(locator, HL_CLEAR_JS, timeout_ms=300)
+                except Exception:
+                    pass
+            self.eval_js(f"return ({HL_CLEAR_JS})(null)")
         except Exception:
             pass
 

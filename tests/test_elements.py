@@ -147,3 +147,33 @@ def test_virtualised_list_and_lazy_section(engine, tmp_path):
         s2 = run_test(load_script(tmp_path / s.run_id / "script.json"), RunConfig(engine=other, timeout_ms=8000, record_video=False),
                       tmp_path, mode="replay")
         assert s2.status.value == "passed", (other, [r.error for r in s2.results if r.error])
+
+
+@pytest.mark.parametrize("engine", ["playwright", "selenium"])
+def test_highlight_box_lifecycle(engine, tmp_path, monkeypatch):
+    """Green box: dashed when located, solid green with a ✓ label in the step screenshot, red when the action
+    fails; never left on the page and never part of page text."""
+    from aiauto.engines.base import make_engine as real_make
+    import aiauto.runner as runner_mod
+    states = []
+
+    def make(cfg, run_dir):
+        eng = real_make(cfg, run_dir)
+        orig = eng.screenshot
+
+        def shot(path, full_page=False):
+            states.append(eng.eval_js("return Array.from(document.querySelectorAll('[data-aiauto-box]'))"
+                                      ".map(b => b.getAttribute('data-aiauto-box') + '|' + b.getAttribute('data-label'))"))
+            return orig(path, full_page)
+        eng.screenshot = shot
+        return eng
+    monkeypatch.setattr(runner_mod, "make_engine", make)
+    text = (f"Open {(EXAMPLES / 'demo_app.html').as_uri()}\nType \"bob\" into the username field\n"
+            "Verify page contains \"Username\"\nCheck Remember me\nVerify the username field contains \"zzz\"")
+    test, _ = parse_text(text, {}, use_llm=False)
+    s = run_test(test, RunConfig(engine=engine, timeout_ms=3000, record_video=False), tmp_path)
+    assert states[1] == ["done|✓ Step 2 · typed"]            # step 2 screenshot shows the solid green box
+    assert states[2] == []                                    # page-text check: no element, no box
+    assert states[3] == ["done|✓ Step 4 · checked"]
+    assert s.results[4].status.value == "failed" and states[4] and states[4][0].startswith("failed|✗ Step 5")
+    assert "Step" not in (s.results[2].error or "")

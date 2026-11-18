@@ -181,7 +181,7 @@ return (function(){
         if (d && d.documentElement) walk(d, frames.concat([cssPathIn(el)]), []);
         else if (shadow.length === 0 && visible(el)) BLOCKED.push(frames.concat([cssPathIn(el)]));   // cross-origin: engine enters it
       }
-      if (SKIP.has(tag) || !interesting(el, tag)) continue;
+      if (SKIP.has(tag) || el.hasAttribute('data-aiauto-box') || !interesting(el, tag)) continue;
       const type = (el.getAttribute('type')||'').toLowerCase();
       const vis = visible(el);
       if (!vis && !(tag==='input' && ['checkbox','radio','file'].includes(type))) continue;

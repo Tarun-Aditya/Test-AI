@@ -509,8 +509,8 @@ class SeleniumEngine(Engine):
     def info(self, loc):
         return self.driver.execute_script(_js(INFO_JS), self._el(loc))
 
-    def run_js_on(self, loc, fn, arg=None):
-        return self.driver.execute_script(_js(fn), self._el(loc), arg)
+    def run_js_on(self, loc, fn, arg=None, timeout_ms=None):
+        return self.driver.execute_script(_js(fn), self._el(loc, timeout_ms), arg)
 
     def _wait_clickable(self, el):
         end = time.time() + self.config.timeout_ms / 1000
