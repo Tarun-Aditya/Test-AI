@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 SIGNUP = (Path(__file__).resolve().parent.parent / "examples" / "signup" / "signup.html").read_text(encoding="utf-8")
 EMAIL, JIRA_TOKEN, GH_TOKEN, ZEPHYR_TOKEN = "qa@example.com", "jira-api-token", "github_pat_fake", "zephyr-token"
 XRAY_ID, XRAY_SECRET = "xray-client", "xray-secret"
+ADO_TOKEN = "ado-pat"
 
 STORY = """h2. Story
 As a visitor I want to create an account so that I can order.
@@ -60,6 +61,14 @@ class State:
         self.cycles: dict[str, dict] = {}
         self.executions: list[dict] = []
         self.xray_imports: list[dict] = []
+        self.xray_tests: dict[str, dict] = {}         # key -> {summary, labels, requirements}
+        self.xray_execs: dict[str, dict] = {}         # key -> {summary, results: [(test key, status)]}
+        self.ado_comments: dict[str, list[str]] = {}
+        self.ado_state: dict[str, str] = {"101": "Active"}
+        self.ado_bugs: dict[str, dict] = {}
+        self.ado_runs: dict[str, dict] = {}
+        self.ado_attachments: list[str] = []
+        self.custom_events: list[dict] = []
         self.auth_failures = 0
         self.rate_limited_once = False
 
@@ -324,7 +333,159 @@ def make_app(state: State) -> FastAPI:
         bearer_ok(request, "xray-jwt-token")
         body = await request.json()
         state.xray_imports.append(body)
-        return {"id": "1", "key": f"SHOP-X{len(state.xray_imports)}"}
+        ex = body.get("testExecutionKey")
+        if ex and ex not in state.xray_execs:
+            raise HTTPException(400, "unknown test execution")
+        if not ex:
+            ex = f"SHOP-X{len(state.xray_execs) + 1}"
+            state.xray_execs[ex] = {"summary": body["info"]["summary"], "results": []}
+        for t in body["tests"]:
+            key = t.get("testKey")
+            if not key:
+                info = t["testInfo"]
+                key = f"SHOP-XT{len(state.xray_tests) + 1}"
+                state.xray_tests[key] = {"summary": info["summary"], "labels": info.get("labels", []),
+                                         "requirements": info.get("requirementKeys", []), "steps": len(info["steps"])}
+            elif key not in state.xray_tests:
+                raise HTTPException(400, f"unknown test {key}")
+            state.xray_execs[ex]["results"].append((key, t["status"]))
+        return {"id": "1", "key": ex}
+
+    @app.post("/xray/api/v2/graphql")
+    async def x_graphql(request: Request):
+        bearer_ok(request, "xray-jwt-token")
+        body = await request.json()
+        q, v = body["query"], body.get("variables") or {}
+        if "createTestExecution" in q:
+            key = f"SHOP-X{len(state.xray_execs) + 1}"
+            state.xray_execs[key] = {"summary": v["jira"]["fields"]["summary"], "results": []}
+            return {"data": {"createTestExecution": {"testExecution": {"issueId": "1", "jira": {"key": key}}, "warnings": []}}}
+        if "getTests" in q:
+            label = v["jql"].split('labels = "')[1].split('"')[0]
+            hits = [{"issueId": "1", "jira": {"key": k}} for k, t in state.xray_tests.items() if label in t["labels"]]
+            return {"data": {"getTests": {"results": hits[:1]}}}
+        return {"errors": [{"message": "unsupported query"}]}
+
+    # ------------------------------------------------------------ custom JSON tool
+    def custom_ok(request: Request):
+        if request.headers.get("x-api-key") != "custom-key":
+            raise HTTPException(401, "bad key")
+
+    @app.get("/custom/stories")
+    def c_search(request: Request, q: str = ""):
+        custom_ok(request)
+        return [{"key": "ST-9", "title": "Sign up form", "type": "Story", "status": "Open",
+                 "acceptance": ["Age must be between 18 and 99; shows \"Age must be 18-99\""]}]
+
+    @app.get("/custom/stories/{key}")
+    def c_get(key: str, request: Request):
+        custom_ok(request)
+        return c_search(request)[0]
+
+    @app.post("/custom/results")
+    async def c_results(request: Request):
+        custom_ok(request)
+        state.custom_events.append(await request.json())
+        return {"ok": True}
+
+    # ------------------------------------------------------------ Azure DevOps (org "org", project "Shop")
+    def ado_ok(request: Request):
+        want = "Basic " + base64.b64encode(f":{ADO_TOKEN}".encode()).decode()
+        if request.headers.get("authorization") != want:
+            state.auth_failures += 1
+            raise HTTPException(401, "Unauthorized")
+
+    ADO = "/ado/org"
+    story = {"id": 101, "fields": {"System.Title": "Sign up form", "System.WorkItemType": "User Story", "System.State": "Active",
+                                   "System.Description": "<div>As a visitor I want an account.</div>",
+                                   "Microsoft.VSTS.Common.AcceptanceCriteria": "<ul><li>Email is required and must be a valid email address; shows "
+                                   "&quot;Enter a valid email&quot;</li><li>Age must be between 18 and 99; shows &quot;Age must be 18-99&quot;</li>"
+                                   "<li>Given I am on the sign up page, when I fill valid details and click Create account then I see "
+                                   "&quot;Account created&quot;</li></ul>", "System.Tags": "signup"}}
+
+    def item(wid: str):
+        if wid == "101":
+            return {**story, "fields": {**story["fields"], "System.State": state.ado_state["101"]}}
+        b = state.ado_bugs.get(wid)
+        if not b:
+            raise HTTPException(404, "work item not found")
+        return {"id": int(wid), "fields": b}
+
+    @app.get(ADO + "/_apis/projects/Shop")
+    def ado_project(request: Request):
+        ado_ok(request)
+        return {"name": "Shop"}
+
+    @app.post(ADO + "/Shop/_apis/wit/wiql")
+    async def ado_wiql(request: Request):
+        ado_ok(request)
+        q = (await request.json())["query"]
+        if "[System.Tags] CONTAINS" in q:
+            tag = q.split("[System.Tags] CONTAINS '")[1].split("'")[0]
+            ids = [int(k) for k, b in state.ado_bugs.items() if tag in b["System.Tags"]]
+        else:
+            ids = [101] if ("Sign" in q or "101" in q or "> 0" in q) else []
+        return {"workItems": [{"id": i} for i in ids]}
+
+    @app.get(ADO + "/Shop/_apis/wit/workitems")
+    def ado_items(request: Request, ids: str):
+        ado_ok(request)
+        return {"value": [item(i) for i in ids.split(",")]}
+
+    @app.get(ADO + "/Shop/_apis/wit/workitems/{wid}")
+    def ado_item(wid: str, request: Request):
+        ado_ok(request)
+        return item(wid)
+
+    @app.patch(ADO + "/Shop/_apis/wit/workitems/{wid}")
+    async def ado_patch(wid: str, request: Request):
+        ado_ok(request)
+        assert request.headers["content-type"].startswith("application/json-patch+json")
+        for op in await request.json():
+            if op["path"] == "/fields/System.State":
+                state.ado_state[wid] = op["value"]
+            elif op["path"] == "/relations/-" and op["value"]["rel"] == "AttachedFile":
+                state.ado_attachments.append(wid)
+        return item(wid)
+
+    @app.post(ADO + "/Shop/_apis/wit/workItems/{wid}/comments")
+    async def ado_comment(wid: str, request: Request):
+        ado_ok(request)
+        state.ado_comments.setdefault(wid, []).append((await request.json())["text"])
+        return JSONResponse({"id": 1}, status_code=200)
+
+    @app.post(ADO + "/Shop/_apis/wit/workitems/$Bug")
+    async def ado_bug(request: Request):
+        ado_ok(request)
+        fields = {op["path"].split("/")[-1]: op["value"] for op in await request.json() if op["path"].startswith("/fields/")}
+        wid = str(500 + len(state.ado_bugs))
+        state.ado_bugs[wid] = {**fields, "System.WorkItemType": "Bug", "System.State": "New"}
+        return {"id": int(wid)}
+
+    @app.post(ADO + "/Shop/_apis/wit/attachments")
+    async def ado_attach(request: Request, fileName: str):
+        ado_ok(request)
+        return {"id": "a1", "url": f"{ADO}/_apis/wit/attachments/a1?fileName={fileName}"}
+
+    @app.post(ADO + "/Shop/_apis/test/runs")
+    async def ado_run(request: Request):
+        ado_ok(request)
+        body = await request.json()
+        rid = str(900 + len(state.ado_runs))
+        state.ado_runs[rid] = {**body, "results": []}
+        return {"id": int(rid)}
+
+    @app.post(ADO + "/Shop/_apis/test/Runs/{rid}/results")
+    async def ado_results(rid: str, request: Request):
+        ado_ok(request)
+        state.ado_runs[rid]["results"] += await request.json()
+        return {"count": 1}
+
+    @app.patch(ADO + "/Shop/_apis/test/runs/{rid}")
+    async def ado_finish(rid: str, request: Request):
+        ado_ok(request)
+        state.ado_runs[rid]["state"] = (await request.json())["state"]
+        return {"id": int(rid)}
 
     return app
 

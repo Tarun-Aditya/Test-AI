@@ -2,6 +2,7 @@
 gets a comment, a status transition and (on failure) a de-duplicated bug. Everything is logged per design."""
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import logging
@@ -20,6 +21,16 @@ log = logging.getLogger("aiauto.sync")
 PREFER = {"tracker": ("jira", "azure_devops", "custom"), "docs": ("confluence",), "code": ("github", "local_repo"),
           "tests": ("zephyr_scale", "xray", "azure_devops", "custom")}
 FINAL = ("passed", "failed", "cancelled", "interrupted")
+ACTOR: contextvars.ContextVar[str | None] = contextvars.ContextVar("sync_actor", default=None)
+
+
+def as_actor(who: str | None, fn, *a, **k):
+    """Run fn with `who` recorded on every sync-log line it writes (call it inside the worker thread)."""
+    tok = ACTOR.set(who)
+    try:
+        return fn(*a, **k)
+    finally:
+        ACTOR.reset(tok)
 
 
 def _on(v) -> bool:
@@ -67,7 +78,7 @@ def linked(design: dict) -> bool:
 
 
 def _log(db, design: dict, kind: str, action: str, ok: bool, detail: str, ref: str | None = None) -> None:
-    db.sync_log_add(design["id"], design["project"], kind, action, ok, detail, ref)
+    db.sync_log_add(design["id"], design["project"], kind, action, ok, detail, ref, ACTOR.get())
 
 
 def public_url() -> str:
@@ -170,9 +181,14 @@ def record_run(db, run_id: str, artifacts: Path, force: bool = False) -> None:
             cycle = (launch.get("cycle") or {}).get(tool.kind) or ""
             if not cycle and tool.kind not in ("xray",):
                 raise IntegrationError("no test cycle was opened for this launch")
+            before = dict(case.get("external") or {})
             ref = tool.record_execution(cycle, case, result, issue)
-            if tool.kind == "xray" and not case.get("external", {}).get("xray"):
-                pass   # Xray created the test on import; its key is looked up by the next push (summary match)
+            if (case.get("external") or {}) != before:      # the tool made the test on import (Xray): keep its key
+                fresh = db.design_get(design["id"]) or design
+                for c in fresh["cases"]:
+                    if c["id"] == case["id"]:
+                        c["external"] = case["external"]
+                db.design_put(fresh)
             _log(db, design, tool.kind, "record execution", True, f"{case['title']}: {result['status']}", ref)
         except IntegrationError as e:
             _log(db, design, tool.kind, "record execution", False, f"{case['title']}: {e}")
@@ -315,4 +331,11 @@ def link_story(db, design: dict, key: str) -> dict:
             c["title"] = real.key + c["title"][len(old_key):]
     db.design_put(design)
     _log(db, design, tracker.kind, "link story", True, f"{old_key} → {real.key}", real.key)
+    return design
+
+
+def set_auto_sync(db, design: dict, on: bool) -> dict:
+    design["pack"]["meta"] = {**(design["pack"].get("meta") or {}), "auto_sync": bool(on)}
+    db.design_put(design)
+    _log(db, design, "autopilot", "settings", True, "results are sent after every run" if on else "results wait for Publish")
     return design

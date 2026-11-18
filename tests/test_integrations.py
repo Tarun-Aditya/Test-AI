@@ -101,16 +101,23 @@ def test_bug_becomes_a_regression_case(fresh):
                             'Verify page contains "Password too short"', 'Verify page does not contain "Account created"']
 
 
-def test_xray_api_key_is_exchanged_and_results_imported(fresh):
+def test_xray_api_key_is_exchanged_and_tests_are_reused(fresh):
     url, state = fresh
     x = make("xray", {"base_url": url + "/xray", "project_key": "SHOP"}, {"client_id": ft.XRAY_ID, "client_secret": ft.XRAY_SECRET})
     assert "accepted" in x.test()
     issue = context.issue_of(_pack(url))
     case = design.design(_pack(url))["cases"][0]
-    key = x.record_execution("Autopilot run", case, {"status": "passed", "comment": "ok", "steps": [{"status": "passed"}]}, issue)
-    body = state.xray_imports[0]
-    assert key == "SHOP-X1" and body["tests"][0]["status"] == "PASSED"
-    assert body["tests"][0]["testInfo"]["requirementKeys"] == ["SHOP-1"]
+    ok = {"status": "passed", "comment": "ok", "steps": [{"status": "passed"}]}
+    ex1 = x.start_cycle("Autopilot run 1", issue)
+    assert x.record_execution(ex1, case, ok, issue) == ex1
+    first = state.xray_imports[0]["tests"][0]
+    assert first["status"] == "PASSED" and first["testInfo"]["requirementKeys"] == ["SHOP-1"]
+    assert case["external"]["xray"] == "SHOP-XT1"                  # the created test is remembered
+    # a later launch (even from a copy of the case without the key) updates the same test
+    ex2 = x.start_cycle("Autopilot run 2", issue)
+    x.record_execution(ex2, {**case, "external": {}}, {**ok, "status": "failed"}, issue)
+    assert len(state.xray_tests) == 1 and state.xray_imports[1]["tests"][0]["testKey"] == "SHOP-XT1"
+    assert state.xray_execs[ex1]["results"] == [("SHOP-XT1", "PASSED")] and state.xray_execs[ex2]["results"] == [("SHOP-XT1", "FAILED")]
 
 
 # ------------------------------------------------------------------------------- the whole flow through the hub
@@ -316,3 +323,108 @@ def test_local_first_then_publish(fresh, hub, signup_url, tmp_path):
     assert sorted(e["statusName"] for e in state.executions) == ["Fail", "Pass"]
     assert state.comments["SHOP-1"][0].startswith("Autopilot ran 2 test case(s) for SHOP-1: 1 passed, 1 failed")
     assert len(state.bugs) == 1
+    # from now on, send every result as it comes in
+    on = c.put(f"/api/designs/{d['id']}/settings", json={"auto_sync": True}).json()
+    assert on["auto_sync"] is True
+    _run_cases(c, on, ["Age = 99"], signup_url)
+    _wait(lambda: len(state.comments["SHOP-1"]) == 2)
+    assert len(state.executions) == 3 and c.get(f"/api/designs/{d['id']}").json()["unpublished"] == 0
+    log = c.get(f"/api/designs/{d['id']}/log").json()
+    assert {"settings", "publish", "link story"} <= {x["action"] for x in log} and "by" in log[0]
+
+
+def _run_cases(c, d, titles, signup_url):
+    ids = [x["id"] for x in d["cases"] if any(t in x["title"] for t in titles)]
+    assert len(ids) == len(titles)
+    c.post(f"/api/designs/{d['id']}/status", json={"case_ids": ids, "status": "approved"})
+    r = c.post(f"/api/designs/{d['id']}/run", json={"base_url": signup_url, "case_ids": ids,
+                                                     "config": {"record_video": False, "live_view": False, "timeout_ms": 4000}})
+    assert r.status_code == 200, r.text
+    return r.json()["launch"]
+
+
+def test_jira_with_xray_through_the_hub(fresh, hub, signup_url):
+    url, state = fresh
+    c = httpx.Client(base_url=hub, timeout=60, headers={"X-Requested-With": "autopilot"})
+    c.put("/api/connections/jira", json={"settings": {"base_url": url + "/site", "deployment": "cloud", "email": ft.EMAIL,
+                                                      "project_key": "SHOP", "create_bugs": "no"}, "secrets": {"token": ft.JIRA_TOKEN}})
+    c.put("/api/connections/xray", json={"settings": {"base_url": url + "/xray", "project_key": "SHOP"},
+                                         "secrets": {"client_id": ft.XRAY_ID, "client_secret": ft.XRAY_SECRET}})
+    assert c.post("/api/connections/xray/test").json()["ok"]
+    d = c.post("/api/designs", json={"issue_key": "SHOP-1"}).json()
+    titles = ["valid details", "Age = 100"]
+    for n in (1, 2):                                        # two launches
+        _run_cases(c, d, titles, signup_url)
+        _wait(lambda: len(state.comments.get("SHOP-1", [])) == n)
+    assert len(state.xray_tests) == 2 and len(state.xray_execs) == 2       # the tests were made once, reused after
+    assert all(len(e["results"]) == 2 for e in state.xray_execs.values())
+    keys = {x["external"].get("xray") for x in c.get(f"/api/designs/{d['id']}").json()["cases"] if x["status"] == "approved"}
+    assert keys == set(state.xray_tests)
+    assert not state.bugs                                   # create_bugs = no
+
+
+def test_azure_devops_story_runs_and_results(fresh, hub, signup_url, tmp_path):
+    url, state = fresh
+    c = httpx.Client(base_url=hub, timeout=60, headers={"X-Requested-With": "autopilot"})
+    c.put("/api/connections/local_repo", json={"settings": {"path": str(_git_repo(tmp_path))}})
+    r = c.put("/api/connections/azure_devops", json={"settings": {"org_url": url + "/ado/org", "project": "Shop",
+                                                                   "fail_transition": "Active", "pass_transition": "Resolved"},
+                                                      "secrets": {"token": ft.ADO_TOKEN}})
+    assert r.status_code == 200, r.text
+    assert c.post("/api/connections/azure_devops/test").json()["ok"]
+    found = c.get("/api/requirements", params={"q": "Sign"}).json()
+    assert [(i["key"], i["title"]) for i in found] == [("101", "Sign up form")]
+    d = c.post("/api/designs", json={"issue_key": "101"}).json()
+    assert len(d["pack"]["issue"]["acceptance"]) == 3
+    _run_cases(c, d, ["valid details", "Age = 100"], signup_url)
+    _wait(lambda: state.ado_comments.get("101"))
+    assert state.ado_comments["101"][0].startswith("Autopilot ran 2 test case(s) for 101: 1 passed, 1 failed")
+    (run,) = state.ado_runs.values()
+    assert run["automated"] and run["state"] == "Completed"
+    assert sorted(x["outcome"] for x in run["results"]) == ["Failed", "Passed"]
+    assert any(x["errorMessage"] for x in run["results"] if x["outcome"] == "Failed")
+    (bug_id, bug), = state.ado_bugs.items()
+    assert "Age = 100" in bug["System.Title"] and "autopilot-" in bug["System.Tags"] and state.ado_attachments == [bug_id]
+    assert state.ado_state["101"] == "Active"
+    # the same failure again: a comment on that bug, not a new one
+    _run_cases(c, d, ["Age = 100"], signup_url)
+    _wait(lambda: state.ado_comments.get(bug_id))
+    assert len(state.ado_bugs) == 1
+
+
+def test_custom_json_tool_reads_stories_and_receives_results(fresh, hub, signup_url, tmp_path):
+    url, state = fresh
+    c = httpx.Client(base_url=hub, timeout=60, headers={"X-Requested-With": "autopilot"})
+    c.put("/api/connections/local_repo", json={"settings": {"path": str(_git_repo(tmp_path))}})
+    r = c.put("/api/connections/custom", json={"settings": {"issues_url": url + "/custom/stories", "results_url": url + "/custom/results",
+                                                            "header": "X-Api-Key"}, "secrets": {"token": "custom-key"}})
+    assert r.status_code == 200, r.text
+    assert c.post("/api/connections/custom/test").json()["ok"]
+    assert [i["key"] for i in c.get("/api/requirements").json()] == ["ST-9"]
+    d = c.post("/api/designs", json={"issue_key": "ST-9"}).json()
+    _run_cases(c, d, ["Age = 100", "Age = 99"], signup_url)
+    _wait(lambda: any(e["event"] == "comment" for e in state.custom_events))
+    kinds = [e["event"] for e in state.custom_events]
+    assert kinds.count("result") == 2 and kinds[-1] == "comment"
+    assert c.post(f"/api/designs/{d['id']}/push").status_code == 200
+    assert [e["event"] for e in state.custom_events].count("test_case") == 2
+    assert sorted(e["status"] for e in state.custom_events if e["event"] == "result") == ["failed", "passed"]
+
+
+def test_an_error_message_is_never_taken_for_the_success_text():
+    issue = context.issue_from_text("- Age must be between 18 and 99; shows \"Age must be 18-99\"", title="Age check")
+    out = design.design(context.build_for(issue))
+    by = {c["title"].split(" · ", 1)[1]: c for c in out["cases"]}
+    assert 'Verify page contains "Age must be 18-99"' not in by["Accepts Age = 99 (maximum)"]["steps"]
+    assert by["Rejects Age = 100 (above the maximum)"]["steps"][-1] == 'Verify page contains "Age must be 18-99"'
+    assert any("No success message" in n for n in out["notes"])
+
+
+def test_sync_log_records_who(tmp_path):
+    from aiauto.db import DB
+    from aiauto.integrations import sync
+    db = DB(tmp_path / "x.db")
+    d = {"id": "d1", "project": "default"}
+    sync.as_actor("alice", sync._log, db, d, "jira", "comment", True, "hi")
+    sync._log(db, d, "jira", "comment", True, "no one")
+    assert [x["by"] for x in db.sync_log("d1")] == [None, "alice"]

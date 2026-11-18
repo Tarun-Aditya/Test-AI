@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS design_runs (
 );
 CREATE TABLE IF NOT EXISTS sync_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT, design_id TEXT, project TEXT, kind TEXT, action TEXT, ok INTEGER, detail TEXT,
-  ref TEXT, at REAL
+  ref TEXT, at REAL, by TEXT
 );
 CREATE TABLE IF NOT EXISTS machines (
   name TEXT PRIMARY KEY, hostname TEXT, platform TEXT, engines TEXT, browsers TEXT, version TEXT,
@@ -99,6 +99,8 @@ class DB:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN project TEXT DEFAULT 'default'")
         self._conn.execute("INSERT OR IGNORE INTO projects (key, name, description, created) VALUES "
                            "('default', 'Default', 'Open to everyone', ?)", (time.time(),))
+        if "by" not in {r[1] for r in self._conn.execute("PRAGMA table_info(sync_log)")}:
+            self._conn.execute("ALTER TABLE sync_log ADD COLUMN by TEXT")     # who did it (older hubs: unknown)
         have = {r[1] for r in self._conn.execute("PRAGMA table_info(steps)")}
         for col in ("parsed_by", "picked_by", "origin"):
             if col not in have:
@@ -573,9 +575,10 @@ class DB:
     def design_run_synced(self, run_id: str) -> None:
         self.x("UPDATE design_runs SET synced=1 WHERE run_id=?", (run_id,))
 
-    def sync_log_add(self, design_id: str | None, project: str, kind: str, action: str, ok: bool, detail: str, ref: str | None = None) -> None:
-        self.x("INSERT INTO sync_log (design_id, project, kind, action, ok, detail, ref, at) VALUES (?,?,?,?,?,?,?,?)",
-               (design_id, project, kind, action, 1 if ok else 0, (detail or "")[:2000], ref, time.time()))
+    def sync_log_add(self, design_id: str | None, project: str, kind: str, action: str, ok: bool, detail: str, ref: str | None = None,
+                     by: str | None = None) -> None:
+        self.x("INSERT INTO sync_log (design_id, project, kind, action, ok, detail, ref, at, by) VALUES (?,?,?,?,?,?,?,?,?)",
+               (design_id, project, kind, action, 1 if ok else 0, (detail or "")[:2000], ref, time.time(), by))
 
     def sync_log(self, design_id: str | None = None, project: str | None = None, limit: int = 200) -> list[dict]:
         if design_id:

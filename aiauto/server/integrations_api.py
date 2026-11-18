@@ -52,6 +52,10 @@ class LinkRequest(BaseModel):
     issue_key: str
 
 
+class DesignSettings(BaseModel):
+    auto_sync: bool                             # send results after every run (else they wait for Publish)
+
+
 class DesignUpdate(BaseModel):
     cases: list[dict]
     notes: Optional[list[str]] = None
@@ -211,7 +215,7 @@ def make_router(app_mod) -> APIRouter:
              "status": "draft", "pack": pack, "cases": out["cases"], "notes": out["notes"], "created_by": owner, "cycles": {}}
         db.design_put(d)
         db.sync_log_add(d["id"], proj, "autopilot", "design", True,
-                        f"{len(out['cases'])} cases from {'rules + AI' if body.use_ai else 'rules'}", d["issue_key"])
+                        f"{len(out['cases'])} cases from {'rules + AI' if body.use_ai else 'rules'}", d["issue_key"], owner)
         return view(db.design_get(d["id"]))
 
     def view(d: dict) -> dict:
@@ -304,7 +308,7 @@ def make_router(app_mod) -> APIRouter:
         if not any(c.get("status") == "approved" for c in d["cases"]):
             raise HTTPException(400, "Approve some cases first")
         need(request, "tests")
-        got = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.push_design, db, d)
+        got = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.as_actor, app_mod._owner_of(request), sync.push_design, db, d)
         return {"pushed": got, "design": view(db.design_get(design_id))}
 
     @r.post("/api/designs/{design_id}/run")
@@ -319,7 +323,8 @@ def make_router(app_mod) -> APIRouter:
             raise HTTPException(400, "Set the URL of the app under test")
         tool = sync.for_role(db, d["project"], "tests")
         if tool and sync.auto_sync(d) and tool.kind == "zephyr_scale" and any(not (c.get("external") or {}).get(tool.kind) for c in cases):
-            await asyncio.get_running_loop().run_in_executor(sync_pool, sync.push_design, db, d, [c["id"] for c in cases])
+            await asyncio.get_running_loop().run_in_executor(sync_pool, sync.as_actor, app_mod._owner_of(request), sync.push_design, db, d,
+                                                       [c["id"] for c in cases])
             d = db.design_get(design_id)
             cases = [c for c in d["cases"] if c.get("status") == "approved" and (not want or c["id"] in want)]
         run_case, skipped = {}, []
@@ -336,7 +341,7 @@ def make_router(app_mod) -> APIRouter:
                 run_case[rid] = c["id"]
         if not run_case:
             raise HTTPException(422, {"message": "None of the cases could be run", "skipped": skipped})
-        launch = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.start_launch, db, d, run_case)
+        launch = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.as_actor, app_mod._owner_of(request), sync.start_launch, db, d, run_case)
         return {"launch": launch, "run_ids": list(run_case), "skipped": skipped}
 
     @r.post("/api/designs/{design_id}/publish")
@@ -344,16 +349,22 @@ def make_router(app_mod) -> APIRouter:
         """Local work -> the tools: cases, the latest result of each, the story comment / transition / bugs."""
         d = design_of(request, design_id)
         try:
-            out = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.publish, db, d, app_mod.ARTIFACTS)
+            out = await asyncio.get_running_loop().run_in_executor(sync_pool, sync.as_actor, app_mod._owner_of(request), sync.publish, db, d, app_mod.ARTIFACTS)
         except IntegrationError as e:
             raise HTTPException(e.status if e.status in (400, 401, 403, 404) else 502, str(e))
         return {**out, "design": view(db.design_get(design_id))}
+
+    @r.put("/api/designs/{design_id}/settings")
+    def design_settings(design_id: str, body: DesignSettings, request: Request):
+        d = design_of(request, design_id)
+        sync.as_actor(app_mod._owner_of(request), sync.set_auto_sync, db, d, body.auto_sync)
+        return view(db.design_get(design_id))
 
     @r.post("/api/designs/{design_id}/link")
     async def design_link(design_id: str, body: LinkRequest, request: Request):
         d = design_of(request, design_id)
         try:
-            await asyncio.get_running_loop().run_in_executor(sync_pool, sync.link_story, db, d, body.issue_key)
+            await asyncio.get_running_loop().run_in_executor(sync_pool, sync.as_actor, app_mod._owner_of(request), sync.link_story, db, d, body.issue_key)
         except IntegrationError as e:
             raise HTTPException(e.status if e.status in (400, 401, 403, 404) else 502, str(e))
         return view(db.design_get(design_id))
@@ -380,13 +391,15 @@ def on_run_finished(db, run_id: str, artifacts) -> None:
     if not db.design_run(run_id):
         return
 
+    who = (db.get_run(run_id) or {}).get("owner")
+
     def go():
         try:
-            sync.record_run(db, run_id, artifacts)
+            sync.as_actor(f"{who} (run)" if who else None, sync.record_run, db, run_id, artifacts)
         except Exception as e:      # never let a tracker outage break the hub
             log.warning("write-back for %s failed: %s", run_id, e)
             link = db.design_run(run_id) or {}
             d = db.design_get(link.get("design_id") or "") if link else None
             if d:
-                db.sync_log_add(d["id"], d["project"], "autopilot", "write-back", False, f"{type(e).__name__}: {e}", run_id)
+                db.sync_log_add(d["id"], d["project"], "autopilot", "write-back", False, f"{type(e).__name__}: {e}", run_id, who)
     sync_pool.submit(go)

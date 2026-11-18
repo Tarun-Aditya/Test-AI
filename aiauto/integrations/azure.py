@@ -74,6 +74,18 @@ class AzureDevOps(Connector):
                              headers={"Content-Type": "application/json-patch+json"}, json=ops)
         return str(bug["id"])
 
+    def find_bug(self, label: str) -> str | None:
+        wiql = {"query": "SELECT [System.Id] FROM workitems WHERE [System.TeamProject] = @project AND [System.WorkItemType] = 'Bug' "
+                         f"AND [System.Tags] CONTAINS '{label}' AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved')"}
+        got = (self.http.json("POST", "/_apis/wit/wiql", params={**V, "$top": 1}, json=wiql) or {}).get("workItems") or []
+        return str(got[0]["id"]) if got else None
+
+    def attach(self, key: str, filename: str, data: bytes) -> None:
+        up = self.http.json("POST", "/_apis/wit/attachments", params={**V, "fileName": filename},
+                            headers={"Content-Type": "application/octet-stream"}, content=data)
+        self.http.patch(f"/_apis/wit/workitems/{key}", params=V, headers={"Content-Type": "application/json-patch+json"},
+                        json=[{"op": "add", "path": "/relations/-", "value": {"rel": "AttachedFile", "url": up["url"]}}])
+
     def push_case(self, case: dict, issue: Issue) -> str:
         return (case.get("external") or {}).get(self.kind) or ""     # results are recorded per run; cases live here
 
@@ -85,7 +97,7 @@ class AzureDevOps(Connector):
         self.http.post(f"/_apis/test/Runs/{cycle}/results", params=V, json=[{
             "testCaseTitle": case["title"][:255], "automatedTestName": f"autopilot.{case['id']}", "outcome": OUTCOME.get(result["status"], "Failed"),
             "state": "Completed", "durationInMs": int(result.get("duration_ms") or 0),
-            "errorMessage": (result.get("error") or "")[:1000], "comment": result.get("comment", "")[:1000]}])
+            "errorMessage": ((result.get("failed") or {}).get("error") or "")[:1000], "comment": result.get("comment", "")[:1000]}])
         return cycle
 
     def finish_cycle(self, cycle: str) -> None:

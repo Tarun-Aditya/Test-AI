@@ -377,3 +377,5 @@ button.slots{cursor:pointer}
 .linkish{background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer}.linkish:hover{color:var(--acc);text-decoration:underline}
 .mrow small{display:block;color:var(--mut);font-size:12px}
 .dt td .pill{margin-right:4px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row > .in{width:auto}

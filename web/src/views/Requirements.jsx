@@ -49,7 +49,7 @@ function CaseRow({ c, latest, selected, onSelect, onChange, openRun }) {
         <td className="mut">{c.origin}</td>
         <td><span className={"slots " + (c.status === "approved" ? "ok" : c.status === "rejected" ? "" : "busy")}>{c.status}</span></td>
         <td>{latest ? <button className={"slots " + stCls(latest.status)} onClick={() => openRun(latest.run_id)}>{latest.status}</button> : <span className="mut">–</span>}</td>
-        <td className="mut">{Object.entries(c.external || {}).map(([k, v]) => <div key={k}>{v}</div>)}</td>
+        <td className="mut" style={{ whiteSpace: "nowrap" }}>{Object.entries(c.external || {}).map(([k, v]) => <div key={k}>{v}</div>)}</td>
       </tr>
       {open && <tr><td /><td colSpan={7}>
         <label className="field"><span>Title</span><input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
@@ -85,7 +85,9 @@ function Design({ id, onClose, onChanged = () => {} }) {
   const publish = () => act(() => api(`/api/designs/${id}/publish`, { method: "POST" }),
     (r) => `Published ${Object.values(r.pushed || {}).filter(Boolean).length} case(s) and ${r.results} result(s)`);
   const link = () => act(async () => { if (!linkKey.trim()) throw new Error("Type the story's key, e.g. SHOP-123");
-    const r = await api(`/api/designs/${id}/link`, { method: "POST", body: { issue_key: linkKey.trim() } }); onChanged(r); return r; }, (r) => r && `Linked to ${r.issue_key}`);
+    const r = await api(`/api/designs/${id}/link`, { method: "POST", body: { issue_key: linkKey.trim() } }); onChanged(r, true); return r; }, (r) => r && `Linked to ${r.issue_key}`);
+  const setAuto = (on) => act(() => api(`/api/designs/${id}/settings`, { method: "PUT", body: { auto_sync: on } }),
+    on ? "Results now go to the tools after every run" : "Results now wait for Publish");
   const refresh = () => act(() => api(`/api/designs/${id}/refresh`, { method: "POST" }), (r) => (r.changed ? "The story or its code changed: review the cases" : "Nothing changed"));
   const del = () => act(async () => { if (!confirm("Delete this design (its sync log too)?")) return; await api(`/api/designs/${id}`, { method: "DELETE" }); onClose(); });
   const run = () => act(async () => {
@@ -104,7 +106,10 @@ function Design({ id, onClose, onChanged = () => {} }) {
     <div className="panel">
       <div className="panel-h"><h3>Test cases · {d.issue_key}</h3><span className="mut">&nbsp;{d.cases.length} cases, {approved} approved · {d.status}</span>
         {!d.auto_sync && <span className="pill" title="Results stay on the hub until you press Publish">local{d.unpublished ? ` · ${d.unpublished} result(s) not published` : ""}</span>}
-        <span className="spacer" /><button className="btn sm ghost" onClick={onClose}><Icon name="x" size={12} /></button></div>
+        <span className="spacer" />
+        <label className="toggle" title="On: every finished run goes to the test tool (and, for a linked story, Jira) right away. Off: results wait for Publish.">
+          <input type="checkbox" checked={!!d.auto_sync} disabled={busy} onChange={(e) => setAuto(e.target.checked)} /><span className="sw" />Send results after each run</label>
+        <button className="btn sm ghost" onClick={onClose}><Icon name="x" size={12} /></button></div>
       <div className="panel-b">
         {d.notes?.length > 0 && <div className="hint" style={{ color: "var(--warn)" }}>{d.notes.join(" · ")}</div>}
         <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
@@ -118,11 +123,11 @@ function Design({ id, onClose, onChanged = () => {} }) {
         </div>
         {!d.linked && <div className="row" style={{ gap: 6, marginTop: 8 }}>
           <span className="mut">Pasted story. In the tracker as</span>
-          <input style={{ width: 140 }} placeholder="SHOP-123" value={linkKey} onChange={(e) => setLinkKey(e.target.value)} />
+          <input className="in" style={{ width: 140 }} placeholder="SHOP-123" value={linkKey} onChange={(e) => setLinkKey(e.target.value)} />
           <button className="btn sm" disabled={busy} onClick={link} title="Link this design to the Jira story: Publish then comments on it, moves it and links bugs">Link</button>
           <span className="mut">(optional — needed for the Jira comment, status and bugs)</span></div>}
         <div className="row" style={{ gap: 6, marginTop: 8 }}>
-          <input style={{ flex: 1, minWidth: 0, width: "100%" }} placeholder="URL of the app under test (fills ${base_url}), e.g. https://staging.shop.example" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+          <input className="in" style={{ flex: "1 1 260px", minWidth: 0 }} placeholder="URL of the app under test (fills ${base_url}), e.g. https://staging.shop.example" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
           <button className="btn primary sm" disabled={busy || !approved} onClick={run}><Icon name="play" size={12} />Run {ids.length ? "selected" : "approved"}</button>
         </div>
         <div className="hint" style={{ marginTop: 4 }}>Runs use the engine, machine and options from the top bar and Studio.</div>
@@ -139,7 +144,8 @@ function Design({ id, onClose, onChanged = () => {} }) {
         <h4 style={{ margin: "14px 0 6px" }}>Sync log</h4>
         {log.length ? <table className="dt"><tbody>{log.slice(0, 40).map((x) => <tr key={x.id}>
           <td className="mut">{ago(new Date(x.at * 1000).toISOString())}</td><td>{x.kind}</td><td>{x.action}</td>
-          <td style={{ color: x.ok ? "inherit" : "var(--bad)" }}>{x.ok ? "" : "✗ "}{x.detail}</td><td className="mut">{x.ref}</td></tr>)}</tbody></table>
+          <td style={{ color: x.ok ? "inherit" : "var(--bad)" }}>{x.ok ? "" : "✗ "}{x.detail}</td><td className="mut">{x.ref}</td>
+          <td className="mut">{x.by || ""}</td></tr>)}</tbody></table>
           : <div className="mut">Nothing sent yet.</div>}
       </div>
     </div>
@@ -165,6 +171,8 @@ export default function Requirements() {
   };
   const loadSaved = () => api("/api/designs").then(setSaved).catch(() => {});
   useEffect(() => { search(); loadSaved(); setKey(null); setPack(null); setOpen(null); }, [project]);
+  // a tracker connected in another tab (or by an admin) shows up when you come back to this one
+  useEffect(() => { const f = () => { if (err) search(); }; window.addEventListener("focus", f); return () => window.removeEventListener("focus", f); }, [err, q]);
   const openSaved = async (id) => {
     setPaste(null); setBusy(true);
     try { const d = await api(`/api/designs/${id}`); setKey(d.issue_key); setPack(d.pack); setDesigns([d]); setOpen(d.id); }
@@ -197,19 +205,19 @@ export default function Requirements() {
             <button className="btn sm" onClick={() => { setPaste({ text: "", title: "", key: "", type: "Story", notes: "" }); setOpen(null); setKey(null); }}>
               <Icon name="plus" size={12} />Paste a story</button></div>
           <div className="panel-b">
-            <form className="row" style={{ gap: 6 }} onSubmit={(e) => { e.preventDefault(); search(); }}>
-              <input style={{ flex: 1 }} placeholder="Key, text, or JQL" value={q} onChange={(e) => setQ(e.target.value)} />
+            <form className="row" style={{ gap: 6, flexWrap: "nowrap" }} onSubmit={(e) => { e.preventDefault(); search(); }}>
+              <input className="in" style={{ flex: 1, minWidth: 0 }} placeholder="Key, text, or JQL" value={q} onChange={(e) => setQ(e.target.value)} />
               <button className="btn sm"><Icon name="search" size={12} /></button></form>
             {err && <div className="hint" style={{ color: "var(--warn)" }}>{err.startsWith("Connect ") ? "No tracker connected yet: paste a story instead" : err}
               {admin && <> — <button className="linkish" onClick={() => nav("settings")}>Integrations</button></>}</div>}
-            <div className="prov-list" style={{ marginTop: 8 }}>
+            {(list || []).length > 0 && <div className="prov-list" style={{ marginTop: 8 }}>
               {(list || []).map((i) => (
                 <button key={i.key} className={"mrow" + (key === i.key ? " on" : "")} onClick={() => pick(i.key)} style={{ textAlign: "left" }}>
                   <div className="grow"><b>{i.key}</b> {i.title}<small>{i.type} · {i.status}</small></div>
                   {i.design && <span className="slots ok" title="Has test cases">{i.design.cases}</span>}
                 </button>))}
-              {list && !list.length && !err && <div className="mut">No matches.</div>}
-            </div>
+            </div>}
+            {list && !list.length && !err && <div className="mut" style={{ marginTop: 8 }}>No matches.</div>}
             {saved.length > 0 && <>
               <h4 style={{ margin: "14px 0 6px" }}>Test designs</h4>
               <div className="prov-list">{saved.slice(0, 30).map((d) => (
@@ -225,10 +233,10 @@ export default function Requirements() {
               <button className="btn primary sm" disabled={busy || !paste.text.trim()} onClick={designPasted}><Icon name="spark" size={12} />Design test cases</button>
               <button className="btn sm ghost" onClick={() => setPaste(null)}><Icon name="x" size={12} /></button></div>
             <div className="panel-b">
-              <div className="row" style={{ gap: 8 }}>
-                <label className="field" style={{ flex: 2 }}><span>Title (optional: first line otherwise)</span><input value={paste.title} onChange={(e) => setPaste({ ...paste, title: e.target.value })} /></label>
-                <label className="field" style={{ flex: 1 }}><span>Key (optional)</span><input placeholder="SHOP-123" value={paste.key} onChange={(e) => setPaste({ ...paste, key: e.target.value })} /></label>
-                <label className="field" style={{ flex: 1 }}><span>Type</span><select value={paste.type} onChange={(e) => setPaste({ ...paste, type: e.target.value })}><option>Story</option><option>Bug</option></select></label>
+              <div className="row" style={{ gap: 8, alignItems: "flex-start" }}>
+                <label className="field" style={{ flex: "2 1 220px" }}><span>Title (optional: first line otherwise)</span><input value={paste.title} onChange={(e) => setPaste({ ...paste, title: e.target.value })} /></label>
+                <label className="field" style={{ flex: "1 1 120px" }}><span>Key (optional)</span><input placeholder="SHOP-123" value={paste.key} onChange={(e) => setPaste({ ...paste, key: e.target.value })} /></label>
+                <label className="field" style={{ flex: "1 1 100px" }}><span>Type</span><select value={paste.type} onChange={(e) => setPaste({ ...paste, type: e.target.value })}><option>Story</option><option>Bug</option></select></label>
               </div>
               <label className="field"><span>Story text — Markdown, Jira wiki markup or plain text. Put the criteria under an “Acceptance criteria” heading,
                 as bullets, or as Given / When / Then; for a bug, “Steps to reproduce” and “Expected result”.</span>
@@ -250,7 +258,7 @@ export default function Requirements() {
               <button key={d.id} className={"btn sm " + (open === d.id ? "" : "ghost")} onClick={() => setOpen(d.id)}>{new Date(d.created * 1000).toLocaleString()} · {d.cases?.length ?? d.cases} cases</button>)}</div>}
           </div>}
           {open && !paste && <div style={{ marginTop: 16 }}><Design key={open} id={open} onClose={() => setOpen(null)}
-            onChanged={(d) => { setKey(d.issue_key); setPack(d.pack); loadSaved(); }} /></div>}
+            onChanged={(d, linked) => { setKey(d.issue_key); setPack(d.pack); loadSaved(); if (linked) search(); }} /></div>}
         </div>
       </div>
     </section>

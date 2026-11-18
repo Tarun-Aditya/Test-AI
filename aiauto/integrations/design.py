@@ -183,9 +183,11 @@ def _success(pack: dict) -> str | None:
             q = QUOTED.findall(m.group("t"))
             if q:
                 return q[0]
+    # a criterion that says what the user sees, but not a rule's error message ("...; shows 'Age must be 18-99'")
+    errors = {r["error"] for r in criteria_rules(pack["issue"].get("acceptance", [])) if r.get("error")}
     for line in pack["issue"].get("acceptance", []):
         if re.search(r"(?i)\b(?:see|shows?|displays?|redirect|confirmation|success)", line) and not re.search(r"(?i)error|invalid|not\b", line):
-            q = QUOTED.findall(line)
+            q = [x for x in QUOTED.findall(line) if x not in errors]
             if q:
                 return q[0]
     return None

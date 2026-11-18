@@ -284,7 +284,9 @@ the top bar. When they finish:
 | Where | What is written |
 |---|---|
 | Zephyr Scale | test cases (with steps, folder, linked to the story), one test cycle per launch, one execution per run with step results |
-| Xray *(under development)* | results imported (tests created on first import, linked to the story) |
+| Xray *(under development)* | one Test Execution per launch; each case's Xray test is created on its first import (steps, linked to the story, label `autopilot-case-<id>`) and reused afterwards |
+| Azure DevOps *(under development)* | an automated test run per launch with one result per case; comment, state change and de-duplicated bugs (screenshot attached) on the work item |
+| Custom tool *(under development)* | JSON events to your results URL: `test_case`, `result`, `comment` |
 | Jira | one comment on the story with every result and report link; the pass / fail transition you configured; for each new failure a bug (linked, screenshot attached) — the same failure again adds a comment to that bug instead of a new one |
 
 Everything sent is listed in the design's **sync log**. **Re-check story** says when the story, its pages or its code changed after the
@@ -302,6 +304,8 @@ cases were written.
 - When the tools are connected: **Link** the design to the story's Jira key (optional; needed for the Jira comment, status and bugs),
   then **Publish** — the approved cases go to Zephyr Scale, the latest result of each becomes one test cycle, and the story gets its
   comment, transition and bugs. Publish can be pressed again later to send newer results.
+- **Send results after each run** (switch on the design): on for stories pulled from the tracker, off for pasted ones; turn it on
+  once a pasted story is linked and its results go out as each run finishes. The sync log shows who did each step.
 
 ### Connecting (tokens only)
 
