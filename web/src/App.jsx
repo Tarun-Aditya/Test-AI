@@ -12,30 +12,34 @@ import Settings from "./views/Settings.jsx";
 import MyAI from "./views/MyAI.jsx";
 import Requirements from "./views/Requirements.jsx";
 import MachinePicker, { agentsOf } from "./components/MachinePicker.jsx";
-import RunDrawer from "./components/RunDrawer.jsx";
+import RunPage from "./components/RunDrawer.jsx";
 
 export const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
 
+// view key -> [title, one-line description, icon]
 const VIEWS = {
-  dashboard: ["Dashboard", "Recent and running tests at a glance", "dash"],
+  dashboard: ["Overview", "What's running, what's failing, how each story is covered", "dash"],
+  requirements: ["Test design", "Stories and bugs → test cases → runs → results back", "doc"],
   studio: ["Studio", "Describe a test, watch it run, keep the script", "studio"],
-  requirements: ["Requirements", "Stories and bugs from your tracker → test cases → runs → results back", "doc"],
-  runs: ["Runs", "Every execution with its report, video and generated scripts", "runs"],
-  library: ["Script library", "Reusable scripts with native locators. Run them on any engine or machine", "lib"],
-  machines: ["Machines", "Computers that can run tests", "pc"],
-  sessions: ["Sessions", "Saved logins (cookies + localStorage) a run can start with", "key"],
+  runs: ["Runs", "Every run, grouped by launch, with its report, video and scripts", "runs"],
+  library: ["Library", "Reusable scripts with native locators. Run them on any engine or machine", "lib"],
+  sessions: ["Saved logins", "Cookies and local storage a run can start with", "key"],
+  machines: ["Machines", "Computers and browser grids that run tests", "pc"],
+  settings: ["Admin", "AI, integrations, sign-in, users and projects", "gear"],
   myai: ["My AI", "Your own AI subscription or key, used for your runs", "spark"],
-  settings: ["Admin", "Organisation AI, integrations, sign-in (SSO) and users", "key"],
 };
+// the sidebar, in workflow order: design → write → run → review, then things set up once (My AI lives in the user menu)
+const NAV_GROUPS = [[null, ["dashboard", "requirements", "studio", "runs"]], ["Assets", ["library", "sessions"]], ["Setup", ["machines", "settings"]]];
+const PHONE_TABS = ["dashboard", "requirements", "studio", "runs"];
 // which pages a role sees (no accounts = single user, sees everything except My AI)
 const visibleViews = (me) => Object.keys(VIEWS).filter((k) => (k === "myai" ? !!me : k === "settings" ? !me || me.role === "admin" : true));
 const THEMES = ["auto", "light", "dark"];
 
 function useHashRoute() {
   const parse = () => {
-    const [v, id] = (location.hash.replace(/^#\/?/, "") || store.get("view", "dashboard")).split("/");
-    return { view: VIEWS[v] ? v : "dashboard", id: id ? decodeURIComponent(id) : null };
+    const [v, id, tab] = (location.hash.replace(/^#\/?/, "") || store.get("view", "dashboard")).split("/");
+    return { view: VIEWS[v] ? v : "dashboard", id: id ? decodeURIComponent(id) : null, tab: tab || null };
   };
   const [route, setRoute] = useState(parse);
   useEffect(() => { const h = () => setRoute(parse()); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
@@ -56,7 +60,7 @@ export default function App({ me = null, reloadMe = () => {} }) {
   const [sessions, setSessions] = useState([]);
   const [library, setLibrary] = useState([]);
   const [health, setHealth] = useState({ llm: "…", local_name: "local" });
-  const [drawer, setDrawer] = useState(null);
+  const [more, setMore] = useState(false);
   const [toastMsg, setToastMsg] = useState(null);
   const [theme, setTheme] = useState(() => store.get("theme", "auto"));
   const [busy, setBusy] = useState(false);
@@ -65,7 +69,8 @@ export default function App({ me = null, reloadMe = () => {} }) {
   const setForm = useCallback((patch) => setFormState((f) => { const n = { ...f, ...(typeof patch === "function" ? patch(f) : patch) }; saveForm(n); return n; }), []);
   const toast = useCallback((msg, err) => { setToastMsg({ msg, err, t: Date.now() }); }, []);
   useEffect(() => { if (!toastMsg) return; const h = setTimeout(() => setToastMsg(null), 3800); return () => clearTimeout(h); }, [toastMsg]);
-  const nav = useCallback((view, id) => { location.hash = `/${view}${id ? "/" + encodeURIComponent(id) : ""}`; store.set("view", view); }, []);
+  const nav = useCallback((view, id, tab) => { location.hash = `/${view}${id ? "/" + encodeURIComponent(id) : ""}${id && tab ? "/" + tab : ""}`; if (!id) store.set("view", view); }, []);
+  useEffect(() => { setMenu(false); setMore(false); window.scrollTo(0, 0); }, [route.view, route.id]);
 
   useEffect(() => { if (theme === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = theme; store.set("theme", theme); }, [theme]);
 
@@ -143,7 +148,7 @@ export default function App({ me = null, reloadMe = () => {} }) {
 
   const ctx = useMemo(() => ({
     form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy,
-    loadRuns, loadMachines, loadSessions, loadLibrary, openRun: (id, tab) => setDrawer({ id, tab: tab || "overview" }), me, can,
+    loadRuns, loadMachines, loadSessions, loadLibrary, openRun: (id, tab) => nav("runs", id, tab), me, can,
     projects, project, loadProjects,
   }), [form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy, loadRuns, loadMachines, loadSessions, loadLibrary, me, projects, project, loadProjects]);
   const signOut = async () => { try { await api("/api/auth/logout", { method: "POST" }); } catch { /* already out */ } reloadMe(); };
@@ -160,6 +165,15 @@ export default function App({ me = null, reloadMe = () => {} }) {
   const [title, sub] = VIEWS[route.view];
   const online = machines.filter((m) => m.online);
   const counts = { runs: runs.length, library: library.length, machines: online.length + 1, sessions: sessions.length };
+  const views = visibleViews(me);
+  const runPage = route.view === "runs" && route.id;
+  const navItem = (k, phone) => (
+    <a key={k} href={`#/${k}`} className={route.view === k ? "on" : ""} aria-current={route.view === k ? "page" : undefined}
+      onClick={(e) => { e.preventDefault(); nav(k); }}>
+      <Icon name={VIEWS[k][2]} /><span className="lbl">{VIEWS[k][0]}</span>
+      {!phone && k === "dashboard" && liveCount > 0 && <span className="count live">{liveCount} live</span>}
+      {!phone && counts[k] !== undefined && <span className="count">{counts[k]}</span>}
+    </a>);
 
   return (
     <Ctx.Provider value={ctx}>
@@ -170,60 +184,68 @@ export default function App({ me = null, reloadMe = () => {} }) {
             <small>Project</small>
             <select value={project} onChange={(e) => switchProject(e.target.value)}>
               {projects.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}</select></label>}
-          <nav className="nav">
-            {Object.entries(VIEWS).filter(([k]) => visibleViews(me).includes(k)).map(([k, [label, , icon]]) => (
-              <button key={k} className={route.view === k ? "on" : ""} onClick={() => nav(k)}>
-                <Icon name={icon} /><span className="lbl">{label === "Script library" ? "Library" : label}</span>
-                {k === "dashboard" && liveCount > 0 && <span className="count" style={{ background: "var(--warn-soft)", color: "var(--warn)" }}>{liveCount} live</span>}
-                {counts[k] !== undefined && <span className="count">{counts[k]}</span>}
-              </button>
-            ))}
+          {can.run && <button className="btn primary newtest" onClick={() => nav("studio")}><Icon name="plus" size={15} />New test</button>}
+          <nav className="nav" aria-label="Main">
+            {NAV_GROUPS.map(([label, keys]) => {
+              const ks = keys.filter((k) => views.includes(k));
+              return ks.length ? <div key={label || "work"} className="navgroup">{label && <div className="navh">{label}</div>}{ks.map((k) => navItem(k))}</div> : null;
+            })}
           </nav>
           <div className="side-foot">
-            {me && <div className="usermenu">
+            <button className="chip" title={health.llm} onClick={() => nav("settings")}><span className={"dotc " + (health.llm_on ? "ok" : "")} />AI {health.llm_on ? "on" : "off · built-in rules"}</button>
+            {me ? <div className="usermenu">
               <button className="userchip" aria-haspopup="true" aria-expanded={menu} onClick={() => setMenu(!menu)}>
                 <span className="avatar">{(me.name || me.username).slice(0, 1).toUpperCase()}</span>
                 <span className="ellipsis"><b>{me.name || me.username}</b><small>{me.role}{me.sso ? " · SSO" : ""}</small></span></button>
               {menu && <div className="umenu" onMouseLeave={() => setMenu(false)}>
-                <button onClick={() => { setMenu(false); nav("myai"); }}>My AI subscription</button>
+                <button onClick={() => nav("myai")}>My AI subscription</button>
                 {me.has_password && <button onClick={() => { setMenu(false); changePassword(); }}>Change password</button>}
+                <button onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3])}>Theme: {theme}</button>
                 <button onClick={signOut}>Sign out</button>
               </div>}
-            </div>}
-            <button className="chip" title={health.llm} onClick={() => nav("settings")}><span className={"dotc " + (health.llm_on ? "ok" : "")} />AI {health.llm_on ? "on" : "off (rules)"}</button>
-            <button className="theme" onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3])}><Icon name="moon" size={14} />Theme: {theme}</button>
+            </div> : <button className="theme" onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3])}><Icon name="moon" size={14} />Theme: {theme}</button>}
           </div>
         </aside>
 
         <div className="main">
           <header className="topbar">
-            <div><h1>{title}</h1><div className="sub">{sub}</div></div>
+            {runPage ? <div className="crumbs"><a href="#/runs" onClick={(e) => { e.preventDefault(); nav("runs"); }}><Icon name="back" size={14} />Runs</a></div>
+              : <div><h1>{title}</h1><div className="sub">{sub}</div></div>}
             <div className="spacer" />
-            {can.run && <>
-            <div className="seg" title="Execution engine. Both: every run once with Playwright and once with Selenium, in parallel">
-              {[["playwright", "Playwright"], ["selenium", "Selenium"], ["both", "Both"]].map(([e, l]) =>
-                <button key={e} className={form.engine === e ? "on" : ""} onClick={() => setForm({ engine: e })}>{l}</button>)}
-            </div>
-            <MachinePicker agents={agentsOf(form)} spread={form.spread || "each"}
-              onChange={({ agents, spread }) => setForm({ agents, spread, agent: agents[0] })} />
-            <label className="toggle"><input type="checkbox" checked={form.headless} onChange={(e) => setForm({ headless: e.target.checked })} /><span className="sw" />Headless</label>
-            <button className="btn primary" disabled={busy} onClick={() => startRun()}><Icon name="play" size={14} />Run test</button>
-            </>}
+            {route.view === "studio" && can.run && <div className="runbar" role="group" aria-label="Run settings">
+              <div className="seg" title="Execution engine. Both: every run once with Playwright and once with Selenium, in parallel">
+                {[["playwright", "Playwright"], ["selenium", "Selenium"], ["both", "Both"]].map(([e, l]) =>
+                  <button key={e} className={form.engine === e ? "on" : ""} aria-pressed={form.engine === e} onClick={() => setForm({ engine: e })}>{l}</button>)}
+              </div>
+              <MachinePicker agents={agentsOf(form)} spread={form.spread || "each"}
+                onChange={({ agents, spread }) => setForm({ agents, spread, agent: agents[0] })} />
+              <label className="toggle"><input type="checkbox" checked={form.headless} onChange={(e) => setForm({ headless: e.target.checked })} /><span className="sw" />Headless</label>
+              <button className="btn primary" disabled={busy} onClick={() => startRun()}><Icon name="play" size={14} />Run test</button>
+            </div>}
             {!can.run && <span className="pill">viewer: read-only</span>}
           </header>
 
           {route.view === "dashboard" && <Dashboard />}
           {route.view === "studio" && <Studio runId={route.id} />}
           {route.view === "requirements" && <Requirements />}
-          {route.view === "runs" && <Runs />}
+          {route.view === "runs" && (runPage ? <RunPage key={route.id} id={route.id} tab={route.tab} /> : <Runs />)}
           {route.view === "library" && <Library />}
           {route.view === "machines" && <Machines />}
           {route.view === "sessions" && <Sessions />}
           {route.view === "settings" && (can.admin ? <Settings /> : <div className="view on"><div className="empty-state">Only admins can open this page.</div></div>)}
           {route.view === "myai" && me && <MyAI />}
         </div>
+
+        <nav className="phonebar" aria-label="Main">
+          {PHONE_TABS.filter((k) => views.includes(k)).map((k) => navItem(k, true))}
+          <button className={more ? "on" : ""} aria-expanded={more} onClick={() => setMore(!more)}><Icon name="more" /><span className="lbl">More</span></button>
+          {more && <div className="phonemore">
+            {["library", "sessions", "machines", "settings", "myai"].filter((k) => views.includes(k)).map((k) => navItem(k, true))}
+            <button onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3])}><Icon name="moon" /><span className="lbl">Theme: {theme}</span></button>
+            {me && <button onClick={signOut}><Icon name="x" /><span className="lbl">Sign out</span></button>}
+          </div>}
+        </nav>
       </div>
-      {drawer && <RunDrawer {...drawer} onClose={() => setDrawer(null)} />}
       <div className={"toast" + (toastMsg ? " on" : "") + (toastMsg?.err ? " err" : "")} role="status">{toastMsg?.msg}</div>
     </Ctx.Provider>
   );

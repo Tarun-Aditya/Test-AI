@@ -4,7 +4,7 @@ import { useApp } from "../App.jsx";
 import { BROWSERS, dataPayload } from "../form.js";
 import Icon from "../icons.jsx";
 import CodeExplorer from "./CodeExplorer.jsx";
-import { ModeBadge, Prov, Status } from "../views/Dashboard.jsx";
+import { ModeBadge, Prov, Status, StopButton } from "../views/Dashboard.jsx";
 
 const TABS = [["overview", "Overview"], ["code", "Code & files"], ["video", "Video"], ["report", "Report"], ["config", "Data & config"], ["replay", "Replay"]];
 
@@ -125,51 +125,149 @@ function Replay({ r, onDone }) {
   </div>;
 }
 
-export default function RunDrawer({ id, tab: initialTab, onClose }) {
-  const { toast, loadLibrary, loadRuns, can } = useApp();
+/** Facts, step list and the screenshot of the selected step: the core of a run, on its page and in the Inbox. */
+export function StepsView({ r, compact }) {
+  const firstBad = r.steps.find((x) => x.status === "failed");
+  const [sel, setSel] = useState(firstBad ? firstBad.idx : r.steps.length ? r.steps[r.steps.length - 1].idx : 0);
+  const [loc, setLoc] = useState(false);
+  useEffect(() => { const b = r.steps.find((x) => x.status === "failed"); setSel(b ? b.idx : r.steps.length ? r.steps[r.steps.length - 1].idx : 0); }, [r.run_id]);
+  const p = r.steps.filter((x) => x.status === "passed").length;
+  const step = r.steps.find((x) => x.idx === sel);
+  const pos = r.steps.findIndex((x) => x.idx === sel);
+  const move = (d) => { const n = r.steps[pos + d]; if (n) setSel(n.idx); };
+  const parsed = { ai: "AI", rules: "Rules", user: "Edited by hand" }[r.parser] || (r.mode === "replay" ? "Script replay" : "AI");
+  return <>
+    {!compact && <div className="facts" role="list" aria-label="Summary">
+      <div className="fact" role="listitem"><span>Steps</span><b>{p} <small>of {r.steps.length} passed</small></b></div>
+      <div className="fact" role="listitem"><span>{firstBad ? "Failed at" : "Result"}</span><b>{firstBad ? `Step ${firstBad.idx + 1}` : r.status === "passed" ? "All passed" : r.status}</b></div>
+      <div className="fact" role="listitem"><span>Duration</span><b>{secs(r.duration_ms)}</b></div>
+      <div className="fact" role="listitem"><span>Self-healed</span><b>{r.healed_steps || 0}</b></div>
+      <div className="fact" role="listitem"><span>Steps made by</span><b>{r.mode === "replay" ? "Script" : parsed}</b></div>
+    </div>}
+    {r.error && !firstBad && <div className="callout bad">{r.error}</div>}
+    <div className="runsplit">
+      <section className="panel" aria-label="Steps" style={{ overflow: "hidden" }}>
+        <div className="panel-h"><h3>Steps</h3><span className="spacer" />
+          <label className="toggle"><input type="checkbox" checked={loc} onChange={(e) => setLoc(e.target.checked)} /><span className="sw" />Show locators</label></div>
+        <div className="steplist">
+          {r.steps.map((x) => (
+            <button key={x.idx} type="button" className={"srow " + x.status + (x.idx === sel ? " on" : "")} aria-current={x.idx === sel ? "step" : undefined} onClick={() => setSel(x.idx)}>
+              <span className="n">{x.idx + 1}</span><StepIcon s={x.status} />
+              <span className="sbody"><span className="stext">{x.raw || x.action}</span>
+                {x.origin && x.origin !== x.raw && <span className="ssub origin">“{x.origin}”</span>}
+                {x.value && <span className="ssub">{x.value}</span>}
+                {x.healed ? <span className="ssub" style={{ color: "var(--warn)" }}>self-healed</span> : null}
+                {loc && <span className="ssub mono">{x.locator || x.action} <Prov parsed={x.parsed_by} picked={x.picked_by} /></span>}
+                {x.error && <span className="serr">{x.error}</span>}</span>
+              <span className="sdur mono">{x.status === "skipped" ? "–" : secs(x.duration_ms)}</span>
+            </button>))}
+          {!r.steps.length && <div className="empty-state">No steps ran.</div>}
+        </div>
+      </section>
+      <section className="panel shotpanel" aria-label="Screenshot">
+        <div className="panel-h"><h3>{step ? `Step ${step.idx + 1}` : "Screenshot"}</h3><span className="spacer" />
+          <button className="btn sm" aria-label="Previous step" disabled={pos <= 0} onClick={() => move(-1)}><Icon name="back" size={14} /></button>
+          <span className="mut">{pos + 1} / {r.steps.length}</span>
+          <button className="btn sm" aria-label="Next step" disabled={pos >= r.steps.length - 1} onClick={() => move(1)}><Icon name="chev" size={14} /></button>
+          {step?.screenshot && <a className="btn sm" href={art(r.run_id, step.screenshot)} target="_blank" rel="noreferrer">Full size</a>}</div>
+        <div className="shot">
+          <div className="chrome"><div className="lights"><i /><i /><i /></div><div className="urlbar"><span>{step?.url || "—"}</span></div></div>
+          {step?.screenshot ? <img src={art(r.run_id, step.screenshot)} alt={`Screenshot after step ${step.idx + 1}: ${step.raw || step.action}`} />
+            : <div className="empty-state">No screenshot for this step.</div>}
+        </div>
+        {step && <dl className="kv">
+          <dt>Step</dt><dd>{step.raw || step.action}</dd>
+          <dt>Result</dt><dd><Status s={step.status} />{step.duration_ms ? <span className="mut"> · {secs(step.duration_ms)}</span> : null}</dd>
+          {step.locator && <><dt>Element</dt><dd className="mono">{step.locator}</dd></>}
+          {step.dialog && <><dt>Dialog</dt><dd>{step.dialog}</dd></>}
+        </dl>}
+      </section>
+    </div>
+    {r.batch && r.batch.length > 1 && !compact && <section className="panel" style={{ marginTop: 16 }}>
+      <div className="panel-h"><h3>Other runs in this launch</h3><span className="mut">{r.batch.length}</span></div>
+      <div>{r.batch.map((b) => <a key={b.run_id} className="lrow" href={`#/runs/${encodeURIComponent(b.run_id)}`}>
+        <Status s={b.status} /><span className="ellipsis" style={{ flex: 1 }}>{b.test_name}</span><span className="mut">{b.browser}</span>
+        {b.run_id === r.run_id && <span className="pill">this run</span>}</a>)}</div></section>}
+  </>;
+}
+
+export function StepIcon({ s }) {
+  const n = { passed: "ok", failed: "fail", skipped: "minus", running: "clock", pending: "clock" }[s] || "minus";
+  return <span className={"sic " + s} aria-label={s}><Icon name={n} size={16} /></span>;
+}
+
+function Menu({ label, icon, children }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (!open) return; const h = () => setOpen(false); setTimeout(() => document.addEventListener("click", h, { once: true }), 0); return () => document.removeEventListener("click", h); }, [open]);
+  return <div className="menu">
+    <button className="btn" aria-haspopup="true" aria-expanded={open} aria-label={label} onClick={() => setOpen(!open)}><Icon name={icon} size={15} />{icon !== "more" && label}</button>
+    {open && <div className="menu-pop" role="menu">{children}</div>}
+  </div>;
+}
+
+const PAGE_TABS = [["steps", "Steps"], ["video", "Video"], ["code", "Scripts & files"], ["report", "Report"], ["config", "Data & settings"], ["replay", "Replay"]];
+
+/** One run as a page (#/runs/<id>[/tab]); `embedded` = the Inbox's right pane. */
+export default function RunPage({ id, tab: tabFromUrl, embedded }) {
+  const { toast, loadLibrary, loadRuns, can, nav, subscribe } = useApp();
   const [r, setR] = useState(null);
-  const [tab, setTab] = useState(initialTab === "replay" && !can.run ? "overview" : initialTab || "overview");
-  useEffect(() => { setTab(initialTab || "overview"); }, [id, initialTab]);
-  useEffect(() => { api(`/api/runs/${encodeURIComponent(id)}`).then(setR).catch((e) => { toast(e.message, true); onClose(); }); }, [id]);
-  useEffect(() => { const h = (e) => e.key === "Escape" && onClose(); document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
+  const [err, setErr] = useState(null);
+  const tab = PAGE_TABS.some(([k]) => k === tabFromUrl) && (tabFromUrl !== "replay" || can.run) ? tabFromUrl : "steps";
+  const setTab = (t) => (embedded ? nav("runs", id, t) : nav("runs", id, t === "steps" ? null : t));
+  const load = () => api(`/api/runs/${encodeURIComponent(id)}`).then((x) => { setR(x); setErr(null); }).catch((e) => setErr(e.message));
+  useEffect(() => { setR(null); load(); }, [id]);
+  useEffect(() => subscribe((e) => { if (e.run_id === id && ["run_finished", "artifacts_uploaded"].includes(e.type)) load(); }), [id]);
   const saveLib = async () => {
     const name = prompt("Save the generated script to the library as:", (r.test_name || "").replace(/\s*\[#.*\]$/, ""));
     if (name === null) return;
     try { await api("/api/library/from-run", { method: "POST", body: { run_id: r.run_id, name: name || null } }); loadLibrary(); toast("Saved to library"); } catch (e) { toast(e.message, true); }
   };
-  const del = async () => { if (!confirm("Delete this run and its artifacts?")) return; await api(`/api/runs/${encodeURIComponent(id)}`, { method: "DELETE" }); loadRuns(); onClose(); };
-  const done = r && !isLive(r);
-  return <>
-    <div className="scrim on" onClick={onClose} />
-    <aside className="drawer on" aria-label="Run details">
-      <div className="drawer-h">
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 className="ellipsis">{r ? r.test_name : "Loading…"}</h2>
-          {r && <div className="mut" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
-            <Status s={r.status} /><ModeBadge mode={r.mode} parser={r.parser} />{r.engine}{r.browser ? ` / ${r.browser}` : ""} · {r.agent} · {(r.started_at || "").replace("T", " ").slice(0, 19)}</div>}
-        </div>
-        {done && <div className="links">
-          <a href={`/api/runs/${encodeURIComponent(id)}/export`}><Icon name="up" size={12} style={{ transform: "rotate(180deg)" }} /> Export project</a>
-          <a href={`/api/runs/${encodeURIComponent(id)}/download`}>Artifacts zip</a>
-          <button onClick={saveLib}>＋ Library</button>
-          <button onClick={() => setTab("replay")}>▶ Replay</button>
-          <button onClick={del} style={{ color: "var(--bad)" }}>Delete</button></div>}
-        <button className="x" onClick={onClose} title="Close"><Icon name="x" /></button>
-      </div>
-      <div className="tabs" style={{ background: "var(--panel)" }}>
-        {TABS.filter(([k]) => can.run || k !== "replay").map(([k, l]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}
-      </div>
-      <div className={"drawer-b" + (tab === "code" ? " flush" : "")}>
-        {!r ? <div className="empty-state">Loading…</div> : isLive(r) ? <div className="empty-state">This run is still in progress. <a href={`#/studio/${encodeURIComponent(r.run_id)}`} onClick={onClose}>Watch it live</a>
-          {" "}or <StopButton ids={[r.run_id]} label="Stop it" className="btn sm" /></div> : <>
-          {tab === "overview" && <Overview r={r} />}
-          {tab === "code" && <CodeExplorer runId={r.run_id} />}
-          {tab === "video" && (r.video ? <video controls autoPlay muted src={art(r.run_id, r.video)} /> : <div className="empty-state">No video was recorded for this run.</div>)}
-          {tab === "report" && <iframe src={art(r.run_id, "report.html")} title="Report" />}
-          {tab === "config" && <Config r={r} />}
-          {tab === "replay" && <Replay r={r} onDone={onClose} />}
+  const del = async () => {
+    if (!confirm("Delete this run with its report, video and screenshots? This can't be undone.")) return;
+    await api(`/api/runs/${encodeURIComponent(id)}`, { method: "DELETE" }); loadRuns(); toast("Run deleted"); nav("runs");
+  };
+  if (err) return <section className="view on"><div className="empty-state">{err}. <a href="#/runs">Back to runs</a></div></section>;
+  if (!r) return <section className="view on"><div className="skel" style={{ height: 28, width: 320 }} /><div className="skel" style={{ height: 380, marginTop: 16 }} /></section>;
+  const done = !isLive(r);
+  const when = (r.started_at || "").replace("T", " ").slice(0, 16);
+  return <section className={"view on runpage" + (embedded ? " embedded" : "")}>
+    <div className="runhead">
+      <div className="row" style={{ gap: 10 }}>
+        <h2 className={embedded ? "" : "big"}>{r.test_name}</h2><Status s={r.status} />
+        <span className="spacer" />
+        {done && <>
+          {embedded && <a className="btn" href={`#/runs/${encodeURIComponent(r.run_id)}`}>Open page</a>}
+          <a className="btn" href={art(r.run_id, "report.html")} target="_blank" rel="noreferrer"><Icon name="doc" size={15} />Report</a>
+          {!embedded && <Menu label="Download" icon="download">
+            <a role="menuitem" href={`/api/runs/${encodeURIComponent(id)}/export`}>Project (scripts + framework)</a>
+            <a role="menuitem" href={`/api/runs/${encodeURIComponent(id)}/download`}>All artifacts (zip)</a>
+          </Menu>}
+          {!embedded && <Menu label="More actions" icon="more">
+            {can.run && <button role="menuitem" onClick={saveLib}>Save script to library</button>}
+            {can.run && <button role="menuitem" className="danger" onClick={del}>Delete run…</button>}
+          </Menu>}
+          {can.run && <button className="btn primary" onClick={() => setTab("replay")}><Icon name="play" size={13} />Replay</button>}
         </>}
+        {!done && <><a className="btn" href={`#/studio/${encodeURIComponent(r.run_id)}`}>Watch live</a>{can.run && <StopButton ids={[r.run_id]} className="btn" />}</>}
       </div>
-    </aside>
-  </>;
+      <div className="meta">
+        <ModeBadge mode={r.mode} parser={r.parser} />
+        <span className="mono">{r.engine}{r.browser ? ` · ${r.browser}` : ""}{r.config?.headless === false ? " · headed" : ""}</span>
+        <span>{r.agent}</span><span>{when}</span>{r.owner && <span>by {r.owner}</span>}
+        {r.iteration && <span>iteration {r.iteration}</span>}{r.source_run && <a href={`#/runs/${encodeURIComponent(r.source_run)}`}>replay of an earlier run</a>}
+      </div>
+      {!embedded && <nav className="tabs" aria-label="Run sections">
+        {PAGE_TABS.filter(([k]) => can.run || k !== "replay").map(([k, l]) =>
+          <button key={k} className={tab === k ? "on" : ""} aria-current={tab === k ? "page" : undefined} onClick={() => setTab(k)}>{l}</button>)}
+      </nav>}
+    </div>
+    {!done ? <div className="empty-state">This run is still in progress. <a href={`#/studio/${encodeURIComponent(r.run_id)}`}>Watch it live</a>.</div> : <>
+      {(embedded || tab === "steps") && <StepsView r={r} compact={embedded} />}
+      {!embedded && tab === "code" && <div className="panel" style={{ overflow: "hidden" }}><CodeExplorer runId={r.run_id} /></div>}
+      {!embedded && tab === "video" && (r.video ? <video className="runvideo" controls autoPlay muted src={art(r.run_id, r.video)} /> : <div className="empty-state">No video was recorded for this run. Turn on “Record video” in Studio → Settings.</div>)}
+      {!embedded && tab === "report" && <iframe className="runreport" src={art(r.run_id, "report.html")} title="Report" />}
+      {!embedded && tab === "config" && <Config r={r} />}
+      {!embedded && tab === "replay" && <div className="panel"><div className="panel-b"><Replay r={r} onDone={() => {}} /></div></div>}
+    </>}
+  </section>;
 }

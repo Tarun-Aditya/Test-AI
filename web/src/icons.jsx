@@ -23,6 +23,18 @@ const P = {
   download: <path d="M12 4v12M6 10l6 6 6-6M4 20h16" />,
   upload: <path d="M12 16V4M6 10l6-6 6 6M4 20h16" />,
   layers: <path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />,
+  inbox: <><path d="M4 13l3-8h10l3 8v6H4z" /><path d="M4 13h5l1 2h4l1-2h5" /></>,
+  design: <><rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4h6v3H9zM9 12h6M9 16h4" /></>,
+  code: <path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13 6l-2 12" />,
+  gear: <><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1" /></>,
+  chev: <path d="M9 6l6 6-6 6" />,
+  chevd: <path d="M6 9l6 6 6-6" />,
+  back: <path d="M15 6l-6 6 6 6" />,
+  more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
+  ok: <><circle cx="12" cy="12" r="9" /><path d="M8 12.5l2.5 2.5L16 9.5" /></>,
+  fail: <><circle cx="12" cy="12" r="9" /><path d="M9 9l6 6M15 9l-6 6" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  minus: <><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></>,
 };
 
 export default function Icon({ name, size = 18, style, fill }) {
