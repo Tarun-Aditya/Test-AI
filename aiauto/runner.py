@@ -258,6 +258,7 @@ class Runner:
         sources = [e.snapshot] + ([e.snapshot_dom] if getattr(e, "has_dom_fallback", False) else [])
         while True:
             e.after_action()
+            tie = None
             for source in sources:
                 try:
                     t0 = time.perf_counter()
@@ -288,7 +289,10 @@ class Runner:
                             template.target_locator = _portable_first(verified)
                         return verified[0], bool(stored)
                 if problem and "match equally well" in problem:
-                    break                    # a real tie: don't let a weaker source pick one of them silently
+                    tie = (winner, ranked, problem)
+                    continue                 # the DOM walk sees more (test ids, classes): let it settle the tie
+            if tie and not winner:
+                winner, ranked, problem = tie
             if problem and "match equally well" in problem:
                 raise StepError(self.mask(f"Ambiguous '{target}': {problem}"))
             if not scrolled and not template.optional:

@@ -62,6 +62,18 @@ JS_LIB = r"""
     const p = el.closest('label'); if (p) return norm(p.innerText||p.textContent);
     const lb = el.getAttribute('aria-labelledby');
     if (lb) { const t = lb.split(/\s+/).map(i=>root.getElementById ? root.getElementById(i) : document.getElementById(i)).filter(Boolean).map(e=>e.innerText||e.textContent).join(' '); if (norm(t)) return norm(t); }
+    // a label laid out beside the field but not linked to it (grid forms: <div col><label>Email</label></div><div col><input></div>)
+    if (FORM.has(el.tagName.toLowerCase())) {
+      let p = el;
+      for (let k = 0; k < 3 && p; k++, p = p.parentElement) {
+        const prev = p.previousElementSibling;
+        if (prev && /^(label|span|div|td|th|dt|p|strong|b|legend)$/i.test(prev.tagName) && !prev.querySelector('input,select,textarea,button')) {
+          const t = norm(prev.innerText || prev.textContent);
+          if (t && t.length <= 40) return t;
+        }
+        if (p.parentElement && p.parentElement.querySelectorAll('input,select,textarea').length > 1) break;   // a shared container: stop
+      }
+    }
     return '';
   }
   function accName(el, info){
@@ -530,6 +542,12 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
     nothing matched, or two different elements tie and neither Claude nor an ordinal settles it
     (with on_ambiguous="fail" the step then fails instead of guessing)."""
     target = target if target is not None else (step.target or "")
+    if step.nth is None:     # "checkbox 1", "link 2", "the radio button 3": the Nth of that kind
+        m = re.fullmatch(r"(?i)(?:the\s+)?(?P<k>[a-z][a-z ]*?)\s+(?:#|no\.?\s*|number\s+)?(?P<n>\d{1,2})", target.strip())
+        if m and _role_kinds(m.group("k")) and all(w in STOP for w in _tokens(m.group("k"))) and int(m.group("n")) >= 1:
+            w, ranked = nth_match(step, candidates, m.group("k"), int(m.group("n")) - 1)
+            if w:
+                return w, ranked, None
     if step.nth is not None:
         w, ranked = nth_match(step, candidates, target, step.nth)
         return w, ranked, None if w else "no match for that position"
@@ -543,6 +561,9 @@ def choose(step: Step, candidates: list[dict], target: str | None = None, use_ll
     named = _role_kinds(target)
     if named and step.action in ACTING:
         eligible = [c for c in eligible if _kinds(c) & named or _interactive(c)]
+    if step.action in (Action.TYPE, Action.APPEND, Action.SELECT, Action.UPLOAD):
+        # you can't type into a label: its text may match best, the field is what the step acts on
+        eligible = [c for c in eligible if _action_fit(step.action, c) >= 0]
     winner = eligible[0] if eligible and eligible[0]["score"] >= 1.0 else None
     if winner:
         winner["picked_by"] = "heuristic"
