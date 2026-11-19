@@ -5,7 +5,8 @@
 name: cross-platform browsers
 on:
   push:
-    paths: ["aiauto/**", "tests/**", "requirements.txt", ".github/workflows/cross-platform.yml"]
+    paths: ["aiauto/**", "tests/**", "requirements.txt", "setup.sh", "setup.bat", "start.sh", "start.bat",
+            ".github/workflows/cross-platform.yml"]
   workflow_dispatch:
 
 jobs:
@@ -41,3 +42,55 @@ jobs:
         run: python -m pytest -q tests/test_agent.py -rs
       - name: Unit tests
         run: python -m pytest -q tests/test_parsing.py tests/test_llm.py -rs
+
+  # The one-step setup a new user runs (setup.sh / setup.bat), the demo data and the hub starting with it
+  setup-scripts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: setup.bat --demo
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call setup.bat --demo
+      - name: setup.sh, then demo data
+        if: runner.os != 'Windows'
+        run: |
+          ./setup.sh
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo .venv/bin/python -m playwright install-deps chromium; fi
+          .venv/bin/python -m aiauto demo
+      - name: The demo database is complete
+        shell: bash
+        run: |
+          py=.venv/bin/python; [ -x "$py" ] || py=.venv/Scripts/python.exe
+          "$py" - <<'PY'
+          import sqlite3
+          c = sqlite3.connect("aiauto.db")
+          q = lambda s: c.execute(s).fetchall()
+          print(q("SELECT status, COUNT(*) FROM runs GROUP BY status"))
+          assert q("SELECT COUNT(*) FROM users")[0][0] == 3
+          assert q("SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'dispatched', 'running')")[0][0] == 0
+          assert q("SELECT COUNT(*) FROM runs WHERE status = 'passed'")[0][0] >= 10
+          assert q("SELECT COUNT(*) FROM library")[0][0] == 2
+          assert q("SELECT COUNT(*) FROM report_failures")[0][0] >= 1      # the planted sign-up bug
+          PY
+      - name: start.sh / start.bat serves the web app and the practice pages
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then (cmd //c start.bat > hub.log 2>&1 &); else (./start.sh > hub.log 2>&1 &); fi
+          for i in $(seq 1 60); do curl -fs http://localhost:8000/api/health && break; sleep 1; done
+          curl -fs http://localhost:8000/api/health
+          curl -fs http://localhost:8000/demo/shop/index.html | grep -q "<html"
+          curl -fs -c jar -H "X-Requested-With: autopilot" -H "Content-Type: application/json" \
+            -d '{"username":"admin","password":"autopilot-demo"}' http://localhost:8000/api/auth/login
+          curl -fs -b jar http://localhost:8000/api/stats

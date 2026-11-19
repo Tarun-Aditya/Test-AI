@@ -72,6 +72,44 @@ CREATE TABLE IF NOT EXISTS machines (
 );
 """
 
+# Read-only views for reporting: open the database in any SQLite tool (DB Browser for SQLite, DBeaver, Excel / Power BI
+# through an ODBC driver, Metabase, Grafana, pandas) and query these instead of the raw tables. Re-created on every
+# start, after the column migrations, so they always match the tables. See docs/database.md.
+VIEWS = {
+    "report_runs": """
+SELECT r.run_id, COALESCE(r.project, 'default') AS project, r.test_name, r.status,
+       CASE r.mode WHEN 'replay' THEN 'script' ELSE 'ai' END AS mode, r.parser, r.engine, r.browser,
+       r.agent AS machine, r.owner, r.iteration, r.batch_id, r.source_run AS replay_of,
+       datetime(r.created, 'unixepoch') AS created_utc, r.started_at, r.finished_at,
+       ROUND(r.duration_ms / 1000.0, 1) AS duration_s, r.total AS steps_total, r.passed AS steps_passed,
+       r.failed AS steps_failed, r.healed AS steps_healed, r.video, r.error
+FROM runs r""",
+    "report_steps": """
+SELECT s.run_id, COALESCE(r.project, 'default') AS project, r.test_name, r.engine, r.browser, r.status AS run_status,
+       s.idx + 1 AS step, s.status, s.raw AS instruction, s.action, s.target, s.value, s.locator,
+       s.parsed_by, s.picked_by, s.duration_ms, s.healed, s.dialog, s.url, s.screenshot, s.error,
+       datetime(r.created, 'unixepoch') AS run_created_utc
+FROM steps s JOIN runs r ON r.run_id = s.run_id""",
+    "report_tests": """
+SELECT COALESCE(project, 'default') AS project, test_name, COUNT(*) AS runs,
+       SUM(status = 'passed') AS passed, SUM(status = 'failed') AS failed,
+       ROUND(100.0 * SUM(status = 'passed') / NULLIF(SUM(status IN ('passed', 'failed')), 0), 1) AS pass_rate_pct,
+       ROUND(AVG(CASE WHEN status IN ('passed', 'failed') THEN duration_ms END) / 1000.0, 1) AS avg_duration_s,
+       SUM(healed) AS healed_steps, datetime(MAX(created), 'unixepoch') AS last_run_utc,
+       (SELECT status FROM runs x WHERE x.test_name = runs.test_name AND COALESCE(x.project, 'default') = COALESCE(runs.project, 'default')
+        ORDER BY x.created DESC LIMIT 1) AS last_status
+FROM runs GROUP BY COALESCE(project, 'default'), test_name""",
+    "report_daily": """
+SELECT date(created, 'unixepoch') AS day, COALESCE(project, 'default') AS project, COUNT(*) AS runs,
+       SUM(status = 'passed') AS passed, SUM(status = 'failed') AS failed,
+       ROUND(100.0 * SUM(status = 'passed') / NULLIF(SUM(status IN ('passed', 'failed')), 0), 1) AS pass_rate_pct
+FROM runs GROUP BY day, COALESCE(project, 'default')""",
+    "report_failures": """
+SELECT r.run_id, COALESCE(r.project, 'default') AS project, r.test_name, r.engine, r.browser, r.agent AS machine,
+       datetime(r.created, 'unixepoch') AS created_utc, s.idx + 1 AS step, s.raw AS instruction, s.locator, s.error, s.screenshot
+FROM runs r JOIN steps s ON s.run_id = r.run_id AND s.status = 'failed'""",
+}
+
 LIVE = ("queued", "dispatched", "running")
 
 
@@ -105,6 +143,9 @@ class DB:
         for col in ("parsed_by", "picked_by", "origin"):
             if col not in have:
                 self._conn.execute(f"ALTER TABLE steps ADD COLUMN {col} TEXT")
+        for name, sql in VIEWS.items():
+            self._conn.execute(f"DROP VIEW IF EXISTS {name}")
+            self._conn.execute(f"CREATE VIEW {name} AS {sql}")
         try:
             os.chmod(self.path, 0o600)   # holds replay secrets: owner-only
         except OSError:

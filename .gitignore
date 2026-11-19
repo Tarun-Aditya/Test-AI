@@ -12,3 +12,7 @@ sessions/
 *.egg-info/
 .pytest_cache/
 web/node_modules/
+*.key
+demo_files/
+demo_repo/
+*.demo.log

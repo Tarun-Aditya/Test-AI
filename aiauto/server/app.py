@@ -53,6 +53,12 @@ db = open_db()
 app = FastAPI(title="Autopilot - AI Test Automation", version="0.3.0")
 if (APP_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=APP_DIR / "assets"), name="assets")
+# Practice pages (examples/: shop, sign-up form with a planted bug, element playground) at /demo/, so a new hub has
+# something to test right away and the demo data (python -m aiauto demo) can always be replayed. Static pages only,
+# no data; AIAUTO_DEMO_SITE=off removes them.
+DEMO_DIR = Path(__file__).resolve().parents[2] / "examples"
+if DEMO_DIR.is_dir() and os.getenv("AIAUTO_DEMO_SITE", "on").lower() not in ("off", "0", "false", "no"):
+    app.mount("/demo", StaticFiles(directory=DEMO_DIR, html=True), name="demo")
 pool = ThreadPoolExecutor(max_workers=LOCAL_WORKERS)
 grid_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="grid")   # runs whose browser is on a remote grid
 # All database writes for run events go through ONE thread, in the order the events were emitted

@@ -76,6 +76,10 @@ def _run(test, cfg, a, mode):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["demo"]:              # its own options: python -m aiauto demo --help
+        from .demo import main as demo_main
+        return demo_main(argv[1:])
     ap = argparse.ArgumentParser(prog="aiauto", description="AI-driven browser test automation")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -107,6 +111,8 @@ def main(argv=None):
     p.add_argument("--out", default=os.getenv("AIAUTO_AGENT_ARTIFACTS", "agent_artifacts"))
     p.add_argument("--slots", type=int, default=int(os.getenv("AIAUTO_SLOTS", "1")),
                    help="how many tests this machine runs at the same time (default 1)")
+
+    sub.add_parser("demo", help="fill the hub database with demo data from real runs (python -m aiauto demo --help)")
 
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")

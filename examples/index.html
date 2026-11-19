@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autopilot practice pages</title>
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --fg: #1c2230; --mut: #677085; --line: #e3e6ec; --acc: #2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #11141a; --card: #1a1e26; --fg: #e6e8ee; --mut: #9aa2b2; --line: #2a303b; --acc: #6ea0ff; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p { color: var(--mut); margin: 0 0 20px; }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  li { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  a { color: var(--acc); font-weight: 600; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  span { display: block; color: var(--mut); font-size: 14px; }
+  code { font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Practice pages</h1>
+  <p>Static pages for trying Autopilot: point a test at them from Studio, e.g.
+    <code>Open http://localhost:8000/demo/shop/index.html</code>. The example tests are in the
+    <code>examples/</code> folder.</p>
+  <ul>
+    <li><a href="shop/index.html">DemoShop</a><span>Search, results, product page, quantity, cart. Used by <code>shop_cart.txt</code> with iterations.</span></li>
+    <li><a href="signup/signup.html">Sign-up form</a><span>Required fields, length and range limits, error messages, and one planted bug (age 100 is accepted) for test design to find.</span></li>
+    <li><a href="demo_app.html">Demo app</a><span>Log in (password <code>secret</code>), remember me, country, a hover menu. Used by <code>login_test.txt</code>.</span></li>
+    <li><a href="playground.html">Element playground</a><span>Every element type: nested shadow roots, nested iframes, random ids, dialogs, drag and drop, custom dropdown, date / range / colour, contenteditable, upload, late elements. Used by <code>playground_test.txt</code> (52 steps).</span></li>
+    <li><a href="virtual.html">Lazy and virtual content</a><span>Lazy sections and a virtualised list that only renders the rows in view.</span></li>
+    <li><a href="canvas.html">Canvas checkout</a><span>Controls drawn on a canvas: only the AI's screenshot fallback can find them.</span></li>
+  </ul>
+</main>
+</body>
+</html>

@@ -76,3 +76,49 @@ def test_hub_flow(hub, shop_url):
     again = DB(appmod.db.path)
     again.recover()
     assert {r["run_id"] for r in again.list_runs()} >= set(ids + rr["run_ids"] + rn["run_ids"])
+
+
+def test_reporting_views_and_practice_pages(hub, tmp_path, monkeypatch):
+    """The report_* views read the runs back as plain rows; the hub serves the practice pages at /demo/."""
+    c, appmod = hub
+    assert c.get("/demo/").status_code == 200 and "DemoShop" in c.get("/demo/").text
+    assert c.get("/demo/shop/index.html").status_code == 200
+    from aiauto.db import DB, VIEWS
+    db = DB(tmp_path / "views.db")
+    db.create_run({"run_id": "r1", "test_name": "Login", "status": "failed", "engine": "selenium", "browser": "chrome",
+                   "agent": "local", "mode": "ai", "total": 2, "parser": "rules", "owner": "tess", "project": "shop"})
+    db.on_event({"type": "step_finished", "run_id": "r1", "index": 0, "status": "passed", "raw": "Click Login",
+                 "action": "click", "locator": "role=button:Login", "duration_ms": 40, "picked_by": "heuristic"})
+    db.on_event({"type": "step_finished", "run_id": "r1", "index": 1, "status": "failed", "raw": 'Verify page contains "Hi"',
+                 "action": "assert_text", "error": "StepError: not found", "duration_ms": 900})
+    db.on_event({"type": "run_finished", "run_id": "r1", "status": "failed", "error": "StepError: not found"})
+    db.create_run({"run_id": "r2", "test_name": "Login", "status": "passed", "engine": "playwright", "mode": "replay",
+                   "project": "shop", "total": 2})
+    assert set(VIEWS) == {r["name"] for r in db.q("SELECT name FROM sqlite_master WHERE type='view'")}
+    run = db.one("SELECT * FROM report_runs WHERE run_id='r1'")
+    assert run["project"] == "shop" and run["mode"] == "ai" and run["steps_passed"] == 1 and run["steps_failed"] == 1
+    assert db.one("SELECT mode FROM report_runs WHERE run_id='r2'")["mode"] == "script"
+    steps = db.q("SELECT step, status, picked_by FROM report_steps WHERE run_id='r1' ORDER BY step")
+    assert [(s["step"], s["status"]) for s in steps] == [(1, "passed"), (2, "failed")] and steps[0]["picked_by"] == "heuristic"
+    t = db.one("SELECT * FROM report_tests WHERE test_name='Login'")
+    assert (t["runs"], t["passed"], t["failed"], t["pass_rate_pct"]) == (2, 1, 1, 50.0)
+    assert db.one("SELECT COUNT(*) n FROM report_failures")["n"] == 1
+    assert db.one("SELECT runs FROM report_daily WHERE project='shop'")["runs"] == 2
+    DB(tmp_path / "views.db")                     # re-created on every start without trouble
+
+    monkeypatch.setenv("AIAUTO_DEMO_SITE", "off")  # and the practice pages can be turned off
+    off = importlib.reload(appmod)
+    from fastapi.testclient import TestClient
+    with TestClient(off.app) as c2:
+        assert "DemoShop" not in c2.get("/demo/").text
+
+
+def test_demo_data_refuses_a_database_with_accounts(tmp_path, capsys):
+    from aiauto.db import DB
+    from aiauto import demo
+    db = DB(tmp_path / "team.db")
+    db.user_create("alice", "admin", "x")
+    with pytest.raises(SystemExit, match="already has accounts"):
+        demo.main(["--db", str(tmp_path / "team.db"), "--artifacts", str(tmp_path / "a")])
+    with pytest.raises(SystemExit, match="at least 10"):
+        demo.main(["--db", str(tmp_path / "new.db"), "--password", "short"])
