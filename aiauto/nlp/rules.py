@@ -19,8 +19,9 @@ import re
 from ..models import Action, Step
 
 Q = r"""["'“”‘’`]"""                     # any quote char
-QV = rf"{Q}(?P<v>.+?){Q}"                  # quoted value
-QT = rf"{Q}(?P<t>.+?){Q}"                  # quoted target
+QE = rf"{Q}(?!\w)"                       # a closing quote: an apostrophe inside a word ("Let's") does not close
+QV = rf"{Q}(?P<v>.+?){QE}"                 # quoted value
+QT = rf"{Q}(?P<t>.+?){QE}"                 # quoted target
 
 _FILLER = re.compile(
     r"^(?:the|a|an|on|at|in|into|to|from|over|onto|inside|field|button|link)\s+|"
