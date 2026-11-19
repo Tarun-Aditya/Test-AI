@@ -100,6 +100,11 @@ def main():
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--out", default=str(ROOT / "real_sites_out"))
     ap.add_argument("--skip-export", action="store_true")
+    ap.add_argument("--strict", action="store_true", help="exit 1 if any first run, replay or exported project fails (CI)")
+    ap.add_argument("--headed", action="store_true", help="visible browsers (needs a screen; on Linux CI use xvfb-run)")
+    ap.add_argument("--no-ai", action="store_true", help="AI off on the hub: built-in rule parser and heuristics only")
+    ap.add_argument("--matrix", default="playwright:chromium,selenium:chrome",
+                    help="engine:browser pairs, e.g. playwright:chromium,selenium:chrome,selenium:msedge,playwright:webkit,selenium:safari")
     a = ap.parse_args()
     out = Path(a.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -107,6 +112,9 @@ def main():
     port = free_port()
     env = {**os.environ, "AIAUTO_AUTH": "off", "AIAUTO_DB": str(out / "hub.db"), "AIAUTO_ARTIFACTS": str(art),
            "AIAUTO_LOCAL_WORKERS": str(a.workers), "PYTHONPATH": str(ROOT)}
+    if a.no_ai:
+        env["AIAUTO_DISABLE_LLM"] = "1"
+    matrix = [tuple(x.split(":", 1)) for x in a.matrix.split(",") if ":" in x]
     hub = subprocess.Popen([sys.executable, "-m", "aiauto", "server", "--host", "127.0.0.1", "--port", str(port)], cwd=out, env=env,
                            stdout=open(out / "hub.log", "w"), stderr=subprocess.STDOUT)
     base = f"http://127.0.0.1:{port}"
@@ -123,17 +131,19 @@ def main():
         c = httpx.Client(base_url=base, timeout=120, headers={"X-Requested-With": "autopilot"})
         only = {x.strip() for x in a.only.split(",") if x.strip()}
         scen = [p for p in sorted(SCEN.glob("*.txt")) if not only or p.name[:2] in only]
-        cfg = {"record_video": True, "live_view": True, "headless": True, "timeout_ms": 15000, "screenshot_each_step": True}
+        cfg = {"record_video": True, "live_view": True, "headless": not a.headed, "timeout_ms": 15000, "screenshot_each_step": True,
+               "use_llm": not a.no_ai}
         first: dict[str, list[str]] = {}
         t0 = time.time()
         for p in scen:
             data = json.loads(p.with_suffix(".json").read_text(encoding="utf-8")) if p.with_suffix(".json").exists() else {}
-            r = c.post("/api/runs", json={"text": p.read_text(encoding="utf-8"), "data": data, "name": p.stem.split("_", 1)[1].replace("_", " "),
-                                          "engines": ["playwright", "selenium"], "config": cfg})
-            if r.status_code != 200:
-                print(p.name, "REFUSED", r.text[:300])
-                continue
-            first[p.stem] = r.json()["run_ids"]
+            for eng, br in matrix:
+                r = c.post("/api/runs", json={"text": p.read_text(encoding="utf-8"), "data": data, "name": p.stem.split("_", 1)[1].replace("_", " "),
+                                              "engines": [eng], "config": {**cfg, "engine": eng, "browser": br}})
+                if r.status_code != 200:
+                    print(p.name, eng, br, "REFUSED", r.text[:300])
+                    continue
+                first.setdefault(p.stem, []).extend(r.json()["run_ids"])
             print(f"{p.stem}: {len(first[p.stem])} runs queued")
         rows = wait_done(c, [i for ids in first.values() for i in ids])
         print(f"phase 1 done in {time.time() - t0:.0f}s")
@@ -142,14 +152,15 @@ def main():
         t1 = time.time()
         for ids in first.values():
             for rid in ids:
-                eng = rows[rid]["engine"]
-                r = c.post("/api/runs", json={"replay_run_id": rid, "config": {**cfg, "engine": eng}, "engines": [eng]})
+                eng, br = rows[rid]["engine"], rows[rid]["browser"]
+                r = c.post("/api/runs", json={"replay_run_id": rid, "config": {**cfg, "engine": eng, "browser": br}, "engines": [eng]})
                 if r.status_code == 200:
                     replay[rid] = r.json()["run_ids"][0]
         rows2 = wait_done(c, list(replay.values()))
         print(f"phase 2 done in {time.time() - t1:.0f}s")
 
-        result = {"health": health, "scenarios": {}}
+        result = {"health": health, "scenarios": {}, "mode": {"headed": a.headed, "ai": not a.no_ai, "matrix": a.matrix,
+                                                              "platform": sys.platform}}
         for stem, ids in first.items():
             runs = []
             for rid in ids:
@@ -162,11 +173,17 @@ def main():
             result["scenarios"][stem] = runs
 
         if not a.skip_export:
-            result["exported"] = exported(c, art, out, first, rows)
+            result["exported"] = exported(c, art, out, first, rows, a.headed)
         ev.stop = True
         (out / "results.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         (out / "REPORT.md").write_text(report(result), encoding="utf-8")
         print((out / "REPORT.md").read_text(encoding="utf-8"))
+        bad = [k for k, v in result["scenarios"].items() for x in v
+               if x["first"]["status"] != "passed" or (x.get("replay") or {}).get("status") not in (None, "passed")]
+        bad += [k for k, v in (result.get("exported") or {}).items() if "exit" in v and v["exit"] != 0]
+        if a.strict and bad:
+            print("FAILED:", ", ".join(sorted(set(bad))))
+            sys.exit(1)
     finally:
         hub.terminate()
         try:
@@ -175,29 +192,30 @@ def main():
             hub.kill()
 
 
-def exported(c, art, out, first, rows):
+def exported(c, art, out, first, rows, headed=False):
     """Download each scenario's project once and run its scripts with no Autopilot around them."""
     res = {}
     for stem, ids in first.items():
-        for eng in ("playwright", "selenium"):
-            rid = next((i for i in ids if rows[i]["engine"] == eng and rows[i]["status"] == "passed"), None)
+        for eng, br in dict.fromkeys((rows[i]["engine"], rows[i]["browser"]) for i in ids):
+            key = f"{stem} / {eng} / {br}"
+            rid = next((i for i in ids if (rows[i]["engine"], rows[i]["browser"]) == (eng, br) and rows[i]["status"] == "passed"), None)
             if not rid:
-                res[f"{stem} / {eng}"] = {"skipped": "no passed first run to export"}
+                res[key] = {"skipped": "no passed first run to export"}
                 continue
             z = c.get(f"/api/runs/{rid}/export")
             if z.status_code != 200:
-                res[f"{stem} / {eng}"] = {"error": f"export {z.status_code}"}
+                res[key] = {"error": f"export {z.status_code}"}
                 continue
-            d = out / "exported" / f"{stem}_{eng}"
+            d = out / "exported" / f"{stem}_{eng}_{br}"
             zipfile.ZipFile(io.BytesIO(z.content)).extractall(d)
             proj = next((p.parent for p in d.rglob("run.py")), d)
-            env = {**os.environ, "AIAUTO_SECRET_PASSWORD": "secret_sauce", "AIAUTO_SECRET_PWD": "pwd", "HEADLESS": "1"}
+            env = {**os.environ, "AIAUTO_SECRET_PASSWORD": "secret_sauce", "AIAUTO_SECRET_PWD": "pwd", "HEADLESS": "0" if headed else "1"}
             t = time.time()
-            p = subprocess.run([sys.executable, "run.py", "--engine", eng, "--only", "1"], cwd=proj, env=env, capture_output=True, text=True, timeout=900)
+            p = subprocess.run([sys.executable, "run.py", "--engine", eng, "--browser", br, "--only", "1"] + (["--headed"] if headed else []), cwd=proj, env=env, capture_output=True, text=True, timeout=900)
             took = time.time() - t
             it = sorted((proj / "results").glob("iteration_*"))
             s = json.loads((it[0] / "summary.json").read_text(encoding="utf-8")) if it and (it[0] / "summary.json").exists() else {}
-            res[f"{stem} / {eng}"] = {
+            res[key] = {
                 "exit": p.returncode, "seconds": round(took, 1), "status": s.get("status") or s.get("result"),
                 "steps": len(s.get("results", s.get("steps", []))),
                 "report": bool(it) and (it[0] / "report.html").exists(), "junit": bool(it) and (it[0] / "junit.xml").exists(),
@@ -205,7 +223,7 @@ def exported(c, art, out, first, rows):
                 "screenshots": len(list(it[0].rglob("*.png"))) if it else 0,
                 "tail": (p.stdout + p.stderr)[-600:] if p.returncode else "",
             }
-            print(f"exported {stem} / {eng}: exit {p.returncode} in {took:.0f}s")
+            print(f"exported {key}: exit {p.returncode} in {took:.0f}s")
     return res
 
 
@@ -215,14 +233,15 @@ def ms(v):
 
 def report(r):
     L = ["# Real-site run: first run vs replay, Playwright vs Selenium", "",
-         f"AI: {r['health'].get('llm')} · machines: hub-local", "",
+         f"Platform: {r['mode']['platform']} · browsers: {'visible (headed)' if r['mode']['headed'] else 'headless'} · "
+         f"AI: {'on: ' + str(r['health'].get('llm')) if r['mode']['ai'] else 'off (built-in rules and heuristics)'} · matrix: {r['mode']['matrix']}", "",
          "| Scenario | Engine | Iter | 1st run | steps | 1st total | locate (sum/median/max) | Replay | replay total | replay locate (sum/median) | healed | video | shots | live frames |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     fails = []
     for stem, runs in r["scenarios"].items():
         for x in runs:
             f, p = x["first"], x.get("replay") or {}
-            L.append(f"| {stem} | {x['engine']} | {x['iteration'] or '1'} | {f['status']} | {f['passed']}/{f['steps']} | {ms(f['duration_ms'])} | "
+            L.append(f"| {stem} | {x['engine']} / {x['browser']} | {x['iteration'] or '1'} | {f['status']} | {f['passed']}/{f['steps']} | {ms(f['duration_ms'])} | "
                      f"{ms(f['locate_total_ms'])} / {f['locate_median_ms'] or '–'} ms / {f['locate_max_ms'] or '–'} ms | {p.get('status', '–')} | "
                      f"{ms(p.get('duration_ms'))} | {ms(p.get('locate_total_ms'))} / {p.get('locate_median_ms') or '–'} ms | {p.get('healed', '–')} | "
                      f"{f['artifacts']['video_kb']} KB | {f['artifacts']['screenshots']} | {f['live']['frames']} |")

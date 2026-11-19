@@ -97,7 +97,7 @@ def _collect(base, submit, timeout=300):
         run_ids = submit()
         end = time.time() + timeout
         while len(ended) < len(run_ids) and time.time() < end:
-            listed = {x["run_id"]: x for x in httpx.get(base + "/api/runs").json()}
+            listed = {x["run_id"]: x for x in httpx.get(base + "/api/runs", timeout=60).json()}
             for rid in run_ids:        # runs that finished before we subscribed
                 if rid not in ended and listed.get(rid, {}).get("status") in ("passed", "failed", "interrupted"):
                     ended[rid] = time.time()
@@ -136,7 +136,7 @@ def test_remote_agent_runs_streams_and_uploads(hub_and_agent, shop_url, engine):
         return list(runs)
     _, frames, _, _ = _collect(base, submit)
     for _ in range(40):                                       # artifacts upload right after run_finished
-        listed = {x["run_id"]: x for x in httpx.get(base + "/api/runs").json()}
+        listed = {x["run_id"]: x for x in httpx.get(base + "/api/runs", timeout=60).json()}
         if all(listed[r].get("video") for r in runs):
             break
         time.sleep(0.5)
@@ -172,7 +172,7 @@ def test_parallel_runs_on_several_machines_and_both_engines(cluster, shop_url):
         assert len(r.json()["run_ids"]) == 4 and r.json()["batch_id"]
         return r.json()["run_ids"]
     ids, frames, started, ended = _collect(base, submit)
-    runs = {x["run_id"]: x for x in httpx.get(base + "/api/runs").json()}
+    runs = {x["run_id"]: x for x in httpx.get(base + "/api/runs", timeout=60).json()}
     assert all(runs[i]["status"] == "passed" for i in ids), [(runs[i]["test_name"], runs[i].get("error")) for i in ids]
     assert sorted((runs[i]["agent"], runs[i]["engine"]) for i in ids) == [
         ("box-a", "playwright"), ("box-a", "selenium"), ("box-b", "playwright"), ("box-b", "selenium")]
@@ -201,7 +201,7 @@ def test_pool_spreads_iterations_over_free_machines(cluster, shop_url):
         assert r.status_code == 200, r.text
         return r.json()["run_ids"]
     ids, *_ = _collect(base, submit)
-    runs = {x["run_id"]: x for x in httpx.get(base + "/api/runs").json()}
+    runs = {x["run_id"]: x for x in httpx.get(base + "/api/runs", timeout=60).json()}
     assert all(runs[i]["status"] == "passed" for i in ids), [runs[i].get("error") for i in ids]
     per = {m: sum(runs[i]["agent"] == m for i in ids) for m in ("box-a", "box-b")}
     assert per["box-a"] >= 1 and per["box-b"] >= 1 and sum(per.values()) == 4, per
@@ -215,7 +215,7 @@ def test_cancel_queued_and_running_runs(cluster, shop_url):
     post = lambda agent: httpx.post(base + "/api/runs", timeout=30, json={
         "text": slow, "agent": agent, "config": {"engine": "playwright", "headless": True, "use_llm": False, "record_video": False}}
     ).json()["run_ids"][0]
-    status = lambda rid: next(x for x in httpx.get(base + "/api/runs").json() if x["run_id"] == rid)["status"]
+    status = lambda rid: next(x for x in httpx.get(base + "/api/runs", timeout=60).json() if x["run_id"] == rid)["status"]
 
     def wait_for(rid, want, t=60):
         end = time.time() + t
@@ -305,7 +305,7 @@ def test_remote_grids_appear_as_machines_and_run(cluster, remote_browsers, shop_
             ids += r.json()["run_ids"]
         return ids
     ids, frames, _, _ = _collect(base, submit)
-    runs = {x["run_id"]: x for x in httpx.get(base + "/api/runs").json()}
+    runs = {x["run_id"]: x for x in httpx.get(base + "/api/runs", timeout=60).json()}
     for rid in ids:
         assert runs[rid]["status"] == "passed", (runs[rid]["agent"], runs[rid].get("error"))
         assert runs[rid]["video"] and frames.get(rid, 0) >= 2

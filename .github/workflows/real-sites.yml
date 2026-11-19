@@ -1,0 +1,72 @@
+# The real-site scenarios (examples/real_sites) on real Windows, macOS and Linux machines, in visible (headed)
+# browsers with AI off: first run, replay of the generated script, and the exported project run on its own.
+# Each job's REPORT.md is shown on the run's summary page and kept as an artifact.
+name: real sites (headed, AI off)
+on:
+  push:
+    paths: ["aiauto/**", "examples/real_sites/**", "tools/real_sites.py", ".github/workflows/real-sites.yml"]
+  workflow_dispatch:
+
+jobs:
+  real-sites:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            browsers: playwright:chromium,selenium:chrome,playwright:msedge,selenium:msedge
+            workers: 2
+          - name: macos
+            os: macos-latest
+            browsers: playwright:chromium,selenium:chrome,playwright:webkit
+            workers: 2
+          - name: macos-safari          # safaridriver allows one session at a time
+            os: macos-latest
+            browsers: selenium:safari
+            workers: 1
+          - name: linux
+            os: ubuntu-latest
+            browsers: playwright:chromium,selenium:chrome,playwright:firefox,selenium:firefox
+            workers: 2
+    name: real sites (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -r requirements.txt
+      - name: Playwright browsers
+        if: runner.os != 'Linux'
+        run: python -m playwright install chromium webkit
+      - name: Playwright browsers (with system libraries)
+        if: runner.os == 'Linux'
+        run: python -m playwright install --with-deps chromium firefox
+      - name: Enable Safari WebDriver
+        if: matrix.name == 'macos-safari'
+        run: sudo safaridriver --enable
+      - name: Real sites, headed, AI off
+        if: runner.os != 'Linux'
+        run: python tools/real_sites.py --headed --no-ai --strict --workers ${{ matrix.workers }} --matrix "${{ matrix.browsers }}" --out real_sites_out
+      - name: Real sites, headed (virtual screen), AI off
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" python tools/real_sites.py --headed --no-ai --strict --workers ${{ matrix.workers }} --matrix "${{ matrix.browsers }}" --out real_sites_out
+      - name: Report on the summary page
+        if: always()
+        shell: bash
+        run: cat real_sites_out/REPORT.md >> "$GITHUB_STEP_SUMMARY" || echo "no report" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-sites-${{ matrix.name }}
+          path: |
+            real_sites_out/REPORT.md
+            real_sites_out/results.json
+            real_sites_out/hub.log
+          if-no-files-found: ignore
