@@ -5,7 +5,7 @@
 name: cross-platform browsers
 on:
   push:
-    paths: ["aiauto/**", "tests/**", "requirements.txt", "setup.sh", "setup.bat", "start.sh", "start.bat",
+    paths: ["aiauto/**", "tests/**", "requirements.txt", "setup.sh", "setup.bat", "start.sh", "start.bat", "agent.sh", "agent.bat",
             ".github/workflows/cross-platform.yml"]
   workflow_dispatch:
 
@@ -94,3 +94,28 @@ jobs:
           curl -fs -c jar -H "X-Requested-With: autopilot" -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"autopilot-demo"}' http://localhost:8000/api/auth/login
           curl -fs -b jar http://localhost:8000/api/stats
+      - name: agent.sh / agent.bat with agent.env joins the hub
+        shell: bash
+        run: |
+          py=.venv/bin/python; [ -x "$py" ] || py=.venv/Scripts/python.exe
+          "$py" - <<'PY'
+          import httpx
+          c = httpx.Client(base_url="http://localhost:8000", headers={"X-Requested-With": "autopilot"})
+          c.post("/api/auth/login", json={"username": "admin", "password": "autopilot-demo"}).raise_for_status()
+          tok = c.post("/api/agent-tokens", json={"label": "ci-agent"}).json()["token"]
+          open("agent.env", "w").write(f"AIAUTO_SERVER=http://localhost:8000\nAIAUTO_AGENT_TOKEN={tok}\nAGENT_NAME=ci-agent\nAIAUTO_SLOTS=1\n")
+          PY
+          if [ "$RUNNER_OS" = "Windows" ]; then (cmd //c agent.bat > agent.log 2>&1 &); else (./agent.sh > agent.log 2>&1 &); fi
+          "$py" - <<'PY'
+          import httpx, time
+          c = httpx.Client(base_url="http://localhost:8000", headers={"X-Requested-With": "autopilot"})
+          c.post("/api/auth/login", json={"username": "admin", "password": "autopilot-demo"}).raise_for_status()
+          for _ in range(60):
+              a = {m["name"]: m for m in c.get("/api/agents").json()}
+              if a.get("ci-agent", {}).get("online"):
+                  print("agent online:", a["ci-agent"]["platform"], a["ci-agent"]["slots"], "slot(s)")
+                  break
+              time.sleep(1)
+          else:
+              print(open("agent.log").read()); raise SystemExit("agent did not connect")
+          PY

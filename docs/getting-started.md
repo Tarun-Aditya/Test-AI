@@ -80,6 +80,8 @@ Open **http://localhost:8000**.
   can see what each role can do.
 - **Without demo data**: the hub prints a one-time **setup code** in its window
   (`No users yet ... setup code: 1a2b3c-...`). Enter it in the web app and create your admin account.
+![Sign-in page](media/screens/sign-in.png)
+
 - **Just you, no accounts**: start with `AIAUTO_AUTH=off` (Windows: `set AIAUTO_AUTH=off`) and there is no sign-in.
 
 Change the demo passwords before anyone else can reach the hub (Admin → Users).
@@ -104,6 +106,8 @@ element playground.
 4. Watch it live: the browser streams into the page, each element gets a green box, and each step gets its
    screenshot and the native locator that found it.
 
+![A test running live in Studio](media/screens/studio-live.png)
+
 Make it data-driven: write `${brand}` instead of `Logitech`, then under **Test data → Iterations** add one row per run
 (Logitech, HP). Each row becomes its own run, and each row can use a different browser. Tick **Engine: Both** to run
 every row on Playwright and Selenium.
@@ -127,6 +131,8 @@ Open the run (**Runs** → the row). You get:
   ```
 - **Save to library** to reuse it later on any engine or machine.
 
+![A run's page: steps with screenshots, video, scripts, report, replay](media/screens/run-overview.png)
+
 ## 5. Optional: turn on AI
 
 Everything above works without AI: the built-in rules parse the test and heuristics find the elements. AI helps with
@@ -140,8 +146,8 @@ use their own under **My AI** (user menu). Press **Test connection** to check.
 ## 6. Optional: more machines, your team, your tools
 
 - **Run on Windows, macOS or more Linux boxes**: on that machine, install as above, then
-  `python -m aiauto agent --server http://HUB:8000 --token <token> --slots 2`. Make the token under
-  **Machines → Agent tokens**. See [Machines and Docker](machines.md).
+  `./agent.sh --server http://HUB:8000 --token <token> --slots 2` (Windows: `agent.bat ...`). Make the token under
+  **Machines → Agent tokens**. Autostart and Docker agents: [Deployment](deployment.md#installing-an-agent).
 - **Your team**: host the hub on a server, add people under **Admin → Users** or connect company SSO under
   **Admin → Sign-in**, and split work into **projects**. See [User guide → Accounts](user-guide.md#accounts-roles-and-projects).
 - **Jira, Confluence, GitHub, Zephyr Scale, Xray, Azure DevOps**: write test cases from stories and send results back.
@@ -158,4 +164,4 @@ git pull
 The database upgrades itself on the next start. Back up `aiauto.db`, `aiauto.key` and `artifacts/` first if you
 care about them ([how](database.md#back-up-move-reset)).
 
-If something doesn't work, see [Troubleshooting](troubleshooting.md).
+See everything it can do in the [feature tour](features.md). If something doesn't work, see [Troubleshooting](troubleshooting.md).

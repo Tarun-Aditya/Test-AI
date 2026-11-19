@@ -16,3 +16,4 @@ web/node_modules/
 demo_files/
 demo_repo/
 *.demo.log
+agent.env

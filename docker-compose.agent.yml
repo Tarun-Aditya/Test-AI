@@ -1,0 +1,16 @@
+# Agents only, on another machine (the hub runs elsewhere). Every Linux browser both engines can drive, a virtual
+# screen for visible runs, and a restart when the machine reboots.
+#
+#   HUB_URL=http://hub.example.com:8000 AGENT_TOKEN=<token> docker compose -f docker-compose.agent.yml up -d
+#   ... --scale agent=3          three agents on this machine (each registers with its container's host name)
+#
+# Make the token on the hub: Machines -> Agent tokens -> New token. See docs/deployment.md.
+services:
+  agent:
+    image: ${AUTOPILOT_IMAGE:-autopilot}
+    build: .
+    command: ["agent", "--server", "${HUB_URL:?set HUB_URL to the hub's address}", "--token", "${AGENT_TOKEN:?set AGENT_TOKEN}",
+              "--slots", "${AGENT_SLOTS:-2}"]
+    shm_size: 2gb            # Chromium needs more than Docker's default 64 MB /dev/shm (~1 GB per slot)
+    restart: unless-stopped
+    extra_hosts: ["host.docker.internal:host-gateway"]   # lets HUB_URL=http://host.docker.internal:8000 reach a hub on this machine

@@ -12,6 +12,14 @@ script** you can replay on any engine, browser or machine, or take away as a sta
                                 report, screenshots   test_selenium.py     → exported project, CI
 ```
 
+[![Writing a test in plain English and watching it run live](docs/media/videos/studio-run.gif)](docs/media/videos/studio-run.mp4)
+
+| Every run: steps, screenshots, locators | Test design from a story | Hub + agents on any OS |
+|---|---|---|
+| ![Run page](docs/media/screens/run-overview.png) | ![Test design](docs/media/screens/test-design.png) | ![Machines](docs/media/screens/machines.png) |
+
+More in the **[feature tour](docs/features.md)** (screenshots and recordings of every page).
+
 **AI is optional.** Built-in rules and heuristics run everything; AI (your Claude, Cursor or Copilot subscription,
 an API key, or any model through LiteLLM) helps with free-form descriptions, look-alike elements and canvas.
 
@@ -57,8 +65,11 @@ Docker instead: `docker compose up --build`. Full instructions: **[Getting start
 | | |
 |---|---|
 | [Getting started](docs/getting-started.md) | Install, sign in, first test, replay, export |
+| [Feature tour](docs/features.md) | Screenshots and recordings of every feature |
+| [Deployment](docs/deployment.md) | Every mode: one computer, Docker, team server, agents on Windows / macOS / Linux / Docker, grids, HTTPS |
 | [User guide](docs/user-guide.md) | Writing tests, data and iterations, runs, replay, scripts, logins, accounts |
 | [Architecture](docs/architecture.md) | The parts, the life of a run, element finding, AI, security, code map |
+| [All diagrams](docs/diagrams.md) | Every block diagram in one place (20) |
 | [Database](docs/database.md) | Demo data, tables, reporting views, example SQL, backup |
 | [Integrations](docs/integrations.md) | Jira, Confluence, GitHub, local Git, Zephyr Scale, Xray, Azure DevOps |
 | [Machines and Docker](docs/machines.md) | Agents, Windows and macOS, grids, Docker, hosting for a team |
@@ -73,7 +84,7 @@ Docker instead: `docker compose up --build`. Full instructions: **[Getting start
 python -m aiauto server --port 8000                       # web app + hub
 python -m aiauto run -f examples/shop_cart.txt --data examples/shop_data.json --engine selenium
 python -m aiauto replay artifacts/<run>/test_playwright.py --engine selenium --data new.json
-python -m aiauto agent --server http://HUB:8000 --token <token> --slots 2
+./agent.sh --server http://HUB:8000 --token <token> --slots 2   # Windows: agent.bat
 python -m aiauto demo                                     # demo data
 ```
 

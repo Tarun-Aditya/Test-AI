@@ -28,6 +28,8 @@ How to use Autopilot day to day. New here? Start with [Getting started](getting-
 | **Admin** | Organisation AI, integrations, sign-in (SSO), users, projects (admins only) |
 | **My AI** (user menu) | Your own AI subscription or key, used for your runs |
 
+![Overview](media/screens/overview.png)
+
 The top bar always shows the project, engine, machine and visible/headless browser. Each run carries a badge:
 **AI** (the AI wrote the steps), **Rules** (the built-in parser did), **Edited** (you changed the steps) or **Script**
 (a replay).
@@ -90,6 +92,8 @@ With AI on, looser wording works too; the table above is what the built-in rules
   everywhere: live view, screenshots and video (the field shows dots), reports, `data.json`, `script.json`, generated
   scripts. The hub keeps the real values encrypted so **Replay with the same data** works. Scripts read them from
   `AIAUTO_SECRET_<KEY>` (e.g. `AIAUTO_SECRET_USER_PASSWORD`). Secrets are never stored in your browser.
+![Iterations in Studio's Test data tab](media/screens/studio-iterations.png)
+
 - Leave the test name empty and it's named from what it does, with the run's values
   (`Search "wireless mouse" → first Logitech result → Cart · #1 Logitech, qty 2`).
 
@@ -121,6 +125,8 @@ Open a run from **Runs** or **Overview**:
 - **Data & config**: the data used (secrets masked) and every option.
 - **Replay**, **Export project**, **Save to library**, **Delete**.
 
+![A run's page](media/screens/run-overview.png)
+
 The highlight boxes: dashed green *"Step N · click"* when the element is found, solid green *"✓ Step N · clicked"*
 after the action (this is what the step screenshot shows), red when it fails. They are overlays: they never change the
 page, its text or its locators.
@@ -134,6 +140,8 @@ row, each with its browser), and any machine, engine, browser and visible/headle
 If a stored locator no longer matches, **self-healing** tries the fallbacks, then finds the element again from the
 step's description, marks the step *self-healed* and writes a new script with the repaired locator. Turn it off in
 Replay to make broken locators fail instead.
+
+![Replay options](media/screens/run-replay.png)
 
 **Library**: **Save to library** keeps a run's script under a name; you can also upload a `script.json` or generated
 `.py`. Library scripts run in Studio or from the API (`"library": "name"`).

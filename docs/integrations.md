@@ -23,6 +23,8 @@ tool. Every tool connects with a **token**: there is no OAuth app to register.
 6. Results go back as each run finishes: test executions, a comment on the story, a status transition, a bug for each
    new failure. Everything sent is listed in the design's **sync log**.
 
+![A test design: criteria, code found, cases with results](media/screens/test-design.png)
+
 The coverage table shows each acceptance criterion with its cases, and which criteria still lack a positive or
 negative case. **Re-check story** tells you when the story, its pages or its code changed after the cases were
 written.

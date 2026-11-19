@@ -122,3 +122,18 @@ def test_demo_data_refuses_a_database_with_accounts(tmp_path, capsys):
         demo.main(["--db", str(tmp_path / "team.db"), "--artifacts", str(tmp_path / "a")])
     with pytest.raises(SystemExit, match="at least 10"):
         demo.main(["--db", str(tmp_path / "new.db"), "--password", "short"])
+
+
+def test_reviewed_steps_are_named_from_what_they_do(hub):
+    """Running the breakdown as is ('Break down into steps' then Run) names the run like parsed text; edited steps
+    stay 'Edited test' unless named."""
+    c, appmod = hub
+    from aiauto.nlp.rules import parse
+    steps, _ = parse('Open http://localhost:1/shop\nType "mouse" into Search\nPress Enter')
+    body = {"steps": [s.model_dump() for s in steps], "text": "x", "agent": "local", "config": {"record_video": False, "timeout_ms": 1000}}
+    rid = c.post("/api/runs", json=body).json()["run_ids"][0]
+    assert c.get(f"/api/runs/{rid}").json()["test_name"] != "Edited test"
+    edited = [{**s.model_dump(), "source": "user"} for s in steps]
+    rid2 = c.post("/api/runs", json={**body, "steps": edited}).json()["run_ids"][0]
+    assert c.get(f"/api/runs/{rid2}").json()["test_name"] == "Edited test"
+    c.post("/api/runs/cancel", json={"run_ids": [rid, rid2]})

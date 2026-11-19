@@ -376,8 +376,10 @@ async def api_run(req: RunRequest, request: Request):
                                        "sensitive": sorted(set(test.sensitive) | set(sens))})
         mode, parser = "replay", "script"
     elif req.steps:
-        test = TestCase(name=req.name or "Edited test", steps=req.steps, data=data, sensitive=sens, source_text=req.text or "")
         srcs = {s.source for s in req.steps}
+        from ..nlp.parser import _default_name       # reviewed steps get a name from what they do, like parsed ones
+        name = req.name or (_default_name(req.steps, req.text or "") if "user" not in srcs else None) or "Edited test"
+        test = TestCase(name=name, steps=req.steps, data=data, sensitive=sens, source_text=req.text or "")
         parser = "ai" if "ai" in srcs else "rules" if "rules" in srcs else "user"
     elif req.text:
         test, info = await asyncio.to_thread(_as_user, owner, parse_text, req.text, data, req.name, req.config.use_llm, sens)

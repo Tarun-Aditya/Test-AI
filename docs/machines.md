@@ -1,6 +1,7 @@
 # Machines, Windows and macOS, grids and Docker
 
-Where tests run, and how to host the hub for a team.
+Where tests run, and how to host the hub for a team. Step-by-step installs for every mode (agents on Windows, macOS,
+Linux and Docker with autostart, ports, HTTPS) are in **[Deployment](deployment.md)**.
 
 - [Three ways to run tests](#three-ways-to-run-tests)
 - [Add a machine (agent)](#add-a-machine-agent)
@@ -27,9 +28,10 @@ Live view, highlight boxes, screenshots, video, report and generated scripts are
    `setup.bat`; no demo data needed), then:
 
    ```bash
-   .venv/bin/python -m aiauto agent --server http://HUB:8000 --name my-laptop --token <token> --slots 2
-   # Windows: .venv\Scripts\python -m aiauto agent --server http://HUB:8000 --name my-laptop --token <token> --slots 2
+   ./agent.sh --server http://HUB:8000 --name my-laptop --token <token> --slots 2
+   # Windows: agent.bat --server http://HUB:8000 --name my-laptop --token <token> --slots 2
    ```
+   or put those in `agent.env` (copy `agent.env.example`) and run `./agent.sh` / `agent.bat` with no options.
 3. It appears in the machine picker and on the Machines page with its platform, engines, browsers and slots.
 
 The agent opens an **outbound** WebSocket to the hub, so it works behind NAT and firewalls: only the hub needs to be

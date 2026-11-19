@@ -3,7 +3,10 @@
 | Guide | Read it to |
 |---|---|
 | [Getting started](getting-started.md) | Install (one step on Windows, macOS, Linux or Docker), sign in, run and replay your first test |
+| [Feature tour](features.md) | See every feature: screenshots and recordings |
+| [Deployment](deployment.md) | Every mode (one computer, Docker, team server, hub + agents, grids), agents on Windows / macOS / Linux / Docker with autostart, ports, HTTPS |
 | [User guide](user-guide.md) | Write tests in plain English, use test data and iterations, read runs, replay, export, logins, accounts and projects |
+| [All diagrams](diagrams.md) | Every block diagram in one place |
 | [Architecture](architecture.md) | Understand the parts, the life of a run, how elements are found, where AI is (and isn't) used, the security model |
 | [Database](database.md) | Load demo data, query results with SQL, use the reporting views, back up and reset |
 | [Integrations](integrations.md) | Connect Jira, Confluence, GitHub, Zephyr Scale, Xray, Azure DevOps; design cases from stories; send results back |
@@ -13,5 +16,5 @@
 | [Development](development.md) | Change Autopilot itself: web app, tests, the real-website suite, CI |
 | [Troubleshooting](troubleshooting.md) | Fix common problems |
 
-New here: **Getting started**, then the **User guide**. Want to see how it works inside: **Architecture**. Want the data:
+New here: **Getting started**, the **Feature tour**, then the **User guide**. Setting it up for a team: **Deployment**. Want to see how it works inside: **Architecture**. Want the data:
 **Database**.
