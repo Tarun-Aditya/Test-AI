@@ -36,7 +36,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from autopilot_runtime import MASK, Run  # noqa: E402  (standalone runtime shipped next to this script)
+from autopilot_runtime import DIALOG_SHIM_JS, MASK, Run, rehover  # noqa: E402  (standalone runtime shipped next to this script)
 
 NAME = {name_lit}
 SOURCE = {source_lit}
@@ -298,7 +298,7 @@ def _pw_lines(st: Step) -> list[str]:
         Action.TYPE: [f"{one}.fill({val})"],
         Action.APPEND: [f"{one}.press_sequentially({val})"],
         Action.PRESS: [f"{one}.press({val})" if st.locator else f"page.keyboard.press({val})"],
-        Action.HOVER: [f"{one}.hover()"],
+        Action.HOVER: [f"r.hover(lambda: {one}.hover())  # held for the checks that follow"],
         Action.SELECT: [f"{one}.select_option(label=[o.strip() for o in {val}.split('|')])"],
         Action.CHECK: [f"{one}.check()"],
         Action.UNCHECK: [f"{one}.uncheck()"],
@@ -439,6 +439,11 @@ def top(driver):
 
 
 def answer_alert(driver, accept=True):
+    if driver.name == "safari":   # Safari stalls while a native dialog is open: answer them in the page instead
+        try:
+            return driver.execute_script(DIALOG_SHIM_JS, accept)
+        except Exception:
+            return None
     try:
         alert = driver.switch_to.alert
         text = alert.text
@@ -477,7 +482,7 @@ def html5_drag(driver, src, dst):
 
 def wait_text(get, expected):
     WebDriverWait(None, TIMEOUT, ignored_exceptions=(Exception,)).until(
-        lambda _: expected.lower() in " ".join((get() or "").split()).lower(), f"expected to find {expected!r}")
+        lambda _: expected.lower() in " ".join((get() or "").split()).lower() or rehover(), f"expected to find {expected!r}")
 
 
 def choose(driver, el, wanted):
@@ -529,7 +534,7 @@ def selenium_script(test: TestCase, config: dict | None = None) -> str:
            "    accept, dialog = CONFIG.get('dialogs', 'accept') == 'accept', None"]
     for i, st in enumerate(test.steps, 1):
         out.append(_comment(st, i))
-        lines = _se_lines(st) + (["dialog = answer_alert(driver, accept) or dialog"] if st.action != Action.DIALOG else [])
+        lines = _se_lines(st) + ["dialog = answer_alert(driver, accept) or dialog"]   # after a dialog step: the new answer applies
         loc = se_locator(st) if st.locator else None
         desc = loc.label() if loc and loc.strategy != "point" else ""
         out.extend("    " + line for line in _step_block(i, st, lines, _se_target(st), test.sensitive, desc))
@@ -596,7 +601,7 @@ def _se_lines(st: Step) -> list[str]:
         Action.APPEND: [f"type_into(driver, {F}, {val}, clear=False)"],
         Action.PRESS: [f"{F}.send_keys({_sel_key(st.value)})" if st.locator
                        else f"top(driver); ActionChains(driver).send_keys({_sel_key(st.value)}).perform()"],
-        Action.HOVER: [f"ActionChains(driver).move_to_element({F}).perform()"],
+        Action.HOVER: [f"r.hover(lambda: (lambda el: ActionChains(driver).move_to_element_with_offset(el, 1, 1).move_to_element(el).perform())({F}))  # held for the checks that follow"],
         Action.SELECT: [f"choose(driver, {F}, {val})"],
         Action.CHECK: [f"el = {F}", "if not el.is_selected():", "    driver.execute_script('arguments[0].click()', el)"],
         Action.UNCHECK: [f"el = {F}", "if el.is_selected():", "    driver.execute_script('arguments[0].click()', el)"],

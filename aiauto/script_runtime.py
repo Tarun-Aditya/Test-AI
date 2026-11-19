@@ -33,6 +33,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MASK = "••••••"
+# Safari's WebDriver stalls every command (screenshots, even reading the alert) while a native alert/confirm/prompt
+# is open, so on Safari the page's dialogs are answered in the page instead: recorded, then answered per the policy.
+DIALOG_SHIM_JS = """const acc = arguments[0]; window.__aiautoAccept = acc;
+if (!window.__aiautoShim) { window.__aiautoShim = 1; window.__aiautoDialogs = [];
+  window.alert = function (m) { window.__aiautoDialogs.push(String(m)); };
+  window.confirm = function (m) { window.__aiautoDialogs.push(String(m)); return !!window.__aiautoAccept; };
+  window.prompt = function (m, d) { window.__aiautoDialogs.push(String(m)); return window.__aiautoAccept ? (d == null ? '' : String(d)) : null; }; }
+const out = window.__aiautoDialogs.splice(0); return out.length ? out[out.length - 1] : null;"""
+
+
+_HELD = [None]   # the hover a HOVER step holds (see Run.hover / rehover)
+
+
+def rehover():
+    """Hover again over the element a hover step holds (used while waiting for text it reveals)."""
+    if _HELD[0]:
+        try:
+            _HELD[0]()
+        except Exception:
+            pass
+
+
+HOVER_PASSIVE = ("assert_text", "assert_no_text", "assert_visible", "assert_url", "assert_title", "wait", "screenshot")
 
 # ---------------------------------------------------------------- shared browser-side scripts
 OPEN_SHADOW_JS = """(() => { const proto = Element.prototype; if (proto.attachShadow && !proto.attachShadow.__aiauto) {
@@ -367,6 +390,8 @@ class Run:
                 if present:
                     raise AssertionError(f"expected the page to contain {text!r}; it shows {got[:300]!r}")
                 return
+            if present:
+                rehover()       # a held hover was taken away: hover again
             time.sleep(0.25)
 
     # ------------------------------------------------------------ video
@@ -425,7 +450,7 @@ class Run:
         lines.append(f"file '{frames[-1][1].name}'")
         lst.write_text("\n".join(lines), encoding="utf-8")
         out = self.dir / "video.webm"
-        vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12"
+        vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12,format=yuv420p"   # Safari screenshots carry alpha (RGBA PNG)
         for codec in (["-c:v", "libvpx-vp9", "-b:v", "1M", "-deadline", "realtime", "-cpu-used", "8"], ["-c:v", "libx264", "-pix_fmt", "yuv420p"]):
             if codec[1] == "libx264":
                 out = self.dir / "video.mp4"
@@ -541,10 +566,19 @@ class Run:
     def skip(self, n, title, reason):
         self.results.append({"n": n, "title": self._m(title), "status": "skipped", "error": reason, "ms": 0})
 
+    def hover(self, do):
+        """Hover now and hold it: hover again before the checks and waits that follow, until the next action."""
+        _HELD[0] = do
+        do()
+
     @contextmanager
     def step(self, n, title, action="", target=None, value=None, locator="", optional=False):
         """Wraps one step: located box -> action -> done box -> screenshot; failure -> red box + screenshot."""
         verb = action.replace("_", " ") or "step"
+        if action in HOVER_PASSIVE:   # keep a hover held for the checks after it (another window or the real
+            rehover()                  # mouse can take it away)
+        elif action != "hover":
+            _HELD[0] = None
         rec = {"n": n, "title": self._m(title), "action": action, "value": self._m(value), "locator": locator, "status": "passed"}
         t0 = time.time()
         if target is not None and self.box(target, "located", f"Step {n} · {verb}") and (self.video or not self.headless):

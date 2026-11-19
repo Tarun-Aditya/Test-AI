@@ -127,7 +127,7 @@ class Engine(ABC):
         lines.append(f"file '{frames[-1][1].name}'")
         lst.write_text("\n".join(lines), encoding="utf-8")
         out = self.run_dir / "video.webm"
-        vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12"
+        vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12,format=yuv420p"   # Safari screenshots carry alpha (RGBA PNG)
         cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-vf", vf,
                "-c:v", "libvpx-vp9", "-b:v", "1M", "-deadline", "realtime", "-cpu-used", "8", str(out)]
         try:

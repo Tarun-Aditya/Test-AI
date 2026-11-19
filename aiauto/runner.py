@@ -21,6 +21,8 @@ from .models import (ELEMENT_ACTIONS, Action, Locator, RunConfig, RunSummary, St
 log = logging.getLogger(__name__)
 
 EventCb = Callable[[dict], None]
+HOVER_PASSIVE = (Action.ASSERT_TEXT, Action.ASSERT_NO_TEXT, Action.ASSERT_VISIBLE, Action.ASSERT_URL,
+                 Action.ASSERT_TITLE, Action.WAIT, Action.SCREENSHOT)
 _UNRESOLVED = re.compile(r"\$\{[^}]+\}|\{\{[^}]+\}\}")
 
 
@@ -120,6 +122,8 @@ class Runner:
         return summary
 
     # ---------------------------------------------------------------- steps
+    _held: Locator | None = None    # element a HOVER step is holding the mouse over
+
     def _run_step(self, i: int, step: Step) -> StepResult:
         """`step` is the template (with ${vars}); the verified locator is written back to it."""
         e = self.engine
@@ -157,7 +161,18 @@ class Runner:
                     time.sleep(self.config.highlight_ms / 1000)
                 if secret and step.action in (Action.TYPE, Action.APPEND):
                     e.mask(loc)
+            # a hover holds until the next pointer action or page load: another window (parallel visible runs) or
+            # the real mouse can take it away, so hover again before checks and waits that read what it shows
+            if self._held is not None and step.action in HOVER_PASSIVE:
+                try:
+                    e.hover(self._held)
+                except Exception:
+                    self._held = None
             self._perform(live, step, loc)
+            if step.action == Action.HOVER and loc is not None and loc.strategy != "point":
+                self._held = loc
+            elif step.action not in HOVER_PASSIVE:
+                self._held = None
             e.after_action()
             if e.last_dialog:
                 self._prev_dialog = e.last_dialog
@@ -682,6 +697,11 @@ class Runner:
                     return
                 if time.time() > end:
                     break
+                if self._held is not None:      # a held hover was taken away (another window): hover again
+                    try:
+                        e.hover(self._held)
+                    except Exception:
+                        pass
                 e.live_tick()
                 time.sleep(0.4)
             what = {Action.ASSERT_URL: "URL", Action.ASSERT_TITLE: "title", Action.ASSERT_DIALOG: "dialog"}.get(

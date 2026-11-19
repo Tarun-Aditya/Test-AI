@@ -61,13 +61,17 @@ class Events(threading.Thread):
 
 
 def wait_done(c, ids, timeout=1800):
+    """Rows of all runs once `ids` are finished; on timeout the rows as they are (unfinished runs report as such)."""
     end = time.time() + timeout
-    while time.time() < end:
+    while True:
         rows = {r["run_id"]: r for r in c.get("/api/runs", params={"limit": 2000}).json()}
         if all(rows.get(i, {}).get("status") not in LIVE and i in rows for i in ids):
             return rows
+        if time.time() > end:
+            left = [i for i in ids if rows.get(i, {}).get("status") in LIVE or i not in rows]
+            print(f"TIMEOUT: {len(left)} run(s) still not finished after {timeout // 60} min: {', '.join(left)}")
+            return rows
         time.sleep(2)
-    raise TimeoutError("runs did not finish")
 
 
 def facts(art: Path, rid: str, ev: Counter) -> dict:
@@ -100,6 +104,7 @@ def main():
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--out", default=str(ROOT / "real_sites_out"))
     ap.add_argument("--skip-export", action="store_true")
+    ap.add_argument("--wait-min", type=int, default=30, help="minutes to wait for each phase before reporting what finished")
     ap.add_argument("--strict", action="store_true", help="exit 1 if any first run, replay or exported project fails (CI)")
     ap.add_argument("--headed", action="store_true", help="visible browsers (needs a screen; on Linux CI use xvfb-run)")
     ap.add_argument("--no-ai", action="store_true", help="AI off on the hub: built-in rule parser and heuristics only")
@@ -145,18 +150,20 @@ def main():
                     continue
                 first.setdefault(p.stem, []).extend(r.json()["run_ids"])
             print(f"{p.stem}: {len(first[p.stem])} runs queued")
-        rows = wait_done(c, [i for ids in first.values() for i in ids])
+        rows = wait_done(c, [i for ids in first.values() for i in ids], a.wait_min * 60)
         print(f"phase 1 done in {time.time() - t0:.0f}s")
 
         replay: dict[str, str] = {}
         t1 = time.time()
         for ids in first.values():
             for rid in ids:
+                if rid not in rows or rows[rid]["status"] in LIVE:
+                    continue        # still running after the wait: nothing to replay
                 eng, br = rows[rid]["engine"], rows[rid]["browser"]
                 r = c.post("/api/runs", json={"replay_run_id": rid, "config": {**cfg, "engine": eng, "browser": br}, "engines": [eng]})
                 if r.status_code == 200:
                     replay[rid] = r.json()["run_ids"][0]
-        rows2 = wait_done(c, list(replay.values()))
+        rows2 = wait_done(c, list(replay.values()), a.wait_min * 60)
         print(f"phase 2 done in {time.time() - t1:.0f}s")
 
         result = {"health": health, "scenarios": {}, "mode": {"headed": a.headed, "ai": not a.no_ai, "matrix": a.matrix,

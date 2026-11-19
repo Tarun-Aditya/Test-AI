@@ -112,6 +112,7 @@ class SeleniumEngine(Engine):
         service = None if c.remote_url else selenium_service(kind, driver, binary)
         if c.remote_url:             # Selenium Grid / cloud: the browser runs there, not here
             binary, service = None, None
+        self._kind = kind
         if kind == "safari":         # macOS: safaridriver (enable once: sudo safaridriver --enable); no headless mode
             opts = webdriver.SafariOptions()
             self.driver = self._remote(opts) if c.remote_url else webdriver.Safari(options=opts)
@@ -441,6 +442,15 @@ class SeleniumEngine(Engine):
 
     def after_action(self):
         """Selenium leaves alerts open (unhandledPromptBehavior=ignore): record + answer them here."""
+        if getattr(self, "_kind", "") == "safari":     # dialogs answered in the page (see DIALOG_SHIM_JS)
+            from ..script_runtime import DIALOG_SHIM_JS
+            try:
+                text = self.driver.execute_script(DIALOG_SHIM_JS, self.dialog_policy == "accept")
+            except Exception:
+                text = None
+            if text is not None:
+                self.last_dialog = f"dialog: {text}"
+                return
         try:
             alert = self.driver.switch_to.alert
             text = alert.text
@@ -463,6 +473,8 @@ class SeleniumEngine(Engine):
                 self.after_action()
             time.sleep(0.1)
         self._follow_new_window()
+        if getattr(self, "_kind", "") == "safari":
+            self.after_action()      # (re)install the in-page dialog answers on the page now loaded
 
     def _follow_new_window(self):
         try:
@@ -596,7 +608,8 @@ class SeleniumEngine(Engine):
         from selenium.webdriver.common.action_chains import ActionChains
         el = self._el(loc)
         self.driver.execute_script("arguments[0].scrollIntoView({block:'center'})", el)
-        ActionChains(self.driver).move_to_element(el).perform()
+        # a small move first: hovering again at the same spot may not move the mouse, so the hover is not renewed
+        ActionChains(self.driver).move_to_element_with_offset(el, 1, 1).move_to_element(el).perform()
         self.frame()
 
     def select(self, loc, options):
