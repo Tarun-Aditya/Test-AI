@@ -24,6 +24,22 @@ Works in Chrome, Edge and other Chromium browsers (Windows, macOS, Linux). It is
 
 ![Business paragraph, split into steps, run on the page](media/extension-panel-signup.png)
 
+## Record a flow, replay it exactly
+
+Switch the panel to **Record a flow**, press **Record on this tab** and use the site like a person would: click, type, choose, tick, press Enter, open links in new tabs. Every action becomes a step as you go, in the same format as a typed scenario.
+
+![Recorded steps](media/extension-recorder.png)
+
+* **Nothing is guessed from pixels.** The recorder reads the page structure: for each action it stores the element's role, name, label, text, test id and a list of locators (the same fingerprint the Playwright and Selenium engines use), and describes it in English ("Place order button").
+* **Replay is the same engine** as a typed scenario. Each step tries the locators recorded for it first. If the page changed and none matches exactly one visible element, it falls back to finding the element by its description (the hub ranks the candidates), like the app's self-healing replay.
+* **Passwords** are lifted into data (`${password}`), masked on screen and never stored in the steps. Saving to the hub leaves the secret value out.
+* **Edit**: remove a step with ✕ after stopping. **Add a check** while recording ("the page should show …", or highlight text on the page and use **Use selected text**), because a click stream can't tell what the page was supposed to show.
+* **New tabs** opened by a recorded tab join the recording and are followed on replay; going back to an earlier tab becomes a "switch to tab" step.
+* **Copy as English** gives the steps as plain sentences; **Save to hub** puts them in the library, from where the app runs them (and exports Playwright / Selenium code) like any script; **Replay on this tab** runs them right here. For a repetitive task, record once and run it with data rows in the app.
+* **Import a Chrome Recorder file** (DevTools → Recorder → Export → JSON) and it becomes the same steps, with the selectors Chrome recorded as the stored locators and fallbacks.
+
+What it can't do: a video file (webm / mp4) has no page structure in it, so it can't be turned into steps without a vision model; record the flow instead. Scrolling, file uploads and mouse paths aren't recorded.
+
 ## How it follows tabs
 
 The extension watches `tabs.onCreated` (with the opener), `onUpdated` and `onActivated`. When a step opens a tab from the one under test, the run attaches to the new tab, notes it as **Tab 2** in the panel, and later steps run there. Each step shows which tab it ran in.
@@ -50,4 +66,4 @@ The element finder is generated from the same Python source the Playwright and S
 
 ## Tests
 
-`python -m pytest tests/test_extension.py` loads the extension into real Chromium and covers: a business paragraph on an open page, auto-picking the tab, new tab and popup following, hover, native dialogs, multi-page flows, secrets, cross-origin frames, closed shadow roots, hub sign-in, Stop and the error messages.
+`python -m pytest tests/test_extension.py tests/test_recorder.py` loads the extension into real Chromium and covers: a business paragraph on an open page, auto-picking the tab, new tab and popup following, hover, native dialogs, multi-page flows, secrets, cross-origin frames, closed shadow roots, hub sign-in, Stop and the error messages.

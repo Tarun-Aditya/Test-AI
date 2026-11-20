@@ -58,6 +58,9 @@ Or skip the hub in CI: export the project once (run details → Export project),
 | `POST /api/runs` | Start runs. Body: one of `text` (plain English), `steps` (edited steps), `library` (a library script's name) or `replay_run_id`; plus `name`, `data` (object, JSON string or `k=v;k2=v2`), `sensitive` (keys), `iterations` (`[{data, browser, engine, label}]`), `config` (run options, see `RunConfig`), `agent` (`"local"`, `"any"`, a machine name or a list), `spread` (`each` or `pool`), `engines` (`["playwright", "selenium"]`), `reuse_secrets`. Returns `{run_ids, batch_id, ...}` |
 | `POST /api/parse` | English → steps without running: `{text, data, sensitive, use_llm}`. Returns `test` (steps, and `data` / `sensitive` including values lifted out of the text, such as a masked `password`), `parser` (`rules` or `llm:…`), `unparsed` (sentences nothing understood), `ignored` (background sentences left out), `notes` (things to check) and `data_added` |
 | `POST /api/locate` | Used by the Chrome extension: `{step, candidates, target, use_llm}` → the best element `{uid, score, picked_by, problem, near[]}` using the same ranking (and optional AI tie-break) as the engines |
+| `POST /api/record/compile` | Recorder events from the Chrome extension → steps (stored locators, secrets lifted): `{events, name, data, sensitive}` → `{test, notes}` |
+| `POST /api/record/import-chrome` | A Chrome DevTools Recorder JSON export → the same steps: `{recording, name}` → `{test, notes}` |
+| `POST /api/library` | Save a test to the library: `{name, test}` (secret values are not stored) |
 | `GET /api/runs` | Run list, newest first. Query: `limit`, `status`, `q` (search), `mine` |
 | `GET /api/runs/{id}` | One run: steps, data (secrets masked), config, batch, `live`, `has_secrets` |
 | `GET /api/stats` | Overview numbers: totals, pass/fail, in progress, average time, 14-day trend |

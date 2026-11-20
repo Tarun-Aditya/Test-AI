@@ -199,6 +199,22 @@ export class Run {
   // ---------------------------------------------------------------------------------------------- find the element
   async resolve(step, target) {
     if (!target) throw new StepError("This step needs an element but has no description of it.");
+    const stored = [step.locator, ...(step.fallbacks || [])].filter(Boolean);
+    if (stored.length) {                                       // a recorded step: where it was last time, then the description
+      const until = Date.now() + Math.min(this.cfg.timeout, 4000);
+      for (;;) {
+        this.check();
+        let found = null;
+        try {
+          await this.inject(this.tabId);
+          const rs = await chrome.scripting.executeScript({ target: { tabId: this.tabId, allFrames: true }, world: "MAIN", func: (l) => (window.__aiautoPage ? window.__aiautoPage.find(l) : null), args: [stored] });
+          found = rs.sort((a, b) => a.frameId - b.frameId).find((r) => r.result);
+        } catch (e) { if (!/Cannot access|showing error page|No tab/i.test(String(e.message))) throw e; }
+        if (found) { const r = found.result; return { uid: r.uid, frameId: found.frameId, local: false, tag: r.tag, type: r.type, draggable: r.draggable, pickedBy: "recorded", options: r.options }; }
+        if (Date.now() > until) break;
+        await sleep(400);
+      }
+    }
     const deadline = Date.now() + this.cfg.timeout, probe = { action: step.action, target, value: step.value, nth: step.nth, raw: step.raw };
     let filter = step.nth == null ? words(target) : [], ties = 0, last = null;
     for (;;) {

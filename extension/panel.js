@@ -131,11 +131,85 @@ $("stop").onclick = () => { if (runId) ask({ type: "stop", runId }); $("stop").d
 $("gear").onclick = () => chrome.runtime.openOptionsPage();
 $("text").oninput = () => { previewed = null; };
 
+// ------------------------------------------------------------------------------------------------ recorder
+let recTest = null, recLive = false, recTimer = null;
+function setMode(m) {
+  const rec = m === "rec";
+  $("mrec").classList.toggle("on", rec); $("mrun").classList.toggle("on", !rec);
+  $("recview").hidden = !rec; $("runview").hidden = rec; $("recout").hidden = !rec || !recTest;
+  ["steps", "banner", "tabs", "notes"].forEach((id) => { if (rec) $(id).dataset.was = $(id).hidden; $(id).style.display = rec ? "none" : ""; });
+}
+$("mrun").onclick = () => setMode("run");
+$("mrec").onclick = () => setMode("rec");
+
+function renderRec(editable) {
+  const st = recTest ? recTest.steps : [];
+  $("recout").hidden = !recTest; $("reccount").textContent = st.length ? `· ${st.length}` : "";
+  $("recsteps").innerHTML = st.map((x, i) => `<li><span class="n">${i + 1}</span><span>${esc(x.raw || x.action)}${x.locator ? `<small>finds it by ${esc(x.locator.strategy)}: ${esc(x.locator.role ? x.locator.role + " · " : "")}${esc(String(x.locator.value).slice(0, 50))}</small>` : ""}</span>${editable ? `<button class="x" data-i="${i}" title="Remove this step" aria-label="Remove step ${i + 1}">✕</button>` : "<span></span>"}</li>`).join("");
+}
+$("recsteps").onclick = (e) => { const b = e.target.closest(".x"); if (!b || !recTest) return; recTest.steps.splice(+b.dataset.i, 1); renderRec(!recLive); };
+
+async function recCompile(events, name) {
+  const r = await ask({ type: "compile", events, name: name || $("recname").value || "Recorded flow" });
+  if (!r.ok) { showError(r.error); return false; }
+  recTest = r.test; showError(""); return r;
+}
+chrome.runtime.onMessage.addListener((m) => {
+  if (!m || m.type !== "rec_changed" || !recLive) return;
+  clearTimeout(recTimer);
+  recTimer = setTimeout(async () => { const st = await ask({ type: "rec-state" }); if (st.ok && recLive && (await recCompile(st.events))) renderRec(false); }, 350);
+});
+
+function recUi(on) {
+  recLive = on; $("recview").classList.toggle("rec-on", on);
+  $("recstart").hidden = on; $("recstop").hidden = !on; $("recadd").hidden = !on;
+}
+$("recstart").onclick = async () => {
+  showError(""); recTest = null; renderRec(false);
+  const r = await ask({ type: "rec-start" }); if (!r.ok) return showError(r.error);
+  recUi(true);
+};
+$("recstop").onclick = async () => {
+  const r = await ask({ type: "rec-stop" }); recUi(false);
+  if (!r.ok) return showError(r.error);
+  if (!r.events.length || !(await recCompile(r.events))) return;
+  renderRec(true);
+};
+$("checkadd").onclick = async () => {
+  const text = $("checktext").value.trim(); if (!text) return;
+  const r = await ask({ type: "rec-check", text }); if (!r.ok) return showError(r.error);
+  $("checktext").value = ""; const st = await ask({ type: "rec-state" }); if (st.ok && (await recCompile(st.events))) renderRec(false);
+};
+$("checksel").onclick = async () => { const r = await ask({ type: "rec-selection" }); if (r.ok && r.text) $("checktext").value = r.text.slice(0, 200); else showError("Select some text on the page first."); };
+$("chromefile").onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return; showError("");
+  const r = await ask({ type: "import-chrome", recording: await f.text(), name: null });
+  e.target.value = "";
+  if (!r.ok) return showError(r.error);
+  recTest = r.test; $("recname").value = r.test.name || "Chrome recording"; renderRec(true); showNotes(r.notes, []); $("notes").style.display = "";
+};
+const english = () => recTest.steps.map((x) => x.raw).join("\n");
+$("reccopy").onclick = async () => { try { await navigator.clipboard.writeText(english()); $("reccopy").textContent = "Copied ✓"; setTimeout(() => { $("reccopy").textContent = "Copy as English"; }, 1500); } catch (e) { showError("Couldn't copy."); } };
+$("recsave").onclick = async () => {
+  const name = $("recname").value.trim() || "Recorded flow";
+  const r = await ask({ type: "save-library", name, test: { ...recTest, name } });
+  if (!r.ok) return showError(r.error);
+  showError(""); $("recsave").textContent = "Saved ✓"; setTimeout(() => { $("recsave").textContent = "Save to hub"; }, 1800);
+};
+$("recreplay").onclick = () => {
+  if (!recTest || !recTest.steps.length) return;
+  const text = english(); $("text").value = text;
+  previewed = { text, steps: recTest.steps, data: recTest.data || {}, sensitive: recTest.sensitive || [] };
+  setMode("run"); $("run").click();
+};
+
 // ------------------------------------------------------------------------------------------------ start
 (async () => {
   // the scenario you were working on stays while the browser is open (never written to disk: it may hold a password)
   try { const s = await chrome.storage.session.get({ text: "", dataLines: "" }); $("text").value = s.text; $("data").value = s.dataLines; } catch (e) { /* no session storage */ }
   await refreshTarget(); refreshHub();
+  const rs = await ask({ type: "rec-state" });                // the panel was closed while recording
+  if (rs.ok && rs.active) { setMode("rec"); recUi(true); if (await recCompile(rs.events)) renderRec(false); }
   const st = await ask({ type: "state" });                  // the panel was closed and reopened mid-run
   if (st.ok && st.runId && st.status === "running") {
     runId = st.runId; setBusy(true); startedAt = Date.now();

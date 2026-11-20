@@ -7,7 +7,7 @@
 | [Feature tour](features.md) | See every feature: screenshots and recordings |
 | [Deployment](deployment.md) | Every mode (one computer, Docker, team server, hub + agents, grids), agents on Windows / macOS / Linux / Docker with autostart, ports, HTTPS |
 | [User guide](user-guide.md) | Write tests in plain English, use test data and iterations, read runs, replay, export, logins, accounts and projects |
-| [Chrome extension](chrome-extension.md) | Install the extension, paste a scenario on the page you have open and watch it run, across new tabs |
+| [Chrome extension](chrome-extension.md) | Install the extension, paste a scenario or record a flow on the page you have open, replay it, across new tabs |
 | [All diagrams](diagrams.md) | Every block diagram in one place |
 | [Architecture](architecture.md) | Understand the parts, the life of a run, how elements are found, where AI is (and isn't) used, the security model |
 | [Database](database.md) | Load demo data, query results with SQL, use the reporting views, back up and reset |

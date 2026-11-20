@@ -38,6 +38,31 @@
 
   const P = window.__aiautoPage = {};
 
+  // Find an element by the locators a recording stored (most robust first). A locator wins only if it points at exactly one
+  // visible element; none do -> null, and the caller falls back to ranking by the step's description.
+  P.find = (locs) => {
+    const cands = window.__aiautoSnapshot ? window.__aiautoSnapshot([]) : [];
+    const els = window.__aiautoEls || (window.__aiautoEls = []);
+    const eq = (a, b) => norm(a).toLowerCase() === norm(b).toLowerCase();
+    const field = { testid: "testid", id: "id", label: "label", placeholder: "placeholder", name: "nameattr", text: "text", alt: "alt", title: "title" };
+    const uidOf = (e) => { let i = els.indexOf(e); if (i < 0) { els.push(e); i = els.length - 1; } return i + 1; };
+    const shape = (e, strategy) => ({ uid: uidOf(e), strategy, tag: e.tagName.toLowerCase(), type: (e.getAttribute("type") || "").toLowerCase(),
+      draggable: e.getAttribute("draggable") === "true", options: e.tagName === "SELECT" ? Array.from(e.options).slice(0, 50).map((o) => norm(o.text)) : [] });
+    const vis = (e) => { const r = e.getBoundingClientRect(), st = e.ownerDocument.defaultView.getComputedStyle(e); return r.width > 0 && r.height > 0 && st.visibility !== "hidden" && st.display !== "none"; };
+    for (const l of locs || []) {
+      let hits = [];
+      try {
+        if (l.strategy === "role") hits = cands.filter((c) => (!l.role || c.role === l.role) && eq(c.name, l.value)).map((c) => els[c.uid - 1]);
+        else if (field[l.strategy]) hits = cands.filter((c) => eq(c[field[l.strategy]], l.value)).map((c) => els[c.uid - 1]);
+        else if (l.strategy === "css") hits = Array.from(document.querySelectorAll(l.value));
+        else if (l.strategy === "xpath") { const r = document.evaluate(l.value, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < r.snapshotLength; i++) hits.push(r.snapshotItem(i)); }
+      } catch (err) { continue; }
+      hits = hits.filter((e) => e && e.isConnected && vis(e));
+      if (hits.length === 1) return shape(hits[0], l.strategy);
+    }
+    return null;
+  };
+
   P.exists = (uid) => !!el(uid) && el(uid).isConnected;
 
   // Scroll into view and report where and how it can be acted on.

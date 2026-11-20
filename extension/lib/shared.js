@@ -246,5 +246,171 @@ return (function(){
     pageText: () => { const p = []; const w = (r) => { try { if (r.body) p.push(r.body.innerText); } catch (e) {}
   for (const el of (r.querySelectorAll ? r.querySelectorAll('*') : [])) if (el.shadowRoot) { p.push(el.shadowRoot.textContent || ''); w(el.shadowRoot); } };
   w(document); return p.join('\n'); },
+    describe: (el, marker) => {
+  const q = s => String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"');
+  const norm = s => (s||'').replace(/\s+/g,' ').trim();
+  // auto-generated ids/classes: long digit runs, hashes, framework prefixes, random letter+digit segments
+  const dyn = v => !v || /\d{5,}|[a-f0-9]{10,}|^(ember|react|ng|mui|css|jss|sc|svelte|vue|uid|gen|auto)[-_:]?\w*\d|:r\w*:|__|^[0-9]/i.test(v)
+    || String(v).split(/[-_:.]/).some(seg => seg.length >= 5 && /\d/.test(seg) && /[a-z]/i.test(seg) && !/^[a-z]+\d{1,2}$/i.test(seg));
+  const TEXTY = new Set(['button','a','label','summary','option','h1','h2','h3','h4','h5','h6','li','td','th','span','div','p','strong','b','em','legend','caption','dt','dd','figcaption']);
+  const FORM = new Set(['input','select','textarea']);
+  function implicitRole(el){
+    const t = el.tagName.toLowerCase(), ty = (el.getAttribute('type')||'text').toLowerCase();
+    if (t==='button') return 'button';
+    if (t==='a' && el.hasAttribute('href')) return 'link';
+    if (t==='select') return (el.multiple || el.size>1) ? 'listbox' : 'combobox';
+    if (t==='textarea') return 'textbox';
+    if (t==='input') {
+      if (['button','submit','reset','image'].includes(ty)) return 'button';
+      if (ty==='checkbox') return 'checkbox'; if (ty==='radio') return 'radio';
+      if (ty==='range') return 'slider'; if (ty==='number') return 'spinbutton';
+      if (ty==='search') return 'searchbox';
+      if (['text','email','tel','url','password',''].includes(ty)) return ty==='password' ? '' : 'textbox';
+      return '';
+    }
+    if (/^h[1-6]$/.test(t)) return 'heading';
+    if (t==='img' && el.getAttribute('alt')) return 'img';
+    if (t==='option') return 'option';
+    if (t==='li' && el.parentElement && /^(ul|ol)$/i.test(el.parentElement.tagName)) return 'listitem';
+    return '';
+  }
+  const LABELS = new Map();   // root -> {for-id: label text}, built once per document / shadow root
+  function labelFor(root, id){
+    let m = LABELS.get(root);
+    if (!m) { m = {}; try { for (const l of root.querySelectorAll('label[for]')) { const k = l.getAttribute('for'); if (!(k in m)) m[k] = norm(l.innerText||l.textContent); } } catch(e) {} LABELS.set(root, m); }
+    return m[id];
+  }
+  function labelOf(el){
+    const root = el.getRootNode();
+    if (el.id) { const t = labelFor(root, el.id); if (t) return t; }
+    const p = el.closest('label'); if (p) return norm(p.innerText||p.textContent);
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) { const t = lb.split(/\s+/).map(i=>root.getElementById ? root.getElementById(i) : document.getElementById(i)).filter(Boolean).map(e=>e.innerText||e.textContent).join(' '); if (norm(t)) return norm(t); }
+    // a label laid out beside the field but not linked to it (grid forms: <div col><label>Email</label></div><div col><input></div>)
+    if (FORM.has(el.tagName.toLowerCase())) {
+      let p = el;
+      for (let k = 0; k < 3 && p; k++, p = p.parentElement) {
+        const prev = p.previousElementSibling;
+        if (prev && /^(label|span|div|td|th|dt|p|strong|b|legend)$/i.test(prev.tagName) && !prev.querySelector('input,select,textarea,button')) {
+          const t = norm(prev.innerText || prev.textContent);
+          if (t && t.length <= 40) return t;
+        }
+        if (p.parentElement && p.parentElement.querySelectorAll('input,select,textarea').length > 1) break;   // a shared container: stop
+      }
+    }
+    return '';
+  }
+  function accName(el, info){
+    if (info.aria_label) return info.aria_label;
+    if (FORM.has(info.tag) && info.label) return info.label;
+    if (info.tag==='img') return info.alt;
+    if (info.tag==='input' && ['button','submit','reset'].includes(info.type)) return info.value || '';
+    if (['button','link','heading','tab','menuitem','option','listitem','checkbox','radio','switch','treeitem','cell'].includes(info.role) || TEXTY.has(info.tag))
+      return info.text || info.title || '';
+    return info.title || '';
+  }
+  function cssPathIn(el){
+    const root = el.getRootNode();
+    const count = s => { try { return root.querySelectorAll(s).length; } catch(e) { return 0; } };
+    if (el.id && !dyn(el.id) && count('#'+CSS.escape(el.id))===1) return '#'+CSS.escape(el.id);
+    // one stable class that only this element has ("btn-primary" among three look-alike buttons) beats a position
+    const tg = el.tagName.toLowerCase();
+    for (const cl of Array.from(el.classList||[])) {
+      if (dyn(cl) || cl.length >= 40) continue;
+      const sel = tg + '.' + CSS.escape(cl);
+      if (count(sel)===1) return sel;
+    }
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType===1) {
+      let part = cur.tagName.toLowerCase();
+      if (cur.id && !dyn(cur.id)) { parts.unshift('#'+CSS.escape(cur.id)); break; }
+      const stable = Array.from(cur.classList||[]).filter(c=>!dyn(c) && c.length<40).slice(0,2);
+      if (stable.length) part += '.'+stable.map(c=>CSS.escape(c)).join('.');
+      const parent = cur.parentElement;
+      if (parent) { const same = Array.from(parent.children).filter(c=>c.tagName===cur.tagName);
+        if (same.length>1) part += ':nth-of-type('+(same.indexOf(cur)+1)+')'; }
+      parts.unshift(part);
+      if (count(parts.join(' > '))===1) break;
+      cur = parent;
+    }
+    return parts.join(' > ');
+  }
+  function xpathPath(el){
+    const parts=[];
+    for (let cur=el; cur && cur.nodeType===1; cur=cur.parentElement) {
+      let i=1; for (let s=cur.previousElementSibling; s; s=s.previousElementSibling) if (s.tagName===cur.tagName) i++;
+      parts.unshift(cur.tagName.toLowerCase()+'['+i+']');
+    }
+    return '/'+parts.join('/');
+  }
+  function visible(el){
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    const st = (el.ownerDocument.defaultView||window).getComputedStyle(el);
+    return st.visibility !== 'hidden' && st.display !== 'none' && parseFloat(st.opacity||'1') > 0.05;
+  }
+  function info(el){
+    const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type')||'').toLowerCase();
+    const text = norm(el.innerText || el.textContent || '');
+    const i = {
+      tag, type, text: text.slice(0,200), id: el.id||'', nameattr: el.getAttribute('name')||'',
+      aria_label: norm(el.getAttribute('aria-label')), placeholder: el.getAttribute('placeholder')||'',
+      title: el.getAttribute('title')||'', alt: el.getAttribute('alt')||'',
+      value: (tag==='input' && ['submit','button','reset'].includes(type)) ? (el.value||'') : '',
+      href: el.getAttribute('href')||'', label: labelOf(el),
+      testid: el.getAttribute('data-testid')||el.getAttribute('data-test')||el.getAttribute('data-qa')||'',
+      editable: !!el.isContentEditable, role: el.getAttribute('role') || implicitRole(el),
+      draggable: el.getAttribute('draggable')==='true',
+      cls: Array.from(el.classList||[]).filter(c => !dyn(c) && c.length < 40).slice(0, 8).join(' '),
+      options: tag==='select' ? Array.from(el.options).slice(0,50).map(o=>norm(o.text)) : [],
+      longtext: text.length > 300,
+    };
+    i.name = norm(accName(el, i));
+    return i;
+  }
+  // Unique locators for ONE element, most robust first (built only for the element a step picked).
+  function locatorsFor(el, i, inShadow){
+    const c = []; const tag = i.tag;
+    const add = (strategy, value, extra) => { if (value && String(value).length <= 120) c.push(Object.assign({strategy, value:String(value)}, extra||{})); };
+    if (el.getAttribute('data-testid')) add('testid', el.getAttribute('data-testid'));
+    for (const a of ['data-test','data-qa','data-cy','data-test-id']) if (el.getAttribute(a)) add('css', '['+a+'="'+q(el.getAttribute(a))+'"]');
+    if (el.id && !dyn(el.id)) add('id', el.id);
+    if (i.role && i.name && i.name.length <= 80) add('role', i.name, {role: i.role});
+    if (FORM.has(tag) && i.label) add('label', i.label);
+    if (i.placeholder) add('placeholder', i.placeholder);
+    if (i.nameattr && !dyn(i.nameattr)) add('name', i.nameattr);
+    if (i.text && i.text.length <= 80 && !FORM.has(tag)) add('text', i.text);
+    if (i.alt) add('alt', i.alt);
+    if (i.title) add('title', i.title);
+    if (i.aria_label) add('css', tag+'[aria-label="'+q(i.aria_label)+'"]');
+    if (tag==='input' && i.value && ['submit','button','reset'].includes(i.type)) add('css', 'input[type="'+i.type+'"][value="'+q(i.value)+'"]');
+    if (tag==='a' && i.href && i.href.length < 100 && !/[?&]|\d{5,}/.test(i.href)) add('css', 'a[href="'+q(el.getAttribute('href'))+'"]');
+    // single classes only this element has (which one is stable is decided later, against the step's words)
+    { const root = el.getRootNode(); let n = 0;
+      for (const cl of Array.from(el.classList||[])) {
+        if (n >= 4 || dyn(cl) || cl.length >= 40) continue;
+        const sel = tag + '.' + CSS.escape(cl);
+        try { if (root.querySelectorAll(sel).length === 1) { add('css', sel); n++; } } catch(e) {}
+      } }
+    add('css', cssPathIn(el));
+    if (!inShadow) add('xpath', xpathPath(el));
+    return c;
+  }
+  // Where an element lives: iframe chain (outermost first) and shadow-host chain inside its own document.
+  function chains(el){
+    const shadow = []; let root = el.getRootNode();
+    while (root && root.host) { shadow.unshift(cssPathIn(root.host)); root = root.host.getRootNode(); }
+    const frames = []; let win = el.ownerDocument.defaultView;
+    try { while (win && win.frameElement) { frames.unshift(cssPathIn(win.frameElement)); win = win.parent; } } catch(e) {}
+    return {frames, shadow};
+  }
+
+  const i = info(el); const ch = chains(el);
+  i.frames = ch.frames; i.shadow = ch.shadow; i.visible = visible(el);
+  if (marker) { el.__aiautoId = marker; i.marker = marker; } else { i.marker = el.__aiautoId || null; }
+  i.locators = locatorsFor(el, i, ch.shadow.length > 0);
+  return i;
+},
   };
 })();

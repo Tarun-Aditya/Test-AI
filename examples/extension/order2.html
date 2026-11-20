@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Order form</title>
+<style>body{font:16px system-ui;margin:30px} label{display:block;margin:10px 0 3px} .ok{color:#15803d;font-weight:600;margin-top:16px}</style></head>
+<body><h1>Order a ticket</h1>
+<label for="fname">Name</label><input id="fname">
+<label for="quantity">Quantity</label><select id="quantity"><option>1</option><option>2</option><option>3</option></select>
+<p><label><input type="checkbox" id="news"> Send me the newsletter</label></p>
+<button id="submit-order" onclick="document.getElementById('out').textContent='Thanks, ' + document.getElementById("fname").value + '! Order placed for ' + document.getElementById("quantity").value + ' ticket(s).'">Place order</button>
+<div class="ok" id="out"></div></body></html>

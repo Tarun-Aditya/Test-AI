@@ -38,3 +38,7 @@ export const parse = (text, data, sensitive, useLlm = true) =>
   hub("/api/parse", { method: "POST", body: { text, data, sensitive, use_llm: useLlm } });
 export const locate = (step, candidates, target) =>
   hub("/api/locate", { method: "POST", body: { step, candidates, target, use_llm: true } });
+export const compileRecording = (events, name, data, sensitive) =>
+  hub("/api/record/compile", { method: "POST", body: { events, name, data: data || {}, sensitive: sensitive || [] } });
+export const importChrome = (recording, name) => hub("/api/record/import-chrome", { method: "POST", body: { recording, name } });
+export const saveToLibrary = (name, test) => hub("/api/library", { method: "POST", body: { name, test } });

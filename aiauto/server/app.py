@@ -678,6 +678,58 @@ async def library_upload(request: Request, file: UploadFile = File(...), name: O
     return db.lib_put(_slug(name or t.name), json.loads(t.model_dump_json()), owner=_owner_of(request), project=_project(request))
 
 
+# --------------------------------------------------------------------- API: recorder
+class RecordCompile(BaseModel):
+    events: list[dict[str, Any]]
+    name: str = "Recorded flow"
+    data: dict[str, Any] = {}
+    sensitive: list[str] = []
+    base_url: Optional[str] = None
+
+
+@app.post("/api/record/compile")
+def record_compile(req: RecordCompile, request: Request):
+    """The Chrome extension's recorder sends the raw events; this returns the same steps a typed scenario gives."""
+    from ..recorder import compile_events
+    test, notes = compile_events(req.events, req.data, req.sensitive, req.name, req.base_url)
+    return {"test": json.loads(test.model_dump_json()), "notes": notes}
+
+
+class RecordImport(BaseModel):
+    recording: Any                                   # a Chrome DevTools Recorder export (object or its JSON text)
+    name: Optional[str] = None
+
+
+@app.post("/api/record/import-chrome")
+def record_import_chrome(req: RecordImport, request: Request):
+    from ..recorder import from_chrome_recording
+    try:
+        test, notes = from_chrome_recording(req.recording, req.name)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    return {"test": json.loads(test.model_dump_json()), "notes": notes}
+
+
+class LibrarySave(BaseModel):
+    name: str
+    test: dict[str, Any]
+
+
+@app.post("/api/library")
+def library_save(req: LibrarySave, request: Request):
+    """Save a test (for example a recording) to the library. Secret values are not stored: they are asked for / read from the
+    machine that runs it (AIAUTO_SECRET_<KEY>), as for any saved script."""
+    try:
+        t = TestCase(**req.test)
+    except Exception as e:
+        raise HTTPException(400, f"Not a test: {e}")
+    d = json.loads(t.model_dump_json())
+    for k in d.get("sensitive", []):
+        if k in d.get("data", {}):
+            d["data"][k] = ""
+    return db.lib_put(_slug(req.name or t.name), d, owner=_owner_of(request), project=_project(request))
+
+
 @app.get("/api/library/{name}")
 def library_get(name: str, request: Request):
     t = db.lib_get(name)

@@ -322,3 +322,90 @@ def test_the_manifest_asks_for_what_the_extension_uses():
     for f in [m["background"]["service_worker"], m["side_panel"]["default_path"], m["options_page"], *m["icons"].values(),
               "lib/runner.js", "lib/cdp.js", "lib/hub.js", "lib/page.js", "lib/shared.js", "panel.js", "options.js", "panel.css"]:
         assert (EXT / f).is_file(), f
+
+
+# ---------------------------------------------------------------------------------------------- the recorder
+def _record_order_flow(browser, sites):
+    """Open the order form, record a person using it (real input), stop. Returns (panel, page)."""
+    ctx, ext = browser
+    close_extra(browser)
+    page = ctx.new_page()
+    page.goto(sites["site"] + "/extension/order.html")
+    page.bring_to_front()
+    panel = ctx.new_page()
+    panel.goto(f"chrome-extension://{ext}/panel.html")
+    ready(panel)
+    panel.locator("#mrec").click()
+    panel.locator("#recstart").click()
+    panel.wait_for_selector("#recstop:not([hidden])")
+    page.click("#name")
+    page.keyboard.type("Asha")
+    page.focus("#qty")
+    page.keyboard.press("ArrowDown")                 # a real key press (select_option sends untrusted events)
+    page.check("#news")
+    page.click("#go")
+    page.wait_for_selector("#out:has-text('Thanks, Asha')")
+    panel.locator("#checktext").fill("Thanks, Asha")
+    panel.locator("#checkadd").click()
+    time.sleep(1.2)
+    panel.locator("#recstop").click()
+    panel.wait_for_selector("#recout:not([hidden])")
+    return panel, page
+
+
+def test_recording_a_flow_makes_steps_and_replaying_them_does_it_again(browser, sites):
+    panel, page = _record_order_flow(browser, sites)
+    steps = [li.inner_text() for li in panel.locator("#recsteps li").all()]
+    text = "\n".join(steps)
+    for want in ('type "Asha" into', 'select "2" from', "check Send me the newsletter", "click Place order", 'verify the page shows "Thanks, Asha"'):
+        assert want in text, text
+    assert "finds it by" in text                       # each step remembers where the element was
+    page.goto(page.url)                                # fresh page: the order is not placed yet
+    assert page.locator("#out").inner_text() == ""
+    page.bring_to_front()
+    panel.locator("#recreplay").click()
+    panel.wait_for_selector("#banner:not([hidden])", timeout=60000)
+    assert panel.locator("#banner").get_attribute("class").split()[-1] == "passed", panel.locator("#steps").inner_text()
+    assert "recorded" in panel.locator("#steps").inner_text()           # found by the stored locator, not by guessing
+    assert "Thanks, Asha" in page.locator("#out").inner_text()
+    assert page.locator("#news").is_checked()
+
+
+def test_a_recording_still_replays_when_the_page_changed_its_ids(browser, sites):
+    panel, page = _record_order_flow(browser, sites)
+    page.goto(sites["site"] + "/extension/order2.html")                 # same labels and texts, every id changed
+    page.bring_to_front()
+    panel.locator("#recreplay").click()
+    panel.wait_for_selector("#banner:not([hidden])", timeout=60000)
+    assert panel.locator("#banner").get_attribute("class").split()[-1] == "passed", panel.locator("#steps").inner_text()
+    assert "Thanks, Asha" in page.locator("#out").inner_text()
+
+
+def test_a_recording_is_saved_to_the_hub_without_its_secret_and_a_chrome_recording_can_be_imported(browser, sites, hub):
+    ctx, ext = browser
+    close_extra(browser)
+    page = ctx.new_page()
+    page.goto(sites["site"] + "/extension/order.html")
+    panel = ctx.new_page()
+    panel.goto(f"chrome-extension://{ext}/panel.html")
+    ready(panel)
+    panel.locator("#mrec").click()
+    rec = {"title": "Imported flow", "steps": [
+        {"type": "navigate", "url": sites["site"] + "/extension/order.html"},
+        {"type": "change", "value": "hunter2-secret", "selectors": [["aria/Password"], ["#pw"]]},
+        {"type": "click", "selectors": [["aria/Place order[role=\"button\"]"], ["#go"]]}]}
+    f = Path(ROOT / "dist" / "_imported.json")
+    f.parent.mkdir(exist_ok=True)
+    f.write_text(json.dumps(rec))
+    try:
+        panel.locator("#chromefile").set_input_files(str(f))
+        panel.wait_for_selector("#recout:not([hidden])", timeout=15000)         # the page reads the file lazily: keep it until then
+    finally:
+        f.unlink(missing_ok=True)
+    assert "Imported flow" == panel.locator("#recname").input_value()
+    assert panel.locator("#recsteps li").count() == 3
+    assert "hunter2" not in panel.locator("#recsteps").inner_text()
+    panel.locator("#recsave").click()
+    time.sleep(1)
+    saved = json.loads(urllib.request.urlopen(hub + "/api/library/Imported-flow").read())
+    assert len(saved["steps"]) == 3 and saved["sensitive"] == ["password"] and saved["data"]["password"] == ""

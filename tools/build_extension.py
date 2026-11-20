@@ -37,6 +37,7 @@ def shared_js() -> str:
     clearBox: {sr.HL_CLEAR_JS},
     mask: {sr.MASK_JS},
     pageText: {sr.FRAME_TEXT_JS},
+    describe: {locators.DESCRIBE_EL_JS},
   }};
 }})();
 """

@@ -18,7 +18,34 @@
   <div id="hubline" class="hub"></div>
 </section>
 
-<section class="card">
+<nav class="modes" role="tablist"><button id="mrun" class="on" role="tab">▶ Run a scenario</button><button id="mrec" role="tab">● Record a flow</button></nav>
+
+<section class="card" id="recview" hidden>
+  <div class="lbl">Record a flow</div>
+  <p class="hint">Click through the page the way a person would. Every click, entry and choice becomes a step, in the same format as a typed scenario, so it can be replayed, edited and exported.</p>
+  <div class="actions">
+    <button id="recstart" class="btn primary">● Record on this tab</button>
+    <button id="recstop" class="btn danger" hidden>■ Stop recording</button>
+  </div>
+  <div id="recadd" class="addcheck" hidden>
+    <input id="checktext" placeholder="Add a check: the page should show…" spellcheck="false">
+    <button id="checkadd" class="btn">Add</button>
+    <button id="checksel" class="btn" title="Highlight text on the page first">Use selected text</button>
+  </div>
+  <div class="imp"><label class="btn" for="chromefile">Import a Chrome Recorder file…</label><input type="file" id="chromefile" accept=".json,application/json" hidden></div>
+</section>
+
+<section class="card" id="recout" hidden>
+  <div class="lbl">Recorded steps <span class="mut" id="reccount"></span></div>
+  <ol id="recsteps" class="recsteps"></ol>
+  <div class="actions">
+    <button id="recreplay" class="btn primary">▶ Replay on this tab</button>
+    <button id="reccopy" class="btn">Copy as English</button>
+  </div>
+  <div class="save"><input id="recname" value="Recorded flow" spellcheck="false" aria-label="Name"><button id="recsave" class="btn">Save to hub</button></div>
+</section>
+
+<section class="card" id="runview">
   <label for="text" class="lbl">Your scenario</label>
   <textarea id="text" spellcheck="false" placeholder="Paste it as you have it. For example:&#10;&#10;The visitor enters the email test.user@example.com, a username testuser and age 30, then submits the registration form. The system should confirm that the account was created successfully."></textarea>
   <details id="datad"><summary>Data <span class="mut">(optional)</span></summary>
