@@ -23,8 +23,20 @@ export async function detach(tabId) {
 
 export const attached = (tabId) => sessions.has(tabId);
 
+// The tab's picture, frame by frame (Chrome sends one when the page changes): it becomes the run's video on the hub.
+export async function startScreencast(tabId, onFrame) {
+  const s = sessions.get(tabId); if (!s) return;
+  s.onFrame = onFrame;
+  await send(tabId, "Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+}
+
 chrome.debugger.onEvent.addListener((src, method, params) => {
   const s = sessions.get(src.tabId);
+  if (s && method === "Page.screencastFrame") {
+    try { s.onFrame && s.onFrame(params.data); } catch (e) { /* the reporter is gone */ }
+    send(src.tabId, "Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {});
+    return;
+  }
   if (s && method === "Page.javascriptDialogOpening" && s.onDialog) {
     Promise.resolve(s.onDialog(params)).then((accept) =>
       send(src.tabId, "Page.handleJavaScriptDialog", { accept: accept !== false, promptText: params.defaultPrompt || "" })).catch(() => {});

@@ -53,7 +53,7 @@
       let hits = [];
       try {
         if (l.strategy === "role") hits = cands.filter((c) => (!l.role || c.role === l.role) && eq(c.name, l.value)).map((c) => els[c.uid - 1]);
-        else if (field[l.strategy]) hits = cands.filter((c) => eq(c[field[l.strategy]], l.value)).map((c) => els[c.uid - 1]);
+        else if (field[l.strategy]) hits = cands.filter((c) => eq(c[field[l.strategy]], l.value) && (l.strategy !== "label" || ["input", "select", "textarea"].includes(c.tag) || c.editable)).map((c) => els[c.uid - 1]);   // a label locator means the control, not the <label> itself
         else if (l.strategy === "css") hits = Array.from(document.querySelectorAll(l.value));
         else if (l.strategy === "xpath") { const r = document.evaluate(l.value, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < r.snapshotLength; i++) hits.push(r.snapshotItem(i)); }
       } catch (err) { continue; }
@@ -61,6 +61,12 @@
       if (hits.length === 1) return shape(hits[0], l.strategy);
     }
     return null;
+  };
+
+  // What the engines store about the element a step acted on (role, name, label, text, locators): a replay finds it again.
+  P.describeEl = (uid) => {
+    const e = el(uid); if (!e || !S() || !S().describe) return null;
+    try { const d = S().describe(e, null); delete d.anc; return d; } catch (err) { return null; }
   };
 
   P.exists = (uid) => !!el(uid) && el(uid).isConnected;

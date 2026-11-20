@@ -678,6 +678,131 @@ async def library_upload(request: Request, file: UploadFile = File(...), name: O
     return db.lib_put(_slug(name or t.name), json.loads(t.model_dump_json()), owner=_owner_of(request), project=_project(request))
 
 
+# --------------------------------------------------------------------- API: runs reported by the Chrome extension
+from ..extruns import ExtRuns  # noqa: E402
+EXT_RUNS = ExtRuns(ARTIFACTS)
+
+
+class ExtStart(BaseModel):
+    name: str = "Extension run"
+    steps: list[dict[str, Any]]
+    data: dict[str, Any] = {}
+    sensitive: list[str] = []
+    url: str = ""
+    source_run: Optional[str] = None                 # the run or library script this one replays
+
+
+def _ext_run_row(run_id: str, request: Request) -> dict:
+    row = db.raw_run(_safe(run_id))
+    if not row or (row.get("project") or "default") not in _projects_for(_user(request)):
+        raise HTTPException(404, "run not found")
+    if not authmod.can_manage(_user(request), row.get("owner")):
+        raise HTTPException(403, "Only the owner of this run or an admin can add to it")
+    return row
+
+
+@app.post("/api/ext/runs")
+async def ext_start(req: ExtStart, request: Request):
+    """The extension is about to run steps in the browser: open the run record (live view, dashboards and stats see it from now)."""
+    try:
+        steps = [Step(**s) for s in req.steps]
+    except Exception as e:
+        raise HTTPException(400, f"Bad steps: {e}")
+    owner, project = _owner_of(request), _project(request)
+    test = TestCase(name=req.name or "Extension run", base_url=req.url or None, steps=steps, data=req.data, sensitive=req.sensitive)
+    title = _display_name(test.name, req.data, test.sensitive)
+    test = test.model_copy(update={"title": title})
+    rid = new_run_id(title)
+    mode = "replay" if req.source_run or (steps and all(s.source == "recorded" for s in steps)) else "ai"
+    db.create_run({"run_id": rid, "test_name": title, "status": "running", "engine": "extension", "browser": "chrome",
+                   "agent": "Chrome extension", "mode": mode, "started_at": now_iso(), "total": len(steps),
+                   "config_json": "{}", "data_json": json.dumps(masked_data(req.data, req.sensitive)),
+                   "sensitive_json": json.dumps(req.sensitive), "source_run": req.source_run,
+                   "parser": "script" if mode == "replay" else "rules", "owner": owner, "project": project})
+    secrets = {}
+    for k in req.sensitive:
+        try:
+            v = lookup(req.data, k)
+            if v not in (None, "", MASK):
+                secrets[k] = v
+        except (KeyError, IndexError, ValueError):
+            pass
+    db.put_secrets(rid, secrets)
+    hub.run_project[rid] = project
+    EXT_RUNS.create(rid, test, mode)
+    await hub.broadcast({"type": "runs_changed"})
+    return {"run_id": rid}
+
+
+class ExtEvents(BaseModel):
+    events: list[dict[str, Any]]
+
+
+@app.post("/api/ext/runs/{run_id}/events")
+async def ext_events(run_id: str, body: ExtEvents, request: Request):
+    _ext_run_row(run_id, request)
+    loop = asyncio.get_running_loop()
+    for ev in body.events:
+        if ev.get("type") == "run_finished":
+            done = await loop.run_in_executor(None, EXT_RUNS.finish, run_id, ev)
+            await hub.broadcast({"type": "run_finished", "run_id": run_id, "status": done["status"], "healed": 0,
+                                 **({"error": done["error"]} if done.get("error") else {})})
+            await hub.broadcast({"type": "_finalize", "run_id": run_id})
+            continue
+        for out in EXT_RUNS.handle(run_id, ev):
+            await hub.broadcast(out)
+    return {"ok": True}
+
+
+class ExtFrames(BaseModel):
+    frames: list[dict[str, Any]]
+
+
+@app.post("/api/ext/runs/{run_id}/frames")
+async def ext_frames(run_id: str, body: ExtFrames, request: Request):
+    """Screencast frames of the tab under test: they become the run's video, and the newest one is the live view."""
+    _ext_run_row(run_id, request)
+    live = await asyncio.get_running_loop().run_in_executor(None, EXT_RUNS.add_frames, run_id, body.frames)
+    if live:
+        await hub.broadcast(live)
+    return {"ok": True}
+
+
+def _replay_payload(test: dict, secrets: dict) -> dict:
+    needs = []
+    for k in test.get("sensitive", []):
+        try:
+            cur = lookup(test.get("data", {}), k)
+        except (KeyError, IndexError, ValueError):
+            cur = None
+        if secrets.get(k) not in (None, ""):
+            test["data"] = setpath(test.get("data", {}), k, secrets[k])
+        elif cur in (None, "", MASK):
+            needs.append(k)
+    return {"test": test, "needs": needs}
+
+
+@app.get("/api/ext/replay/run/{run_id}")
+def ext_replay_run(run_id: str, request: Request):
+    """A past run's script for the extension to replay on the open tab. Its secrets come along only for its owner or an admin."""
+    row = db.raw_run(_safe(run_id))
+    if not row or (row.get("project") or "default") not in _projects_for(_user(request)):
+        raise HTTPException(404, "run not found")
+    p = ARTIFACTS / run_id / "script.json"
+    if not p.exists():
+        raise HTTPException(404, "that run has no script")
+    secrets = db.get_secrets(run_id) if authmod.can_manage(_user(request), row.get("owner")) else {}
+    return {**_replay_payload(json.loads(p.read_text(encoding="utf-8")), secrets), "run_id": run_id}
+
+
+@app.get("/api/ext/replay/library/{name}")
+def ext_replay_library(name: str, request: Request):
+    t = db.lib_get(name)
+    if t is None or (db.lib_meta(name) or {}).get("project", "default") not in _projects_for(_user(request)):
+        raise HTTPException(404)
+    return {**_replay_payload(t, {}), "library": name}
+
+
 # --------------------------------------------------------------------- API: recorder
 class RecordCompile(BaseModel):
     events: list[dict[str, Any]]

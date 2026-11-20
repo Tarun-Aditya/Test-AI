@@ -40,6 +40,30 @@ Switch the panel to **Record a flow**, press **Record on this tab** and use the 
 
 What it can't do: a video file (webm / mp4) has no page structure in it, so it can't be turned into steps without a vision model; record the flow instead. Scrolling, file uploads and mouse paths aren't recorded.
 
+## Every run is kept on the hub
+
+A run from the panel (typed scenario, recording or replay) is reported to the hub as it happens, and becomes a run like any other there:
+
+![An extension run on the hub: steps, video, report, replay](media/extension-run-on-hub.png)
+
+* **Live**: it shows in the hub's run list while it runs, and anyone with the hub open sees the steps and the tab's picture update live (the same live view as a run in the app).
+* **Evidence**: a screenshot per step, a **video** of the tab (Chrome's screencast of the tab, built into `video.webm`), `report.html`, `summary.json`. A failure is a failed run with the failing step's screenshot, message and video.
+* **History and stats**: it counts in the dashboard, the run list, filters and the SQL reporting views (engine `extension`, machine `Chrome extension`).
+* **A script you can replay**: `script.json` holds every step with the locators of the element the run actually acted on, plus generated Playwright and Selenium scripts. The first step opens the page the run started on.
+* **Secrets** are kept in the hub's vault and masked everywhere else, exactly like an app run. They are in none of the files.
+* Turn it off in Settings (**Send runs to the hub**) to run without leaving anything behind. If the hub can't be reached, the run still goes ahead where it can (see below) and just isn't reported.
+
+### Replay: from the app, from the extension
+
+| What | Replay in the app (Playwright / Selenium) | Replay in the extension |
+|---|---|---|
+| A run from the panel | **Replay** on its run page (or `POST /api/runs {replay_run_id}`) | panel → **From the hub** → Recent runs → ▶ |
+| A recording | Save to hub, then run it from the library | panel → **From the hub** → Saved scripts → ▶, or **Replay on this tab** right after recording |
+
+A replay in the app opens the start page and uses the stored locators (re-finding by description if a page changed). A replay in the extension does the same in your own tab. A replay is a run of its own on the hub, linked to the original (`source_run`). A saved script does not keep its secrets: the panel asks for them under Data; a replay of a past run by its owner gets them back from the vault.
+
+Finding an element by its *description* (a typed scenario) needs the hub, which ranks the candidates. Steps that carry a stored locator (recordings, replays) don't, so they still run when the hub is down; they just aren't reported.
+
 ## How it follows tabs
 
 The extension watches `tabs.onCreated` (with the opener), `onUpdated` and `onActivated`. When a step opens a tab from the one under test, the run attaches to the new tab, notes it as **Tab 2** in the panel, and later steps run there. Each step shows which tab it ran in.
@@ -61,9 +85,12 @@ The element finder is generated from the same Python source the Playwright and S
 * Cross-origin iframes (payment widgets): clicks and typing use in-page events there, not trusted browser input.
 * Closed shadow roots are only visible if you tick **Open closed shadow roots** in Settings (reload the page after).
 * File upload is not supported yet; drag and drop only works where the page listens to mouse events.
-* The hub must be reachable from the browser.
+* The hub must be reachable from the browser to run a typed scenario (to understand it and rank elements); recorded steps replay without it.
+* The video is Chrome's screencast of the tab being tested (about 10 frames a second, 1280×720). It starts with the run, so it shows the run, not the time before it.
 * With AI off the paragraph parser is rule based; wording it cannot place is reported as *not understood* instead of guessed.
 
 ## Tests
 
-`python -m pytest tests/test_extension.py tests/test_recorder.py` loads the extension into real Chromium and covers: a business paragraph on an open page, auto-picking the tab, new tab and popup following, hover, native dialogs, multi-page flows, secrets, cross-origin frames, closed shadow roots, hub sign-in, Stop and the error messages.
+`python -m pytest tests/test_extension.py tests/test_recorder.py tests/test_ext_reporting.py tests/test_extension_reporting.py` loads the extension into real Chromium and covers: a business paragraph on an open page, auto-picking the tab, new tab and popup following, hover, native dialogs, multi-page flows, secrets, cross-origin frames, closed shadow roots, hub sign-in, Stop and the error messages.
+
+`test_extension_reporting.py` also checks, against a real hub: the run, its live events, screenshots, a video whose last frame shows the page, the report, stats, the app replaying the extension's run with Playwright, a recording replayed by the app and the extension, secrets absent from the hub's files, a failure reported as one, reporting off, and a hub that's down.

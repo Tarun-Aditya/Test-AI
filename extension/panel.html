@@ -51,6 +51,9 @@
   <details id="datad"><summary>Data <span class="mut">(optional)</span></summary>
     <textarea id="data" spellcheck="false" placeholder="one per line:&#10;brand = Logitech&#10;password* = secret&#10;&#10;The page you are on is ${base_url}. A * after the name hides the value."></textarea>
   </details>
+  <details id="hubd" class="hubd"><summary>From the hub <span class="mut">(replay a saved script or a past run)</span></summary>
+    <div id="hublists" class="hublists">Loading…</div>
+  </details>
   <div class="actions">
     <button id="preview" class="btn">Preview steps</button>
     <button id="run" class="btn primary">▶ Run on this tab</button>
@@ -61,6 +64,7 @@
 <div id="msg" class="msg" hidden></div>
 <section id="notes" class="callout" hidden></section>
 <section id="banner" class="banner" hidden></section>
+<div id="reportline" class="reportline" hidden></div>
 <section id="tabs" class="tabs" hidden></section>
 <ol id="steps" class="steps"></ol>
 

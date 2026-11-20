@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 const ask = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, (r) => res(r || { ok: false, error: chrome.runtime.lastError ? chrome.runtime.lastError.message : "No answer" })));
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-let runId = null, tabId = null, previewed = null, startedAt = 0;
+let runId = null, lastRun = null, tabId = null, previewed = null, startedAt = 0;
 
 // ------------------------------------------------------------------------------------------------ the tab we automate
 async function refreshTarget() {
@@ -77,6 +77,7 @@ function tabsList(list) {
 // ------------------------------------------------------------------------------------------------ events from the run
 const seenTabs = [];
 function onEvent(ev) {
+  if (ev && ev.type === "report_done" && ev.runId === lastRun) return reportLine({ run: ev.hubRun, ok: ev.ok, error: ev.error });      // arrives after the run ended
   if (!ev || !ev.runId || ev.runId !== runId) return;
   switch (ev.type) {
     case "run_started": seenTabs.length = 0; seenTabs.push(ev.tab); tabsList(seenTabs); break;
@@ -87,6 +88,16 @@ function onEvent(ev) {
   }
 }
 chrome.runtime.onMessage.addListener(onEvent);
+
+let hubBase = "";
+async function reportLine(r) {
+  const el = $("reportline"); el.hidden = false;
+  if (!hubBase) hubBase = ((await ask({ type: "settings" })).settings || {}).hub || "";
+  const url = r.run ? `${hubBase}/#/runs/${encodeURIComponent(r.run)}` : "";
+  if (r.error && !r.run) el.innerHTML = `Not reported to the hub: ${esc(r.error)}`;
+  else if (r.saving) el.innerHTML = `Reporting to the hub… <a href="${esc(url)}" target="_blank">live view</a>`;
+  else el.innerHTML = `${r.ok ? "Saved on the hub:" : "Saved on the hub (some of it didn't arrive):"} <a href="${esc(url)}" target="_blank">report, video and replay</a>`;
+}
 
 function finish(ev) {
   setBusy(false);
@@ -114,22 +125,49 @@ $("preview").onclick = async () => {
 };
 
 $("run").onclick = async () => {
-  showError(""); $("banner").hidden = true; $("tabs").hidden = true;
+  showError(""); $("banner").hidden = true; $("tabs").hidden = true; $("reportline").hidden = true;
   const text = $("text").value.trim(); if (!text) return showError("Paste a scenario first.");
   const t = await refreshTarget(); if (!t) return showError("Open the website you want to test in a tab first.");
   const { data, sensitive } = parseData();
   const same = previewed && previewed.text === text;
   setBusy(true); startedAt = Date.now();
-  const r = await ask(same ? { type: "run", tabId: t.id, steps: previewed.steps, data: { ...previewed.data, ...data }, sensitive: [...new Set([...previewed.sensitive, ...sensitive])] }
+  const r = await ask(same ? { type: "run", tabId: t.id, steps: previewed.steps, data: { ...previewed.data, ...data }, sensitive: [...new Set([...previewed.sensitive, ...sensitive])], sourceRun: previewed.sourceRun, name: previewed.name }
                            : { type: "run", tabId: t.id, text, data, sensitive });
   if (!r.ok) { setBusy(false); return showError(r.error); }
-  runId = r.runId; renderPlan(r.plan); showNotes(r.notes, r.ignored);
+  runId = lastRun = r.runId; renderPlan(r.plan); showNotes(r.notes, r.ignored);
+  if (r.hubRun) reportLine({ saving: true, run: r.hubRun }); else if (r.reportError) reportLine({ error: r.reportError });
   chrome.storage.session.set({ text, dataLines: $("data").value }).catch(() => {});
 };
 
 $("stop").onclick = () => { if (runId) ask({ type: "stop", runId }); $("stop").disabled = true; setTimeout(() => { $("stop").disabled = false; }, 1500); };
 $("gear").onclick = () => chrome.runtime.openOptionsPage();
 $("text").oninput = () => { previewed = null; };
+
+// ------------------------------------------------------------------------------------------------ from the hub
+async function loadHubLists() {
+  const box = $("hublists"); box.textContent = "Loading…";
+  const r = await ask({ type: "hub-lists" });
+  if (!r.ok) { box.textContent = r.error; return; }
+  hubBase = hubBase || ((await ask({ type: "settings" })).settings || {}).hub || "";
+  const lib = (r.library || []).map((x) => `<div class="it"><span class="d"></span><span class="nm" title="${esc(x.name)}">${esc(x.test_name || x.name)} · ${x.steps} steps</span><span></span><button class="btn" data-k="library" data-id="${esc(x.name)}">▶ Replay</button></div>`).join("");
+  const runs = (r.runs || []).slice(0, 10).map((x) => `<div class="it"><span class="d ${esc(x.status)}"></span><span class="nm" title="${esc(x.test_name)}">${esc(x.test_name)}</span><a href="${esc(hubBase)}/#/runs/${encodeURIComponent(x.run_id)}" target="_blank">report</a><button class="btn" data-k="run" data-id="${esc(x.run_id)}">▶ Replay</button></div>`).join("");
+  box.innerHTML = `<h4>Saved scripts</h4>${lib || "<small>Nothing saved yet. Record a flow and press Save to hub.</small>"}<h4>Recent runs</h4>${runs || "<small>No runs yet.</small>"}`;
+}
+$("hubd").ontoggle = () => { if ($("hubd").open) loadHubLists(); };
+$("hublists").onclick = async (e) => {
+  const b = e.target.closest("button[data-id]"); if (!b) return;
+  showError(""); b.disabled = true;
+  const r = await ask({ type: "replay-load", kind: b.dataset.k, id: b.dataset.id }); b.disabled = false;
+  if (!r.ok) return showError(r.error);
+  const text = r.test.steps.map((x) => x.raw).join("\n");
+  $("text").value = text;
+  previewed = { text, steps: r.test.steps, data: r.test.data || {}, sensitive: r.test.sensitive || [], sourceRun: b.dataset.k === "run" ? b.dataset.id : "library:" + b.dataset.id, name: r.test.name };
+  if (r.needs && r.needs.length) {                      // a saved script doesn't keep its secrets: ask for them
+    $("data").value = r.needs.map((k) => `${k}* = `).join("\n"); $("datad").open = true;
+    return showError(`Enter ${r.needs.join(", ")} under Data, then press Run.`);
+  }
+  $("run").click();
+};
 
 // ------------------------------------------------------------------------------------------------ recorder
 let recTest = null, recLive = false, recTimer = null;
@@ -199,7 +237,7 @@ $("recsave").onclick = async () => {
 $("recreplay").onclick = () => {
   if (!recTest || !recTest.steps.length) return;
   const text = english(); $("text").value = text;
-  previewed = { text, steps: recTest.steps, data: recTest.data || {}, sensitive: recTest.sensitive || [] };
+  previewed = { text, steps: recTest.steps, data: recTest.data || {}, sensitive: recTest.sensitive || [], name: $("recname").value.trim() || "Recorded flow" };
   setMode("run"); $("run").click();
 };
 
@@ -212,7 +250,7 @@ $("recreplay").onclick = () => {
   if (rs.ok && rs.active) { setMode("rec"); recUi(true); if (await recCompile(rs.events)) renderRec(false); }
   const st = await ask({ type: "state" });                  // the panel was closed and reopened mid-run
   if (st.ok && st.runId && st.status === "running") {
-    runId = st.runId; setBusy(true); startedAt = Date.now();
+    runId = lastRun = st.runId; setBusy(true); startedAt = Date.now();
     const start = st.log.find((e) => e.type === "run_started"); if (start) renderPlan(Array.from({ length: start.total }, (_, i) => ({ raw: st.log.find((e) => e.type === "step_started" && e.index === i)?.raw || "Step " + (i + 1) })));
     st.log.forEach(onEvent);                                 // catch up with everything that happened while it was closed
   }

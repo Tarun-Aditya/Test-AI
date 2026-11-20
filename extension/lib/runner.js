@@ -26,10 +26,10 @@ const created = [];
 chrome.tabs.onCreated.addListener((t) => { created.push({ id: t.id, opener: t.openerTabId, windowId: t.windowId, at: Date.now() }); if (created.length > 50) created.shift(); });
 
 export class Run {
-  constructor({ id, tabId, steps, data = {}, sensitive = [], config = {}, onEvent }) {
+  constructor({ id, tabId, steps, data = {}, sensitive = [], config = {}, onEvent, onFrame }) {
     this.id = id; this.steps = steps; this.data = data; this.sensitive = new Set(sensitive);
     this.cfg = { timeout: 10000, dialogs: "accept", highlight: true, screenshots: true, ...config };
-    this.onEvent = onEvent; this.tabId = tabId; this.tabIds = new Set([tabId]); this.tabList = [tabId];
+    this.onEvent = onEvent; this.onFrame = onFrame; this.tabId = tabId; this.tabIds = new Set([tabId]); this.tabList = [tabId];
     this.cancelled = false; this.log = []; this.status = "running"; this.dialogPolicy = this.cfg.dialogs; this.lastDialog = "";
     this.held = null; this.map = new Map();
   }
@@ -86,7 +86,7 @@ export class Run {
   async runStep(i, step) {
     const t0 = Date.now(), action = step.action;
     this.emit("step_started", { index: i, raw: this.mask(step.raw || step.action), action, target: step.target, value: this.secretIn(step.value) ? "••••••" : this.mask(step.value) });
-    let status = "passed", error = null, picked = null;
+    let status = "passed", error = null, picked = null, fp = null;
     try {
       this.check();
       const live = { ...step, target: this.fill(step.target), value: this.fill(step.value) };
@@ -95,6 +95,7 @@ export class Run {
       if (needsEl) {
         loc = await this.resolve(live, live.target);
         picked = loc.pickedBy;
+        try { fp = await this.call(loc, "describeEl", [loc.uid]); } catch (e) { fp = null; }      // before acting: the page may navigate
         if (this.cfg.highlight) await this.call(loc, "box", [loc.uid, "located", `Step ${i + 1} · ${action.replace("_", " ")}`]);
       }
       if (this.held && PASSIVE.has(action)) await this.rehover();
@@ -110,7 +111,7 @@ export class Run {
     }
     let shot = null;
     if (this.cfg.screenshots) { try { shot = await cdp.screenshot(this.tabId); } catch (e) { /* tab gone */ } }
-    this.emit("step_finished", { index: i, status, error, picked, ms: Date.now() - t0, shot, tab: this.tabList.indexOf(this.tabId) + 1, url: (await this.tabInfo(this.tabId)).url });
+    this.emit("step_finished", { index: i, status, error, picked, el: fp, ms: Date.now() - t0, shot, tab: this.tabList.indexOf(this.tabId) + 1, url: (await this.tabInfo(this.tabId)).url });
     return status !== "failed";
   }
 
@@ -125,6 +126,7 @@ export class Run {
     if (!canInject(t.url)) throw new StepError("Chrome doesn't let extensions run on this kind of page. Open a normal website (http or https) in the tab and try again.");
     await cdp.attach(tabId, (d) => { this.lastDialog = d.message || ""; this.emit("dialog", { message: d.message, kind: d.type }); return this.dialogPolicy !== "dismiss"; });
     try { await chrome.tabs.update(tabId, { active: true }); } catch (e) { /* ok */ }
+    if (this.onFrame) cdp.startScreencast(tabId, (data) => { if (this.tabId === tabId) this.onFrame(data, Date.now()); }).catch(() => {});
   }
 
   async follow(newId) {                          // the scenario continues in the tab a step opened
