@@ -18,3 +18,5 @@ demo_repo/
 *.demo.log
 agent.env
 tools/demo_video/_work/
+parout/
+chkout/
