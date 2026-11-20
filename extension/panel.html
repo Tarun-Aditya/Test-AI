@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autopilot</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header>
+  <div class="logo" aria-hidden="true">✦</div>
+  <div class="brand"><b>Autopilot</b><small>Run a scenario on this page</small></div>
+  <button id="gear" class="icon" title="Hub address and sign-in" aria-label="Settings">⚙</button>
+</header>
+
+<section class="card" id="target">
+  <div class="row"><span class="dot" id="tdot"></span><div class="grow"><div id="ttitle" class="t">Looking for your tab…</div><div id="turl" class="u"></div></div></div>
+  <div id="hubline" class="hub"></div>
+</section>
+
+<section class="card">
+  <label for="text" class="lbl">Your scenario</label>
+  <textarea id="text" spellcheck="false" placeholder="Paste it as you have it. For example:&#10;&#10;The visitor enters the email test.user@example.com, a username testuser and age 30, then submits the registration form. The system should confirm that the account was created successfully."></textarea>
+  <details id="datad"><summary>Data <span class="mut">(optional)</span></summary>
+    <textarea id="data" spellcheck="false" placeholder="one per line:&#10;brand = Logitech&#10;password* = secret&#10;&#10;The page you are on is ${base_url}. A * after the name hides the value."></textarea>
+  </details>
+  <div class="actions">
+    <button id="preview" class="btn">Preview steps</button>
+    <button id="run" class="btn primary">▶ Run on this tab</button>
+    <button id="stop" class="btn danger" hidden>■ Stop</button>
+  </div>
+</section>
+
+<div id="msg" class="msg" hidden></div>
+<section id="notes" class="callout" hidden></section>
+<section id="banner" class="banner" hidden></section>
+<section id="tabs" class="tabs" hidden></section>
+<ol id="steps" class="steps"></ol>
+
+<footer>Real clicks and typing in your own tab. Chrome shows a "debugging this browser" bar while it runs.</footer>
+<div id="zoom" hidden><img alt="Step screenshot"></div>
+<script type="module" src="panel.js"></script>
+</body>
+</html>

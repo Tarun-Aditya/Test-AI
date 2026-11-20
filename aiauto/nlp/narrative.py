@@ -85,7 +85,7 @@ FIELDS: dict[str, str] = {
 SECRET_FIELDS = {"Password", "CVV", "Card number"}
 _FIELD_ALT = "|".join(f"(?P<f{i}>{rx})" for i, (_, rx) in enumerate(FIELDS.items()))
 _QUAL = r"(?:an?|the|his|her|their|my|our|valid|invalid|correct|incorrect|wrong|new|existing|registered|unique|random|proper|same|some)"
-_ITEM = re.compile(rf"^(?:{_QUAL}\s+)*(?:{_FIELD_ALT})(?:\s+(?:field|box|value|input))?\s*(?:(?:of|as|is|:|=|being|set\s+to|like|equal\s+to)\s*|\s+)(?P<v>.+)$", re.I)
+_ITEM = re.compile(rf"^(?:{_QUAL}\s+)*(?:{_FIELD_ALT})(?:\s+(?:field|box|value|input))?(?:\s+(?:of|as|is|being|set\s+to|like|equal\s+to)\s+|\s*[:=]\s*|\s+)(?P<v>.+)$", re.I)
 _ITEM_REV = re.compile(rf"^(?P<v>\S+)\s+(?:as|for|in|into)\s+(?:the\s+)?(?:{_FIELD_ALT})(?:\s+(?:field|box))?$", re.I)
 _ENTER = re.compile(r"^(?:enter|provide|supply|specify|fill\s+in|fill|type|input|key\s+in|use|give|put|set)\s+(?:in\s+)?"
                     r"(?:the\s+following\s+|these\s+|his\s+|her\s+|their\s+|valid\s+|invalid\s+|correct\s+|incorrect\s+)*(?:details|data|credentials|information|values)?\s*:?\s*(?P<rest>.+)$", re.I)
@@ -197,7 +197,8 @@ def _STORY(sent: str) -> str | None:
 
 # --------------------------------------------------------------------------------------------- clause level
 def _split_expectations(c: str) -> list[str]:
-    parts = re.split(r"\s*,?\s+(?:and|but|while|plus)\s+(?=(?:the|a|an|no|any|all|each|an?\s+error)\b[^,]*?\b(?:should|must|will|shall|is|are)\b)", c, flags=re.I)
+    parts = re.split(r"\s*,?\s+(?:and|but|while|plus)\s+(?=(?:the|a|an|no|any|all|each|an?\s+error)\b[^,]*?(?:\b(?:should|must|will|shall)\b|"
+                     r"\b(?:is|are)\s+(?:also\s+)?(?:shown|displayed|visible|present|listed|available|created|saved|opened|loaded|seen)\b))", c, flags=re.I)
     return [p for p in parts if p.strip()]
 
 

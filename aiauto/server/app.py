@@ -337,7 +337,38 @@ def health(request: Request):
 def api_parse(req: ParseRequest, request: Request):
     data = _data(req.data)
     test, info = _as_user(_owner_of(request), parse_text, req.text, data, use_llm=req.use_llm, sensitive=req.sensitive)
+    from ..data import Masker
+    mask = Masker(test.data, test.sensitive)
+    for st in test.steps:            # the wording each step came from may hold a password the author typed: never echo it back
+        st.origin, st.raw = mask(st.origin), mask(st.raw)
+    info["ignored"] = [mask(x) for x in info.get("ignored", [])]
+    info["notes"] = [mask(x) for x in info.get("notes", [])]
     return {"test": json.loads(test.model_dump_json()), **info}
+
+
+class LocateRequest(BaseModel):
+    step: dict[str, Any]                      # {action, target, value, nth, raw}
+    candidates: list[dict[str, Any]]          # what the browser extension found on the page (the engines' DOM-walk format)
+    target: Optional[str] = None              # the description to rank by (default: step.target)
+    use_llm: bool = True
+
+
+@app.post("/api/locate")
+def api_locate(req: LocateRequest, request: Request):
+    """Which element does this step mean? Same ranking, ties and AI tie-break as the Playwright / Selenium engines, for a
+    caller that only has the page: the Chrome extension snapshots the tab, asks here, and acts on the answer."""
+    from .. import locators as L
+    from ..models import Action
+    try:
+        step = Step(action=Action(req.step.get("action") or "click"), target=req.step.get("target"), value=req.step.get("value"),
+                    nth=req.step.get("nth"), raw=req.step.get("raw") or "")
+    except ValueError as e:
+        raise HTTPException(400, f"Bad step: {e}")
+    winner, ranked, problem = _as_user(_owner_of(request), L.choose, step, req.candidates, target=req.target,
+                                       use_llm=req.use_llm, on_ambiguous="fail")
+    near = [{"uid": c.get("uid"), "what": L.describe(c), "score": round(float(c.get("score") or 0), 2)} for c in ranked[:3]]
+    return {"uid": winner.get("uid") if winner else None, "score": round(float(winner.get("score") or 0), 2) if winner else None,
+            "picked_by": winner.get("picked_by") if winner else None, "problem": problem, "near": near}
 
 
 @app.post("/api/runs")

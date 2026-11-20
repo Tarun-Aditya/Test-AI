@@ -64,6 +64,15 @@ def test_a_password_in_the_text_never_stays_in_a_step_value():
         assert "password" in t.sensitive and t.data["password"] in ("Pass@1234", "abc12345", "secret"), text
 
 
+def test_a_value_that_starts_like_a_separator_word_stays_whole():
+    # "the name Asha" once became the value "ha": "as" was taken for the word 'as' in "name as Asha"
+    for name in ("Asha", "Isabel", "Ofelia", "Ashok", "Ivy", "Aston"):
+        got, _ = steps_of(f"The visitor enters the name {name} and age 30.")
+        assert got[0][2] == name and got[1][2] == "30", (name, got)
+    got, _ = steps_of("The visitor enters the name as Asha and the email is a@b.co.")
+    assert got == [("type", "Full name", "Asha"), ("type", "Email", "a@b.co")]
+
+
 def test_gherkin_and_numbered_lists_and_titles():
     got, d = steps_of("Scenario: Successful login\nGiven the user is on the login page\nWhen the user enters username alice and password "
                       "secret\nAnd clicks the Login button\nThen the dashboard should display the text Welcome alice")
@@ -138,3 +147,18 @@ def test_a_business_paragraph_runs_end_to_end(engine, tmp_path):
         assert t.data["password"] not in shown                                          # the made-up password is masked everywhere
     finally:
         srv.shutdown()
+
+
+def test_the_parse_endpoint_never_echoes_a_password_from_the_text(tmp_path, monkeypatch):
+    """The wording a step came from ('from your text: ...') is shown in the app and the extension: it must not hold the secret."""
+    import importlib
+    monkeypatch.setenv("AIAUTO_DB", str(tmp_path / "h.db"))
+    monkeypatch.setenv("AIAUTO_ARTIFACTS", str(tmp_path / "a"))
+    import aiauto.server.app as appmod
+    appmod = importlib.reload(appmod)
+    from fastapi.testclient import TestClient
+    with TestClient(appmod.app) as c:
+        r = c.post("/api/parse", json={"text": "The visitor enters age 30 and the password Zz9!secretvalue then submits it."},
+                   headers={"X-Requested-With": "autopilot"}).json()
+    assert "Zz9!secretvalue" not in str([r["test"]["steps"], r["notes"], r["ignored"]])
+    assert r["test"]["data"]["password"] == "Zz9!secretvalue" and r["test"]["sensitive"] == ["password"]    # the owner still gets the value to run with

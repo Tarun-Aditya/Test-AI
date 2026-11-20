@@ -2,11 +2,13 @@
 import json, os, re, subprocess, sys
 from pathlib import Path
 import imageio_ffmpeg
-from narration import SCENES
+import importlib
+SCENES = importlib.import_module(os.getenv("DEMO_NARRATION", "narration")).SCENES      # narration (robotic Piper script) or narration_natural
 
 HERE = Path(__file__).resolve().parent
 WORK = Path(os.getenv("DEMO_WORK", HERE / "_work")).resolve()
 FF = imageio_ffmpeg.get_ffmpeg_exe()
+NAME = os.getenv("DEMO_NAME", "e2e-demo")
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else WORK / "out").resolve(); OUT.mkdir(parents=True, exist_ok=True)
 t = json.load(open(WORK / "timeline.json"))
 marks = {m["name"]: m["t"] for m in t["marks"]}
@@ -50,8 +52,8 @@ def ts(x, sep):
     h, m, s = int(x // 3600), int(x % 3600 // 60), x % 60
     return f"{h:02d}:{m:02d}:{s:06.3f}".replace(".", sep)
 
-(OUT / "e2e-demo.srt").write_text("".join(f"{i}\n{ts(a, ',')} --> {ts(b, ',')}\n{txt}\n\n" for i, (a, b, txt) in enumerate(cues, 1)))
-(OUT / "e2e-demo.vtt").write_text("WEBVTT\n\n" + "".join(f"{ts(a, '.')} --> {ts(b, '.')}\n{txt}\n\n" for a, b, txt in cues))
+(OUT / f"{NAME}.srt").write_text("".join(f"{i}\n{ts(a, ',')} --> {ts(b, ',')}\n{txt}\n\n" for i, (a, b, txt) in enumerate(cues, 1)))
+(OUT / f"{NAME}.vtt").write_text("WEBVTT\n\n" + "".join(f"{ts(a, '.')} --> {ts(b, '.')}\n{txt}\n\n" for a, b, txt in cues))
 
 # ------------------------------------------------------------------ audio: each scene's voice at its scene start
 inputs, filt = [], []
@@ -64,17 +66,17 @@ filt.append(f"{mix}amix=inputs={len(SCENES)}:normalize=0,apad,atrim=0:{t['end']:
 
 style = ("FontName=Inter,FontSize=14,PrimaryColour=&H00FFFFFF,BackColour=&H96000000,BorderStyle=4,Outline=0,Shadow=0,"
          "MarginV=22,Alignment=2")
-srt = str(OUT / "e2e-demo.srt").replace(":", r"\:")
+srt = str(OUT / f"{NAME}.srt").replace(":", r"\:")
 filt.append(f"[0:v]fps=25,scale=1440:900:flags=lanczos:in_range=pc:out_range=tv,subtitles='{srt}':force_style='{style}',format=yuv420p[vout]")
 cmd = [FF, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "frames.txt", *inputs,
        "-filter_complex", ";".join(filt), "-map", "[vout]", "-map", "[aout]",
        "-c:v", "libx264", "-preset", "slow", "-crf", "27", "-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-movflags", "+faststart",
-       str(OUT / "e2e-demo.mp4")]
+       str(OUT / f"{NAME}.mp4")]
 subprocess.run(cmd, check=True, cwd=WORK)
 # the same video without captions burned in (players show the .vtt instead)
 cmd2 = [x if x != ";".join(filt) else ";".join(filt).replace(f",subtitles='{srt}':force_style='{style}'", "") for x in cmd]
-cmd2[-1] = str(OUT / "e2e-demo-nocaptions.mp4")
+cmd2[-1] = str(OUT / f"{NAME}-nocaptions.mp4")
 subprocess.run(cmd2, check=True, cwd=WORK)
-for f in ("e2e-demo.mp4", "e2e-demo-nocaptions.mp4"):
+for f in (f"{NAME}.mp4", f"{NAME}-nocaptions.mp4"):
     print(f, (OUT / f).stat().st_size // 1024, "KB")
 print("cues", len(cues), "length", t["end"])

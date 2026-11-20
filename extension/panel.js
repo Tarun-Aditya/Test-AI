@@ -1,0 +1,145 @@
+// The side panel: paste a scenario, run it on the tab you are on, watch it. All the work happens in the service worker.
+const $ = (id) => document.getElementById(id);
+const ask = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, (r) => res(r || { ok: false, error: chrome.runtime.lastError ? chrome.runtime.lastError.message : "No answer" })));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+let runId = null, tabId = null, previewed = null, startedAt = 0;
+
+// ------------------------------------------------------------------------------------------------ the tab we automate
+async function refreshTarget() {
+  const r = await ask({ type: "target" });
+  const t = r.ok && r.tab;
+  tabId = t ? t.id : null;
+  $("ttitle").textContent = t ? (t.title || t.url) : "No website tab found";
+  $("turl").textContent = t ? t.url : "Open the site you want to test in a tab.";
+  $("tdot").className = "dot " + (t && t.ok ? "ok" : "bad");
+  if (t && !t.ok) $("turl").textContent = t.url + " (Chrome doesn't let extensions run here)";
+  return t;
+}
+chrome.tabs.onActivated.addListener(() => { if (!runId) refreshTarget(); });
+chrome.tabs.onUpdated.addListener((id, info) => { if (!runId && (info.title || info.url || info.status === "complete")) refreshTarget(); });
+
+async function refreshHub() {
+  const r = await ask({ type: "health" });
+  const s = (await ask({ type: "settings" })).settings || {};
+  const line = $("hubline");
+  if (!r.ok) { line.className = "hub bad"; line.innerHTML = `Hub: ${esc(r.error)} <a href="#" id="opt">Settings</a>`; $("opt").onclick = (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); }; return false; }
+  const h = r.health || {};
+  line.className = "hub";
+  line.innerHTML = h.auth ? `Hub <b>${esc(s.hub)}</b>: <a href="#" id="opt">sign in</a> if it asks` : `Hub <b>${esc(s.hub)}</b> · connected`;
+  const o = $("opt"); if (o) o.onclick = (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); };
+  return true;
+}
+
+// ------------------------------------------------------------------------------------------------ data lines
+function parseData() {
+  const data = {}, sensitive = [];
+  for (const raw of $("data").value.split("\n")) {
+    const m = raw.match(/^\s*([\w.\-]+)\s*(\*?)\s*=\s*(.*?)\s*$/);
+    if (!m) continue;
+    data[m[1]] = m[3]; if (m[2]) sensitive.push(m[1]);
+  }
+  return { data, sensitive };
+}
+
+// ------------------------------------------------------------------------------------------------ rendering
+function showError(text) { const m = $("msg"); m.textContent = text; m.hidden = !text; }
+function showNotes(notes, ignored) {
+  const n = $("notes"); n.hidden = !(notes && notes.length) && !(ignored && ignored.length);
+  n.innerHTML = (notes && notes.length ? `<b>Check before you trust it</b><ul>${notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "")
+    + (ignored && ignored.length ? `<div class="ign">Left out as background: ${ignored.map((x) => "“" + esc(x) + "”").join(" · ")}</div>` : "");
+}
+function renderPlan(plan) {
+  $("steps").innerHTML = plan.map((p, i) => `<li class="step pending" id="s${i}"><span class="ic">${i + 1}</span><span class="tx">${esc(p.raw || p.action)}</span><span class="pill" hidden></span>${p.origin ? `<span class="meta" style="grid-column:2/4">from your text: “${esc(p.origin)}”</span>` : ""}</li>`).join("");
+}
+function setStep(i, status, extra = {}) {
+  const li = $("s" + i); if (!li) return;
+  li.className = "step " + status;
+  li.querySelector(".ic").textContent = { running: "●", passed: "✓", failed: "✕", skipped: "–" }[status] || (i + 1);
+  if (extra.tab > 1) { const p = li.querySelector(".pill"); p.hidden = false; p.textContent = "Tab " + extra.tab; }
+  li.querySelectorAll(".err,img,.mt").forEach((x) => x.remove());
+  if (extra.ms != null && status !== "running") { const s = document.createElement("span"); s.className = "meta mt"; s.style.gridColumn = "2/4"; s.textContent = (extra.ms / 1000).toFixed(1) + " s" + (extra.picked ? " · element: " + extra.picked : ""); li.append(s); }
+  if (extra.error) { const d = document.createElement("div"); d.className = "err"; d.textContent = extra.error; li.append(d); }
+  if (extra.shot) { const im = document.createElement("img"); im.src = extra.shot; im.alt = "Step " + (i + 1); im.onclick = () => { $("zoom").querySelector("img").src = extra.shot; $("zoom").hidden = false; }; li.append(im); }
+  if (status === "running") li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+$("zoom").onclick = () => { $("zoom").hidden = true; };
+
+function setBusy(on) {
+  $("run").hidden = on; $("preview").disabled = on; $("stop").hidden = !on; $("text").readOnly = on;
+}
+
+function tabsList(list) {
+  const el = $("tabs"); el.hidden = list.length < 2;
+  el.innerHTML = list.map((t, i) => `<div class="tab"><b>Tab ${i + 1}</b><span>${esc(t.title || t.url)}</span></div>`).join("");
+}
+
+// ------------------------------------------------------------------------------------------------ events from the run
+const seenTabs = [];
+function onEvent(ev) {
+  if (!ev || !ev.runId || ev.runId !== runId) return;
+  switch (ev.type) {
+    case "run_started": seenTabs.length = 0; seenTabs.push(ev.tab); tabsList(seenTabs); break;
+    case "step_started": setStep(ev.index, "running"); break;
+    case "step_finished": setStep(ev.index, ev.status, { error: ev.error, shot: ev.shot, ms: ev.ms, picked: ev.picked, tab: ev.tab }); break;
+    case "tab": seenTabs[ev.index - 1] = ev.tab; tabsList(seenTabs); break;
+    case "run_finished": finish(ev); break;
+  }
+}
+chrome.runtime.onMessage.addListener(onEvent);
+
+function finish(ev) {
+  setBusy(false);
+  const b = $("banner"); b.hidden = false; b.className = "banner " + ev.status;
+  const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+  b.innerHTML = `${{ passed: "✓ Passed", failed: "✕ Failed", cancelled: "■ Stopped" }[ev.status] || ev.status}<small>${secs} s${ev.tabs && ev.tabs.length > 1 ? " · " + ev.tabs.length + " tabs" : ""}</small>`;
+  if (ev.error) showError(ev.error);
+  if (ev.tabs) tabsList(ev.tabs);
+  runId = null; refreshTarget();
+}
+
+// ------------------------------------------------------------------------------------------------ buttons
+$("preview").onclick = async () => {
+  showError(""); $("banner").hidden = true;
+  const text = $("text").value.trim(); if (!text) return showError("Paste a scenario first.");
+  $("preview").disabled = true;
+  const r = await ask({ type: "preview", text, ...parseData() });
+  $("preview").disabled = false;
+  if (!r.ok) return showError(r.error);
+  previewed = { text, steps: r.test.steps, data: r.test.data, sensitive: r.test.sensitive };
+  renderPlan(r.test.steps.map((s) => ({ raw: s.raw, origin: s.origin, action: s.action })));
+  showNotes(r.notes, r.ignored);
+  if (r.unparsed && r.unparsed.length) showError("Not understood: " + r.unparsed.join(" · "));
+  $("tdot").className = "dot " + (r.tab.ok ? "ok" : "bad");
+};
+
+$("run").onclick = async () => {
+  showError(""); $("banner").hidden = true; $("tabs").hidden = true;
+  const text = $("text").value.trim(); if (!text) return showError("Paste a scenario first.");
+  const t = await refreshTarget(); if (!t) return showError("Open the website you want to test in a tab first.");
+  const { data, sensitive } = parseData();
+  const same = previewed && previewed.text === text;
+  setBusy(true); startedAt = Date.now();
+  const r = await ask(same ? { type: "run", tabId: t.id, steps: previewed.steps, data: { ...previewed.data, ...data }, sensitive: [...new Set([...previewed.sensitive, ...sensitive])] }
+                           : { type: "run", tabId: t.id, text, data, sensitive });
+  if (!r.ok) { setBusy(false); return showError(r.error); }
+  runId = r.runId; renderPlan(r.plan); showNotes(r.notes, r.ignored);
+  chrome.storage.session.set({ text, dataLines: $("data").value }).catch(() => {});
+};
+
+$("stop").onclick = () => { if (runId) ask({ type: "stop", runId }); $("stop").disabled = true; setTimeout(() => { $("stop").disabled = false; }, 1500); };
+$("gear").onclick = () => chrome.runtime.openOptionsPage();
+$("text").oninput = () => { previewed = null; };
+
+// ------------------------------------------------------------------------------------------------ start
+(async () => {
+  // the scenario you were working on stays while the browser is open (never written to disk: it may hold a password)
+  try { const s = await chrome.storage.session.get({ text: "", dataLines: "" }); $("text").value = s.text; $("data").value = s.dataLines; } catch (e) { /* no session storage */ }
+  await refreshTarget(); refreshHub();
+  const st = await ask({ type: "state" });                  // the panel was closed and reopened mid-run
+  if (st.ok && st.runId && st.status === "running") {
+    runId = st.runId; setBusy(true); startedAt = Date.now();
+    const start = st.log.find((e) => e.type === "run_started"); if (start) renderPlan(Array.from({ length: start.total }, (_, i) => ({ raw: st.log.find((e) => e.type === "step_started" && e.index === i)?.raw || "Step " + (i + 1) })));
+    st.log.forEach(onEvent);                                 // catch up with everything that happened while it was closed
+  }
+})();

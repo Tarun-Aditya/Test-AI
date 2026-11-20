@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Autopilot settings</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --fg:#1c2230; --mut:#677085; --line:#e3e6ec; --acc:#4f46e5; --ok:#15803d; --bad:#b91c1c; }
+@media (prefers-color-scheme: dark) { :root { --bg:#11141a; --card:#1a1e26; --fg:#e6e8ee; --mut:#9aa2b2; --line:#2a303b; --acc:#818cf8; --ok:#4ade80; --bad:#f87171; } }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 Inter,system-ui,sans-serif; }
+main { max-width:560px; margin:0 auto; padding:28px 16px 48px; } h1 { font-size:22px; margin:0 0 4px; } p { color:var(--mut); margin:0 0 18px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; } h2 { font-size:15px; margin:0 0 10px; }
+label { display:block; font-weight:600; margin:10px 0 4px; } input { width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+small { color:var(--mut); } .row { display:flex; gap:8px; align-items:center; margin-top:12px; }
+button { border:0; background:var(--acc); color:#fff; padding:8px 14px; border-radius:8px; font:inherit; font-weight:600; cursor:pointer; } button.ghost { background:var(--bg); color:var(--fg); border:1px solid var(--line); }
+#status { margin-left:6px; } .ok { color:var(--ok); } .bad { color:var(--bad); }
+</style></head>
+<body><main>
+  <h1>Autopilot settings</h1>
+  <p>The extension runs your scenario in the page; the hub understands it and picks the elements.</p>
+  <section class="card"><h2>Hub</h2>
+    <label for="hub">Hub address</label><input id="hub" placeholder="http://localhost:8000" autocomplete="off">
+    <small>Start one with <code>./start.sh</code> (or <code>start.bat</code>), or use your team's hub.</small>
+    <label for="project">Project</label><input id="project" placeholder="default" autocomplete="off">
+    <div class="row"><button id="save">Save and test</button><span id="status"></span></div>
+  </section>
+  <section class="card"><h2>Pages</h2>
+    <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400"><input id="shadow" type="checkbox" style="width:auto;margin-top:4px">
+      <span><b>Open closed shadow roots</b><br><small>Some components hide their insides in a "closed" shadow root, which no tool can see into. This makes them open on every page, before the page's own scripts run, so elements inside can be found. Takes effect on pages you load after turning it on.</small></span></label>
+    <div class="row"><span id="sstatus"></span></div>
+  </section>
+  <section class="card"><h2>Sign in</h2>
+    <small>Only if the hub has accounts. Your password is sent to the hub once; Chrome keeps the sign-in cookie. The extension never stores it.</small>
+    <label for="u">Username</label><input id="u" autocomplete="username">
+    <label for="p">Password</label><input id="p" type="password" autocomplete="current-password">
+    <div class="row"><button id="login">Sign in</button><span id="lstatus"></span></div>
+  </section>
+</main><script type="module" src="options.js"></script></body></html>

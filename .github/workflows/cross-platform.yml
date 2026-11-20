@@ -6,7 +6,7 @@ name: cross-platform browsers
 on:
   push:
     paths: ["aiauto/**", "tests/**", "requirements.txt", "setup.sh", "setup.bat", "start.sh", "start.bat", "agent.sh", "agent.bat",
-            ".github/workflows/cross-platform.yml"]
+            "extension/**", "tools/build_extension.py", ".github/workflows/cross-platform.yml"]
   workflow_dispatch:
 
 jobs:
@@ -41,7 +41,11 @@ jobs:
       - name: Remote agents, parallel slots, grids, cancel
         run: python -m pytest -q tests/test_agent.py -rs
       - name: Unit tests
-        run: python -m pytest -q tests/test_parsing.py tests/test_llm.py -rs
+        run: python -m pytest -q tests/test_parsing.py tests/test_llm.py tests/test_narrative.py -rs
+      - name: Chrome extension (generated files up to date, real Chromium with the extension loaded)
+        run: |
+          python tools/build_extension.py --check
+          python -m pytest -q tests/test_extension.py -rs
 
   # The one-step setup a new user runs (setup.sh / setup.bat), the demo data and the hub starting with it
   setup-scripts:

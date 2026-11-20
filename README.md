@@ -73,6 +73,7 @@ Docker instead: `docker compose up --build`. Full instructions: **[Getting start
 | [Feature tour](docs/features.md) | Screenshots and recordings of every feature |
 | [Deployment](docs/deployment.md) | Every mode: one computer, Docker, team server, agents on Windows / macOS / Linux / Docker, grids, HTTPS |
 | [User guide](docs/user-guide.md) | Writing tests, data and iterations, runs, replay, scripts, logins, accounts |
+| [Chrome extension](docs/chrome-extension.md) | Paste a scenario on the page you have open; it runs right there, following new tabs |
 | [Architecture](docs/architecture.md) | The parts, the life of a run, element finding, AI, security, code map |
 | [All diagrams](docs/diagrams.md) | Every block diagram in one place (20) |
 | [Database](docs/database.md) | Demo data, tables, reporting views, example SQL, backup |
