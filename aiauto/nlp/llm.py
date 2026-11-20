@@ -53,6 +53,26 @@ person would perform, including the implicit ones: searching means typing into t
 "log in as X" means typing the username, typing the password and clicking the sign-in button, "add it to the
 cart" means clicking the Add to Cart button, "make sure / I should see / check that" means an assertion.
 
+The description is often written by a business analyst, in business and functional language, with no quotes and no
+step format: a paragraph in the third person ("The visitor lands on the sign up page and enters a valid email address
+test.user@example.com, a username testuser, age 30 and a password of at least 8 characters, then submits the registration
+form. The system should confirm that the account was created successfully."). Read it for what the person does and what
+should happen, and split it into steps yourself:
+- Background and framing ("As a customer I want ...", a title, "Scenario:", preconditions that need no action) are not
+  steps: leave them out.
+- Pull each value out of the sentence and pair it with its field: "username alice and password secret", "age 30",
+  "picks India as the country" are three type steps and a select.
+- A page named without an address ("lands on the sign up page") is a navigate step with value ${base_url}; use a real
+  URL only when the text contains one.
+- "submits the form" is a click on its submit button (target "Submit button" unless the text names the button).
+- Expected results become assertions on the short, distinctive text the page would show, not the whole sentence:
+  "the system should confirm that the account was created successfully" -> assert_text "account created".
+  "no account should be created" or "must not be shown" -> assert_no_text. An expectation that names no concrete text
+  ("the product name should be displayed") has nothing to assert: leave it out rather than inventing text.
+- A password, PIN or card number the text gives is data, not an instruction to repeat: use the placeholder ${password}
+  (${pin}, ${card_number}) as the value and never copy the literal into a step. When the text only describes it
+  ("a password of at least 8 characters"), use ${password} as well.
+
 For each step output:
 - action: one of the allowed enum values.
 - target: a short natural-language description of the element exactly as a human would identify it on screen

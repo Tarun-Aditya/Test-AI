@@ -99,6 +99,7 @@ export function runConfig(f) {
 }
 
 export const EXAMPLES = {
+  "Sign up (business paragraph)": "The visitor lands on the sign up page and enters a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters, then submits the registration form. The system should confirm that the account was created successfully.",
   "Shop (natural English)": "Go to ${base_url}/index.html, search for a ${product} and open the first ${brand} result. Add ${qty} of them to the cart, then go to the cart and make sure it shows ${brand}.",
   "Login (natural English)": "Open https://example.com/login and log in as ${user.email} with ${user.password}. Make sure the page says Welcome, then sign out.",
   "Shop: step by step": 'Open ${base_url}/index.html\nClick Accept cookies if shown\nType "${product}" into the search box\nPress Enter\nVerify page contains "results for"\nClick the first result containing "${brand}"\nSelect "${qty}" from Quantity\nClick Add to Cart button\nVerify page contains "Added to Cart"\nClick Go to Cart\nVerify page contains "Subtotal (${qty} items)"',

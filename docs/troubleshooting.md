@@ -18,6 +18,9 @@
 
 | Problem | Fix |
 |---|---|
+| "Some sentences were not understood" for a paragraph | Rewrite just that sentence with one action ("The user enters ...", "Click ..."), or turn AI on. Background sentences are left out on their own; only a sentence that asks for an action nothing recognised is reported |
+| The breakdown has `${base_url}` and "no value for base_url" | The text says "the sign up page" but not where it is: set `base_url` under Test data to that page's address |
+| A check from my paragraph fails although the page looks right | The paragraph's wording differs from the page's ("age must be between 18 and 99" vs "Age must be 18-99"). Edit the check to the exact text; the *Check the wording* note marks these |
 | `Could not identify element for '...'` | The error lists the closest candidates. Name the element as it appears on the page (its label, button text or placeholder), add its kind (`the Search button`), or an ordinal (`the second ...`). Check the step's screenshot: is the element on screen yet? Add `Wait for "..." to appear` before it |
 | `Ambiguous '...': N different elements match equally well` | Be more specific: an ordinal (`the first "Add to cart" button`), context (`the View button for order 1002`), or the element's own text. With AI configured, ties are settled by the AI |
 | A check fails but the text is visible in the screenshot | Text that appears late: add `Wait for "..." to appear`, or raise the step timeout (Studio → Settings). For text in a hover menu, the hover is held for the checks that follow it, so check right after the hover |

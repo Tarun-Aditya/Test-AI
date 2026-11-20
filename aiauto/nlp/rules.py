@@ -220,29 +220,57 @@ def _normalize_key(k: str) -> str:
 
 
 def parse(text: str) -> tuple[list[Step], list[str]]:
-    """Free-form English or step-per-line text -> (steps, unparsed clauses).
+    """Free-form English or step-per-line text -> (steps, unparsed clauses). See parse_detailed for the rest."""
+    d = parse_detailed(text)
+    return d["steps"], d["unparsed"]
 
-    The text is split into single-action clauses (prose.clauses); natural intents such as
-    "search for X", "log in as U with P", "add it to the cart", "make sure it shows X" are
-    expanded into step sentences (prose.expand); each sentence is then matched by PATTERNS."""
-    from . import prose
+
+def parse_detailed(text: str) -> dict:
+    """Free-form English, from a one-line step to a business paragraph -> steps and what was learned on the way.
+
+    {"steps", "unparsed": clauses nothing understood, "ignored": background sentences ("As a customer I want ..."),
+     "notes": things to check (paraphrased messages, a missing page address), "data": values lifted out of the text
+     (passwords as masked ${...}, the base_url to fill in), "sensitive": the keys of data that must be masked}
+
+    Three passes: narrative.normalize (third person -> imperative, background dropped), prose.clauses (single-action
+    clauses), then per clause narrative.rewrite (business forms: first page, several fields in one sentence, "the system
+    should confirm ..."), prose.expand (natural intents: search, log in, add to cart) and the PATTERNS."""
+    from . import narrative, prose
+    ctx = narrative.Context()
     steps: list[Step] = []
     unparsed: list[str] = []
-    for clause in prose.clauses(text):
+
+    def one(clause: str, origin: str) -> list[Step] | None:
         expanded = prose.expand(clause)
         sentences = expanded or [clause]
-        parsed = [parse_sentence(s) for s in sentences]
+        parsed = [parse_sentence(x) for x in sentences]
         if not all(parsed) and expanded:          # macro output failed: try the clause as written
             parsed = [parse_sentence(clause)]
         if not all(parsed):                       # short button-like phrase: click the control with that text
             expanded = prose.guess(clause)
-            parsed = [parse_sentence(s) for s in expanded] if expanded else [None]
+            parsed = [parse_sentence(x) for x in expanded] if expanded else [None]
         if not all(parsed):
-            unparsed.append(clause)
-            continue
+            return None
         for st in parsed:
             st.source = "rules"
-            if expanded or st.raw != clause:
-                st.origin = clause
-            steps.append(st)
-    return steps, unparsed
+            if expanded or st.raw != origin:
+                st.origin = origin
+        return parsed
+
+    for clause in prose.clauses(narrative.normalize(text, ctx)):
+        written = narrative.rewrite(clause, ctx)
+        if written is not None:                    # a business form: its sentences are in the quoted, imperative style
+            got = [one(x, clause) for x in written]
+            if all(g is not None for g in got):
+                steps.extend(st for g in got for st in g)
+                continue
+        got = one(clause, clause)
+        if got is None:                            # last resort: "open Laptops" is a click on Laptops
+            alt = narrative.fallback(clause)
+            got = [st for x in alt for st in (one(x, clause) or [])] if alt else None
+        if got is None:
+            unparsed.append(clause)
+            continue
+        steps.extend(got)
+    return {"steps": steps, "unparsed": unparsed, "ignored": ctx.ignored, "notes": list(dict.fromkeys(ctx.notes)),
+            "data": ctx.data, "sensitive": ctx.sensitive}

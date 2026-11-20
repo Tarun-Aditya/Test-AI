@@ -65,6 +65,7 @@ function Script() {
   const [busy, setBusy] = useState(false);
   const [unparsed, setUnparsed] = useState([]);
   const gutter = useRef(null);
+  const [understood, setUnderstood] = useState({ ignored: [], notes: [], added: [] });
   const lines = Math.max(1, form.text.split("\n").length);
   const breakDown = async () => {
     setBusy(true);
@@ -73,7 +74,21 @@ function Script() {
       const data = d.iterations ? { ...(d.data || {}), ...d.iterations[0].data } : d.data;
       const r = await api("/api/parse", { method: "POST", body: { text: form.text, data, sensitive: d.sensitive, use_llm: form.useLlm } });
       setUnparsed(r.unparsed);
-      setForm({ steps: r.test.steps, stepsText: form.text, stepsParser: r.parser.startsWith("llm") ? "ai" : "rules" });
+      setUnderstood({ ignored: r.ignored || [], notes: r.notes || [], added: Object.keys(r.data_added || {}) });
+      // values the paragraph gave (a password, say) go into Test data: masked ones stay masked, nothing is typed twice
+      const sens = new Set(r.test.sensitive || []);
+      const fresh = Object.entries(r.test.data || {}).filter(([k, v]) => !(k in (data || {})) && v !== "" && typeof v !== "object");
+      const patch = {};
+      if (fresh.length) {
+        if (form.dataMode === "iter") {
+          patch.iterCols = [...form.iterCols, ...fresh.map(([k]) => ({ key: k, sensitive: sens.has(k) }))];
+          patch.iterRows = form.iterRows.map((row) => ({ ...row, values: { ...row.values, ...Object.fromEntries(fresh.map(([k, v]) => [k, String(v)])) } }));
+        } else {
+          patch.rows = [...form.rows.filter((x) => x.k.trim() || x.v.trim()), ...fresh.map(([k, v]) => ({ k, v: String(v), s: sens.has(k) }))];
+          if (form.dataMode === "json") patch.dataMode = "table";
+        }
+      }
+      setForm({ ...patch, steps: r.test.steps, stepsText: form.text, stepsParser: r.parser.startsWith("llm") ? "ai" : "rules" });
     } catch (e) { toast(e.message, true); } finally { setBusy(false); }
   };
   const upload = async (file) => {
@@ -88,8 +103,8 @@ function Script() {
         <button className={form.srcMode === "lib" ? "on" : ""} onClick={() => setForm({ srcMode: "lib" })}>From library</button>
       </div>
       {form.srcMode === "text" ? <>
-        {!health.llm_on && <div className="note"><Icon name="spark" size={14} /><span>AI is off, so the built-in rules read your steps (one action per line works best).
-          Free-form wording needs AI: <a href="#/settings">set it up in Admin</a>.</span></div>}
+        {!health.llm_on && <div className="note"><Icon name="spark" size={14} /><span>AI is off, so the built-in rules read your text: a paragraph in business language works, and so does one action per line.
+          Looser wording is better with AI: <a href="#/settings">set it up in Admin</a>.</span></div>}
         <input className="name-in" value={form.name || ""} placeholder="Test name (optional; leave empty to name it from what the test does)" onChange={(e) => setForm({ name: e.target.value })} aria-label="Test name" />
         <div className="editor">
           <div className="gutter" ref={gutter}>{Array.from({ length: lines }, (_, i) => i + 1).join("\n")}</div>
@@ -108,6 +123,11 @@ function Script() {
           <span className="mut">{health.llm_on ? "Claude splits your description into steps" : "The rule parser splits your description into steps"}. Review them, then Run test.</span>
         </div>
         {unparsed.length > 0 && <div className="callout" style={{ background: "var(--bad-soft)", color: "var(--bad)" }}>Not understood: {unparsed.join(" · ")}</div>}
+        {form.steps && form.steps.length > 0 && form.stepsText === form.text && (understood.notes.length > 0 || understood.ignored.length > 0) &&
+          <div className="callout" style={{ marginTop: 10 }}>
+            {understood.notes.length > 0 && <><b>Check before you run</b><ul style={{ margin: "4px 0 6px 18px", padding: 0 }}>{understood.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></>}
+            {understood.ignored.length > 0 && <div className="mut"><b>Left out as background:</b> {understood.ignored.map((x) => "“" + x + "”").join(" · ")}</div>}
+          </div>}
         {form.steps && form.steps.length > 0 && <Breakdown />}
       </> : <>
         <div className="field"><span>Saved script</span>

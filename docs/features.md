@@ -6,6 +6,7 @@ Screenshots and recordings of every part of Autopilot. For the whole story in on
 The animated previews play here; each links to a full-quality MP4.
 
 - [Write a test and watch it run](#write-a-test-and-watch-it-run)
+- [A business paragraph instead of steps](#a-business-paragraph-instead-of-steps)
 - [Data-driven runs, both engines, several machines](#data-driven-runs-both-engines-several-machines)
 - [Every run: steps, video, scripts, report, replay](#every-run-steps-video-scripts-report-replay)
 - [What a run records](#what-a-run-records)
@@ -31,6 +32,15 @@ native locator and how the element was found.
 | The steps, editable before running | Running live |
 |---|---|
 | ![Studio with the test broken into steps](media/screens/studio-finished.png) | ![Live view while the test runs](media/screens/studio-live.png) |
+
+## A business paragraph instead of steps
+
+Paste the scenario as an analyst writes it: third person, no quotes, several fields in one sentence, expected results in
+plain words. It is split into steps with or without AI, secrets are lifted into masked Test data, and anything it can't
+know (the page address, paraphrased messages, expectations with no concrete text) is listed under *Check before you
+run*. Details: [User guide](user-guide.md#a-business-paragraph-instead-of-steps).
+
+![A business paragraph split into steps](media/screens/paragraph-breakdown.png)
 
 ## Data-driven runs, both engines, several machines
 

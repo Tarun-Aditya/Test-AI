@@ -1,6 +1,6 @@
 # Autopilot: AI test automation
 
-Write a browser test in plain English. Autopilot works out each step's **intent** (click, type, select, hover,
+Write a browser test in plain English, or paste the business scenario as a paragraph, with no quotes and no step format. Autopilot works out each step's **intent** (click, type, select, hover,
 drag, check…) and **value**, finds the element on the live page, and runs it with **Playwright or Selenium** using
 each engine's native locators. Every run leaves a **report, a video, screenshots, and a plain Playwright / Selenium
 script** you can replay on any engine, browser or machine, or take away as a standalone project, with no AI involved.

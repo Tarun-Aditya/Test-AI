@@ -1,0 +1,390 @@
+{
+  "name": "Log in → remember me checkbox → … → Laptops → check \"Laptops\"",
+  "title": null,
+  "base_url": "${base_url}",
+  "steps": [
+    {
+      "action": "navigate",
+      "target": null,
+      "value": "${base_url}",
+      "nth": null,
+      "raw": "Open ${base_url}",
+      "origin": "open the login page",
+      "source": "rules",
+      "locator": null,
+      "fallbacks": [],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "type",
+      "target": "Username",
+      "value": "alice",
+      "nth": null,
+      "raw": "Type \"alice\" into Username",
+      "origin": "provide username alice and password secret",
+      "source": "rules",
+      "locator": {
+        "strategy": "id",
+        "value": "u",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 4.4,
+        "description": "input role=textbox \"Username\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "role",
+          "value": "Username",
+          "role": "textbox",
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input role=textbox \"Username\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "label",
+          "value": "Username",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input role=textbox \"Username\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "type",
+      "target": "Password",
+      "value": "${password}",
+      "nth": null,
+      "raw": "Type ${password} into Password",
+      "origin": "provide username alice and password secret",
+      "source": "rules",
+      "locator": {
+        "strategy": "id",
+        "value": "p",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 4.4,
+        "description": "input type=password role=textbox \"Password\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "label",
+          "value": "Password",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=password role=textbox \"Password\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "placeholder",
+          "value": "Enter password",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=password role=textbox \"Password\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "check",
+      "target": "remember me checkbox",
+      "value": null,
+      "nth": null,
+      "raw": "Check the remember me checkbox",
+      "origin": "tick the remember me option",
+      "source": "rules",
+      "locator": {
+        "strategy": "css",
+        "value": "#remember",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 4.71,
+        "description": "input type=checkbox role=checkbox \"Remember me\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "id",
+          "value": "remember",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.71,
+          "description": "input type=checkbox role=checkbox \"Remember me\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "role",
+          "value": "Remember me",
+          "role": "checkbox",
+          "frames": [],
+          "shadow": [],
+          "score": 4.71,
+          "description": "input type=checkbox role=checkbox \"Remember me\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "select",
+      "target": "country",
+      "value": "India",
+      "nth": null,
+      "raw": "Select \"India\" from country",
+      "origin": "pick India as the country",
+      "source": "rules",
+      "locator": {
+        "strategy": "css",
+        "value": "#country",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 5.2,
+        "description": "select role=combobox \"Country\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "id",
+          "value": "country",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 5.2,
+          "description": "select role=combobox \"Country\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "role",
+          "value": "Country",
+          "role": "combobox",
+          "frames": [],
+          "shadow": [],
+          "score": 5.2,
+          "description": "select role=combobox \"Country\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "click",
+      "target": "login button",
+      "value": null,
+      "nth": null,
+      "raw": "click the login button",
+      "origin": null,
+      "source": "rules",
+      "locator": {
+        "strategy": "role",
+        "value": "Login",
+        "role": "button",
+        "frames": [],
+        "shadow": [],
+        "score": 4.31,
+        "description": "button type=button role=button \"Login\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "text",
+          "value": "Login",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.31,
+          "description": "button type=button role=button \"Login\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "css",
+          "value": "button.btn-primary",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.31,
+          "description": "button type=button role=button \"Login\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "assert_text",
+      "target": null,
+      "value": "welcome",
+      "nth": null,
+      "raw": "Verify page contains \"welcome\"",
+      "origin": "After login the dashboard greets the user with a welcome message for alice",
+      "source": "rules",
+      "locator": null,
+      "fallbacks": [],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "assert_text",
+      "target": null,
+      "value": "alice",
+      "nth": null,
+      "raw": "Verify page contains \"alice\"",
+      "origin": "After login the dashboard greets the user with a welcome message for alice",
+      "source": "rules",
+      "locator": null,
+      "fallbacks": [],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "click",
+      "target": "Products",
+      "value": null,
+      "nth": null,
+      "raw": "Click Products",
+      "origin": "go to the Products menu",
+      "source": "rules",
+      "locator": {
+        "strategy": "css",
+        "value": "#products-menu",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 4.0,
+        "description": "a role=link \"Products\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "id",
+          "value": "products-menu",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.0,
+          "description": "a role=link \"Products\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "role",
+          "value": "Products",
+          "role": "link",
+          "frames": [],
+          "shadow": [],
+          "score": 4.0,
+          "description": "a role=link \"Products\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "click",
+      "target": "Laptops",
+      "value": null,
+      "nth": null,
+      "raw": "Click Laptops",
+      "origin": "open Laptops",
+      "source": "rules",
+      "locator": {
+        "strategy": "role",
+        "value": "Laptops",
+        "role": "link",
+        "frames": [],
+        "shadow": [],
+        "score": 4.0,
+        "description": "a role=link \"Laptops\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "text",
+          "value": "Laptops",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.0,
+          "description": "a role=link \"Laptops\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "css",
+          "value": "div.sub > a",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.0,
+          "description": "a role=link \"Laptops\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "assert_text",
+      "target": null,
+      "value": "Laptops",
+      "nth": null,
+      "raw": "Verify page contains \"Laptops\"",
+      "origin": "the Laptops page is shown",
+      "source": "rules",
+      "locator": null,
+      "fallbacks": [],
+      "target_locator": null,
+      "optional": false
+    }
+  ],
+  "data": {
+    "base_url": "http://127.0.0.1:8765/demo_app.html",
+    "password": "••••••"
+  },
+  "sensitive": [
+    "password"
+  ],
+  "source_text": "User opens the login page, provides username alice and password secret, ticks the remember me option, picks India as the country and clicks the login button. After login the dashboard greets the user with a welcome message for alice. The user then goes to the Products menu and opens Laptops, and the Laptops page is shown.",
+  "engine": "selenium"
+}

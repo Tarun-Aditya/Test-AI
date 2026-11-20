@@ -402,6 +402,9 @@ def _norm_attr(f: str, v: str) -> str:
 def score(step: Step, c: dict, target: str | None = None) -> float:
     target = target if target is not None else (step.target or "")
     best = max((w * _sim(target, _norm_attr(f, c.get(f) or "")) for f, w in FIELD_WEIGHTS.items()), default=0.0)
+    ty = (c.get("type") or "").lower()
+    if ty in ("submit", "reset") and ty in set(_tokens(target)):
+        best = max(best, 0.9)      # "the submit button" names the control by its type; its label ("Create account") is anything
     c["_text_match"] = best
     s = best * 3.0
     # numbers the user wrote ("order 750", "row 3", "$25") must appear exactly; "Open order 5" is not order 750

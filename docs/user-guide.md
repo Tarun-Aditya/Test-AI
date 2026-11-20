@@ -74,10 +74,61 @@ What you can say:
 | Waiting | `Wait for "Hello World!" to appear`, `Wait 2 seconds`, `Pause 90 seconds for SSO login` |
 | Optional | `Click Accept cookies if shown`: skipped when it isn't there |
 
+### A business paragraph instead of steps
+
+You don't have to write steps. Paste the scenario the way an analyst writes it: third person, present tense, no quotes,
+several fields in one sentence, expected results in business words. **Break down into steps** splits it, with or
+without AI (the built-in rules handle this on their own):
+
+> The visitor lands on the sign up page and enters a valid email address test.user@example.com, a username testuser, age 30
+> and a password of at least 8 characters, then submits the registration form. The system should confirm that the account
+> was created successfully.
+
+| Step | What it understood |
+|---|---|
+| 1 | `navigate` to `${base_url}`: the text names a page but gives no address, so you set `base_url` under Test data |
+| 2–4 | `type` `test.user@example.com` into Email, `testuser` into Username, `30` into Age |
+| 5 | `type` `${password}` into Password: the text only describes it, so a value is made up and **masked** |
+| 6 | `click` the submit button |
+| 7 | `assert_text` `account created`: "the system should confirm that the account was created successfully" becomes the short text the page shows |
+
+![A business paragraph split into steps, with what to check before running](media/screens/paragraph-breakdown.png)
+
+What it does with ordinary business writing:
+
+- **Drops the framing.** User stories ("As a customer I want to ..."), `Scenario:` / `Feature:` titles and other background
+  are left out and listed as *Left out as background*, so nothing disappears unseen.
+- **Reads who does what.** "The visitor lands on", "User opens", "I choose", "The administrator signs in", Given / When / Then
+  / And keywords, numbered lists and bullets. "At checkout the customer enters ..." works too.
+- **Pulls values out of the sentence.** `username alice and password secret`, `age 30`, `the shipping address 12 Main Street,
+  city Pune, zip code 411001 and phone number 9876543210`, `picks India as the country`, `the amount 500 and the payee name Asha`.
+  Known fields (email, username, password, name, age, phone, address, city, zip, country, date of birth, card number,
+  quantity, ...) and any "field value" pair are typed into the field with that name.
+- **Turns expectations into checks.** "should show 2 items", "greets the user with a welcome message for alice",
+  "the Laptops page is shown", "no account should be created" (a check that the success text is *not* there). Both
+  "the system should confirm that X" and "an error message stating X must be displayed" become a check for X.
+- **Masks secrets by itself.** A password, PIN, CVV or card number written into the text never stays in a step: it moves to
+  Test data as a masked **Secret** (`${password}`), so it is hidden in screenshots, videos, reports and generated scripts.
+  This holds whether the rules or the AI wrote the steps.
+
+What it can't know, it says instead of guessing. The **Check before you run** box lists:
+
+- a page without an address ("lands on the sign up page"): fill in `base_url` (add the path if it isn't the home page);
+- wording that was paraphrased ("an error message stating that age must be between 18 and 99": the page may say
+  "Age must be 18-99"): edit the check to the exact message;
+- expectations that name no concrete text ("the product name should be displayed", "the balance should not be
+  negative"): *Not checked*, add the text the page should show;
+- "signs in" with no credentials: it adds `${username}` and `${password}` steps and asks you for the values (a real login's
+  password is never invented), and a password that is only described ("at least 8 characters") gets a made-up one;
+- an item in a list of fields it couldn't use ("a captcha"): *Not typed*.
+
+With **AI** on, the model reads the same paragraph (it is told how business wording works, and what not to invent), so
+looser or longer text works better; the notes, the masking of secrets and the review step are the same.
+
 Negative checks wait a moment (2 s, `AIAUTO_NO_TEXT_SETTLE`) so a late message still fails the step.
 Put values (text to type, choose, upload or check for) in quotes; element names need none (`Click Add to Cart`).
 `${name}` placeholders work with or without quotes. Apostrophes inside a word (`"Let's go"`, `O'Brien`) are fine.
-With AI on, looser wording works too; the table above is what the built-in rules understand with AI off.
+The table above is the step-by-step style. Business paragraphs work too (next section), with or without AI.
 
 ## Test data, iterations and secrets
 

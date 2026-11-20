@@ -1,0 +1,370 @@
+{
+  "run_id": "20261120-202152-log-in-submit-check-account-created-16b77b",
+  "test_name": "Log in \u2192 submit \u2192 check \"account created\"",
+  "engine": "playwright",
+  "status": "failed",
+  "started_at": "2026-11-20T20:21:52+00:00",
+  "finished_at": "2026-11-20T20:22:02+00:00",
+  "duration_ms": 10156,
+  "results": [
+    {
+      "index": 0,
+      "step": {
+        "action": "navigate",
+        "target": null,
+        "value": "${base_url}",
+        "nth": null,
+        "raw": "Open ${base_url}",
+        "origin": "land on the sign up page",
+        "source": "rules",
+        "locator": null,
+        "fallbacks": [],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 529,
+      "screenshot": "screenshots/step_01.png",
+      "error": null,
+      "healed": false,
+      "picked_by": null,
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "http://127.0.0.1:8765/signup/signup.html",
+      "dialog": null,
+      "locate_ms": null
+    },
+    {
+      "index": 1,
+      "step": {
+        "action": "type",
+        "target": "Email",
+        "value": "test.user@example.com",
+        "nth": null,
+        "raw": "Type \"test.user@example.com\" into Email",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "css",
+          "value": "#email",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=email role=textbox \"Email\" (Playwright snapshot)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "playwright",
+            "value": "internal:role=textbox[name=\"Email\"i]",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=email role=textbox \"Email\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": "get_by_role(\"textbox\", name=\"Email\")"
+          },
+          {
+            "strategy": "id",
+            "value": "email",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=email role=textbox \"Email\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 162,
+      "screenshot": "screenshots/step_02.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "test.user@example.com",
+      "dialog": null,
+      "locate_ms": 122
+    },
+    {
+      "index": 2,
+      "step": {
+        "action": "type",
+        "target": "Username",
+        "value": "testuser",
+        "nth": null,
+        "raw": "Type \"testuser\" into Username",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "css",
+          "value": "#username",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=text role=textbox \"Username\" (Playwright snapshot)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "playwright",
+            "value": "internal:role=textbox[name=\"Username\"i]",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=text role=textbox \"Username\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": "get_by_role(\"textbox\", name=\"Username\")"
+          },
+          {
+            "strategy": "id",
+            "value": "username",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=text role=textbox \"Username\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 68,
+      "screenshot": "screenshots/step_03.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "testuser",
+      "dialog": null,
+      "locate_ms": 39
+    },
+    {
+      "index": 3,
+      "step": {
+        "action": "type",
+        "target": "Age",
+        "value": "30",
+        "nth": null,
+        "raw": "Type \"30\" into Age",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "playwright",
+          "value": "internal:role=spinbutton[name=\"Age\"i]",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=number role=spinbutton \"Age\" (Playwright snapshot)",
+          "picked_by": "heuristic",
+          "code": "get_by_role(\"spinbutton\", name=\"Age\")"
+        },
+        "fallbacks": [
+          {
+            "strategy": "id",
+            "value": "age",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=number role=spinbutton \"Age\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": null
+          },
+          {
+            "strategy": "role",
+            "value": "Age",
+            "role": "spinbutton",
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=number role=spinbutton \"Age\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 76,
+      "screenshot": "screenshots/step_04.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "30",
+      "dialog": null,
+      "locate_ms": 47
+    },
+    {
+      "index": 4,
+      "step": {
+        "action": "type",
+        "target": "Password",
+        "value": "${password}",
+        "nth": null,
+        "raw": "Type ${password} into Password",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "css",
+          "value": "#password",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=password role=textbox \"Password\" (Playwright snapshot)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "playwright",
+            "value": "internal:role=textbox[name=\"Password\"i]",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=password role=textbox \"Password\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": "get_by_role(\"textbox\", name=\"Password\")"
+          },
+          {
+            "strategy": "id",
+            "value": "password",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=password role=textbox \"Password\" (Playwright snapshot)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 71,
+      "screenshot": "screenshots/step_05.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "\u2022\u2022\u2022\u2022\u2022\u2022",
+      "dialog": null,
+      "locate_ms": 37
+    },
+    {
+      "index": 5,
+      "step": {
+        "action": "click",
+        "target": "submit button",
+        "value": null,
+        "nth": null,
+        "raw": "Click the submit button",
+        "origin": "submit the registration form",
+        "source": "rules",
+        "locator": null,
+        "fallbacks": [],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "failed",
+      "duration_ms": 8291,
+      "screenshot": "screenshots/step_06.png",
+      "error": "StepError: Could not identify element for 'submit button'. Closest: button type=submit role=button \"Create account\" (score 1.1); label \"Email\" (score 0.7); label \"Username\" (score 0.7).",
+      "healed": false,
+      "picked_by": null,
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": null,
+      "dialog": null,
+      "locate_ms": null
+    },
+    {
+      "index": 6,
+      "step": {
+        "action": "assert_text",
+        "target": null,
+        "value": "account created",
+        "nth": null,
+        "raw": "Verify page contains \"account created\"",
+        "origin": "The system should confirm that the account was created successfully",
+        "source": "rules",
+        "locator": null,
+        "fallbacks": [],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "skipped",
+      "duration_ms": 0,
+      "screenshot": null,
+      "error": null,
+      "healed": false,
+      "picked_by": null,
+      "url": "",
+      "shown_value": null,
+      "dialog": null,
+      "locate_ms": null
+    }
+  ],
+  "video": null,
+  "artifacts": {
+    "report": "report.html",
+    "script": "script.json",
+    "playwright": "test_playwright.py",
+    "selenium": "test_selenium.py",
+    "data": "data.json",
+    "summary": "summary.json"
+  },
+  "agent": "local",
+  "mode": "ai",
+  "healed_steps": 0,
+  "timings": {
+    "snapshot": {
+      "count": 38,
+      "avg_ms": 7.9,
+      "max_ms": 77.6,
+      "total_ms": 301
+    },
+    "rank": {
+      "count": 38,
+      "avg_ms": 0.7,
+      "max_ms": 1.0,
+      "total_ms": 27
+    },
+    "verify": {
+      "count": 4,
+      "avg_ms": 50.1,
+      "max_ms": 90.0,
+      "total_ms": 200
+    },
+    "scroll_search": {
+      "count": 1,
+      "avg_ms": 5.2,
+      "max_ms": 5.2,
+      "total_ms": 5
+    },
+    "locate_step": {
+      "count": 4,
+      "avg_ms": 61.2,
+      "max_ms": 122,
+      "total_ms": 245
+    }
+  },
+  "session_saved": null
+}

@@ -1,0 +1,282 @@
+{
+  "name": "Search \"wireless mouse\" → first Logitech result → … → Cart → check \"2 items\"",
+  "title": null,
+  "base_url": "${base_url}",
+  "steps": [
+    {
+      "action": "navigate",
+      "target": null,
+      "value": "${base_url}",
+      "nth": null,
+      "raw": "Open ${base_url}",
+      "origin": "navigate to the DemoShop home page",
+      "source": "rules",
+      "locator": null,
+      "fallbacks": [],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "type",
+      "target": "search box",
+      "value": "wireless mouse",
+      "nth": null,
+      "raw": "Type \"wireless mouse\" into the search box",
+      "origin": "search for wireless mouse",
+      "source": "rules",
+      "locator": {
+        "strategy": "css",
+        "value": "input[aria-label=\"Search DemoShop\"]",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 4.8143,
+        "description": "input type=search role=searchbox \"Search DemoShop\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "role",
+          "value": "Search DemoShop",
+          "role": "searchbox",
+          "frames": [],
+          "shadow": [],
+          "score": 4.8143,
+          "description": "input type=search role=searchbox \"Search DemoShop\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "placeholder",
+          "value": "Search DemoShop",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.8143,
+          "description": "input type=search role=searchbox \"Search DemoShop\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "press",
+      "target": null,
+      "value": "Enter",
+      "nth": null,
+      "raw": "Press Enter",
+      "origin": "search for wireless mouse",
+      "source": "rules",
+      "locator": null,
+      "fallbacks": [],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "click",
+      "target": "Logitech",
+      "value": null,
+      "nth": 0,
+      "raw": "Click the first result containing \"Logitech\"",
+      "origin": "select the first Logitech product from the results",
+      "source": "rules",
+      "locator": {
+        "strategy": "role",
+        "value": "Logitech M331 Silent Plus Wireless Mouse, 2.4GHz",
+        "role": "link",
+        "frames": [],
+        "shadow": [],
+        "score": 3.1771,
+        "description": "a role=link \"Logitech M331 Silent Plus Wireless Mouse, 2.4GHz\"",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "css",
+          "value": "div.s-result-qqbslp:nth-of-type(1) > a",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 3.1771,
+          "description": "a role=link \"Logitech M331 Silent Plus Wireless Mouse, 2.4GHz\"",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "xpath",
+          "value": "/html[1]/body[1]/main[1]/div[2]/div[1]/a[1]",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 3.1771,
+          "description": "a role=link \"Logitech M331 Silent Plus Wireless Mouse, 2.4GHz\"",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "select",
+      "target": "quantity",
+      "value": "2",
+      "nth": null,
+      "raw": "Select \"2\" from quantity",
+      "origin": "choose quantity 2",
+      "source": "rules",
+      "locator": {
+        "strategy": "id",
+        "value": "qty",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 5.2,
+        "description": "select role=combobox \"Quantity\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "role",
+          "value": "Quantity",
+          "role": "combobox",
+          "frames": [],
+          "shadow": [],
+          "score": 5.2,
+          "description": "select role=combobox \"Quantity\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "label",
+          "value": "Quantity",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 5.2,
+          "description": "select role=combobox \"Quantity\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "click",
+      "target": "Add to Cart button",
+      "value": null,
+      "nth": null,
+      "raw": "Click Add to Cart button",
+      "origin": "add the item to my cart",
+      "source": "rules",
+      "locator": {
+        "strategy": "css",
+        "value": "input[type=\"submit\"][value=\"Add to Cart\"]",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 3.6579,
+        "description": "input type=submit role=button \"Add to Cart\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "css",
+          "value": "#add-to-cart-button",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 3.6579,
+          "description": "input type=submit role=button \"Add to Cart\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "id",
+          "value": "add-to-cart-button",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 3.6579,
+          "description": "input type=submit role=button \"Add to Cart\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "click",
+      "target": "Cart link",
+      "value": null,
+      "nth": null,
+      "raw": "Click the Cart link",
+      "origin": "open the cart",
+      "source": "rules",
+      "locator": {
+        "strategy": "xpath",
+        "value": "//*[((self::a and @href) or @role=\"link\") and (starts-with(normalize-space(.), \"Cart\") or starts-with(normalize-space(@aria-label), \"Cart\"))]",
+        "role": null,
+        "frames": [],
+        "shadow": [],
+        "score": 3.9575,
+        "description": "a role=link \"Cart, 0 items\" (role/name from Chrome accessibility tree)",
+        "picked_by": "heuristic",
+        "code": null
+      },
+      "fallbacks": [
+        {
+          "strategy": "xpath",
+          "value": "//*[starts-with(normalize-space(.), \"Cart\") and not(.//*[starts-with(normalize-space(.), \"Cart\")])]",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 3.9575,
+          "description": "a role=link \"Cart, 0 items\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        {
+          "strategy": "css",
+          "value": "a[aria-label=\"Cart, 0 items\"]",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 3.9575,
+          "description": "a role=link \"Cart, 0 items\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        }
+      ],
+      "target_locator": null,
+      "optional": false
+    },
+    {
+      "action": "assert_text",
+      "target": null,
+      "value": "2 items",
+      "nth": null,
+      "raw": "Verify page contains \"2 items\"",
+      "origin": "the subtotal should show 2 items and the product name should be displayed",
+      "source": "rules",
+      "locator": null,
+      "fallbacks": [],
+      "target_locator": null,
+      "optional": false
+    }
+  ],
+  "data": {
+    "base_url": "http://127.0.0.1:8765/shop/index.html"
+  },
+  "sensitive": [],
+  "source_text": "As a customer I want to buy a wireless mouse. I navigate to the DemoShop home page, search for wireless mouse and select the first Logitech product from the results. I choose quantity 2 and add the item to my cart. When I open the cart, the subtotal should show 2 items and the product name should be displayed.",
+  "engine": "selenium"
+}

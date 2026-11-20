@@ -20,7 +20,9 @@ VERBS = (r"open|go|navigate|visit|launch|browse|load|click|tap|press|hit|type|en
          r"check|uncheck|tick|untick|hover|mouse|scroll|wait|pause|verify|assert|ensure|confirm|make\s+sure|expect|validate|"
          r"search|look\s+for|find|log\s*in|login|sign\s*in|log\s*out|logout|sign\s*out|add|upload|attach|drag|move|accept|dismiss|allow|reject|close|"
          r"switch|refresh|reload|take|capture|submit|set|clear|double|right|see|should|view|use|apply|remove|delete|"
-         r"increase|decrease|proceed|continue|buy|purchase|checkout|book|save|sort|filter|expand|collapse|right-click|double-click")
+         r"increase|decrease|proceed|continue|buy|purchase|checkout|book|save|sort|filter|expand|collapse|right-click|double-click|"
+         r"provide|supply|specify|land|register|leave|key|arrive|access|sign\s*up|log\s*on|place|pay|transfer|send|create|update|edit|"
+         r"change|modify|download|print|share|post|schedule|cancel|approve|reject|assign|invite|activate|deactivate")
 
 _LEAD = re.compile(
     r"^(?:(?:and|so|also|now|then|next|first(?:ly)?|second(?:ly)?|finally|lastly|afterwards|after\s+that|once\s+(?:that'?s\s+)?(?:done|loaded|there)|"
@@ -86,7 +88,7 @@ def _nth2(m):
     return [f'Click the {m["ord"]} result containing "{_q(m["x"])}"']
 
 
-@macro(r"^(?:add|put)\s+(?:(?P<n>\d+|\$\{[^}]+\}|\{\{[^}]+\}\})\s+(?:of\s+(?:them|those|these|it)\s+|items?\s+|units?\s+|pieces?\s+)?)?(?:it|this|that|them|the\s+(?:product|item|first\s+one)|one)?\s*"
+@macro(r"^(?:add|put)\s+(?:(?P<n>\d+|\$\{[^}]+\}|\{\{[^}]+\}\})\s+(?:of\s+(?:them|those|these|it)\s+|items?\s+|units?\s+|pieces?\s+)?)?(?:[\w'&-]+\s+){0,5}?"
        r"(?:to|in|into)\s+(?:the\s+|my\s+)?(?:shopping\s+)?(?:cart|basket|bag|trolley)$")
 def _add_cart(m):
     return ([f'Select "{m["n"]}" from Quantity'] if m["n"] else []) + ["Click Add to Cart button"]

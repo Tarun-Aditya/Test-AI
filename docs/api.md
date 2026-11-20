@@ -56,7 +56,7 @@ Or skip the hub in CI: export the project once (run details → Export project),
 | Method & path | What it does |
 |---|---|
 | `POST /api/runs` | Start runs. Body: one of `text` (plain English), `steps` (edited steps), `library` (a library script's name) or `replay_run_id`; plus `name`, `data` (object, JSON string or `k=v;k2=v2`), `sensitive` (keys), `iterations` (`[{data, browser, engine, label}]`), `config` (run options, see `RunConfig`), `agent` (`"local"`, `"any"`, a machine name or a list), `spread` (`each` or `pool`), `engines` (`["playwright", "selenium"]`), `reuse_secrets`. Returns `{run_ids, batch_id, ...}` |
-| `POST /api/parse` | English → steps without running: `{text, data, sensitive, use_llm}` |
+| `POST /api/parse` | English → steps without running: `{text, data, sensitive, use_llm}`. Returns `test` (steps, and `data` / `sensitive` including values lifted out of the text, such as a masked `password`), `parser` (`rules` or `llm:…`), `unparsed` (sentences nothing understood), `ignored` (background sentences left out), `notes` (things to check) and `data_added` |
 | `GET /api/runs` | Run list, newest first. Query: `limit`, `status`, `q` (search), `mine` |
 | `GET /api/runs/{id}` | One run: steps, data (secrets masked), config, batch, `live`, `has_secrets` |
 | `GET /api/stats` | Overview numbers: totals, pass/fail, in progress, average time, 14-day trend |

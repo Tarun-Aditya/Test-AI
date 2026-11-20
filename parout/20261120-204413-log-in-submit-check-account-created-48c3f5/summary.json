@@ -1,0 +1,397 @@
+{
+  "run_id": "20261120-204413-log-in-submit-check-account-created-48c3f5",
+  "test_name": "Log in \u2192 submit \u2192 check \"account created\"",
+  "engine": "selenium",
+  "status": "passed",
+  "started_at": "2026-11-20T20:44:13+00:00",
+  "finished_at": "2026-11-20T20:44:15+00:00",
+  "duration_ms": 1753,
+  "results": [
+    {
+      "index": 0,
+      "step": {
+        "action": "navigate",
+        "target": null,
+        "value": "${base_url}",
+        "nth": null,
+        "raw": "Open ${base_url}",
+        "origin": "land on the sign up page",
+        "source": "rules",
+        "locator": null,
+        "fallbacks": [],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 64,
+      "screenshot": "screenshots/step_01.png",
+      "error": null,
+      "healed": false,
+      "picked_by": null,
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "http://127.0.0.1:8765/signup/signup.html",
+      "dialog": null,
+      "locate_ms": null
+    },
+    {
+      "index": 1,
+      "step": {
+        "action": "type",
+        "target": "Email",
+        "value": "test.user@example.com",
+        "nth": null,
+        "raw": "Type \"test.user@example.com\" into Email",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "css",
+          "value": "#email",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=email role=textbox \"Email\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "id",
+            "value": "email",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=email role=textbox \"Email\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          },
+          {
+            "strategy": "role",
+            "value": "Email",
+            "role": "textbox",
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=email role=textbox \"Email\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 200,
+      "screenshot": "screenshots/step_02.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "test.user@example.com",
+      "dialog": null,
+      "locate_ms": 82
+    },
+    {
+      "index": 2,
+      "step": {
+        "action": "type",
+        "target": "Username",
+        "value": "testuser",
+        "nth": null,
+        "raw": "Type \"testuser\" into Username",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "css",
+          "value": "#username",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=text role=textbox \"Username\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "id",
+            "value": "username",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=text role=textbox \"Username\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          },
+          {
+            "strategy": "role",
+            "value": "Username",
+            "role": "textbox",
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=text role=textbox \"Username\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 176,
+      "screenshot": "screenshots/step_03.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "testuser",
+      "dialog": null,
+      "locate_ms": 82
+    },
+    {
+      "index": 3,
+      "step": {
+        "action": "type",
+        "target": "Age",
+        "value": "30",
+        "nth": null,
+        "raw": "Type \"30\" into Age",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "id",
+          "value": "age",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=number role=spinbutton \"Age\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "role",
+            "value": "Age",
+            "role": "spinbutton",
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=number role=spinbutton \"Age\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          },
+          {
+            "strategy": "label",
+            "value": "Age",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=number role=spinbutton \"Age\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 141,
+      "screenshot": "screenshots/step_04.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "30",
+      "dialog": null,
+      "locate_ms": 66
+    },
+    {
+      "index": 4,
+      "step": {
+        "action": "type",
+        "target": "Password",
+        "value": "${password}",
+        "nth": null,
+        "raw": "Type ${password} into Password",
+        "origin": "enter a valid email address test.user@example.com, a username testuser, age 30 and a password of at least 8 characters",
+        "source": "rules",
+        "locator": {
+          "strategy": "css",
+          "value": "#password",
+          "role": null,
+          "frames": [],
+          "shadow": [],
+          "score": 4.4,
+          "description": "input type=password role=textbox \"Password\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "id",
+            "value": "password",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=password role=textbox \"Password\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          },
+          {
+            "strategy": "label",
+            "value": "Password",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 4.4,
+            "description": "input type=password role=textbox \"Password\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 160,
+      "screenshot": "screenshots/step_05.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "\u2022\u2022\u2022\u2022\u2022\u2022",
+      "dialog": null,
+      "locate_ms": 59
+    },
+    {
+      "index": 5,
+      "step": {
+        "action": "click",
+        "target": "submit button",
+        "value": null,
+        "nth": null,
+        "raw": "Click the submit button",
+        "origin": "submit the registration form",
+        "source": "rules",
+        "locator": {
+          "strategy": "role",
+          "value": "Create account",
+          "role": "button",
+          "frames": [],
+          "shadow": [],
+          "score": 3.8,
+          "description": "button type=submit role=button \"Create account\" (role/name from Chrome accessibility tree)",
+          "picked_by": "heuristic",
+          "code": null
+        },
+        "fallbacks": [
+          {
+            "strategy": "text",
+            "value": "Create account",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 3.8,
+            "description": "button type=submit role=button \"Create account\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          },
+          {
+            "strategy": "css",
+            "value": "button",
+            "role": null,
+            "frames": [],
+            "shadow": [],
+            "score": 3.8,
+            "description": "button type=submit role=button \"Create account\" (role/name from Chrome accessibility tree)",
+            "picked_by": "heuristic",
+            "code": null
+          }
+        ],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 136,
+      "screenshot": "screenshots/step_06.png",
+      "error": null,
+      "healed": false,
+      "picked_by": "heuristic",
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": null,
+      "dialog": null,
+      "locate_ms": 60
+    },
+    {
+      "index": 6,
+      "step": {
+        "action": "assert_text",
+        "target": null,
+        "value": "account created",
+        "nth": null,
+        "raw": "Verify page contains \"account created\"",
+        "origin": "The system should confirm that the account was created successfully",
+        "source": "rules",
+        "locator": null,
+        "fallbacks": [],
+        "target_locator": null,
+        "optional": false
+      },
+      "status": "passed",
+      "duration_ms": 12,
+      "screenshot": "screenshots/step_07.png",
+      "error": null,
+      "healed": false,
+      "picked_by": null,
+      "url": "http://127.0.0.1:8765/signup/signup.html",
+      "shown_value": "account created",
+      "dialog": null,
+      "locate_ms": null
+    }
+  ],
+  "video": null,
+  "artifacts": {
+    "report": "report.html",
+    "script": "script.json",
+    "playwright": "test_playwright.py",
+    "selenium": "test_selenium.py",
+    "data": "data.json",
+    "summary": "summary.json"
+  },
+  "agent": "local",
+  "mode": "ai",
+  "healed_steps": 0,
+  "timings": {
+    "snapshot": {
+      "count": 5,
+      "avg_ms": 14.4,
+      "max_ms": 19.4,
+      "total_ms": 72
+    },
+    "rank": {
+      "count": 5,
+      "avg_ms": 30.1,
+      "max_ms": 39.0,
+      "total_ms": 150
+    },
+    "verify": {
+      "count": 5,
+      "avg_ms": 23.3,
+      "max_ms": 29.1,
+      "total_ms": 116
+    },
+    "locate_step": {
+      "count": 5,
+      "avg_ms": 69.8,
+      "max_ms": 82,
+      "total_ms": 349
+    }
+  },
+  "session_saved": null
+}
