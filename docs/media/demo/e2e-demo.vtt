@@ -1,0 +1,182 @@
+WEBVTT
+
+00:00:00.438 --> 00:00:03.411
+This is Autopilot, a test automation platform.
+
+00:00:03.411 --> 00:00:06.281
+In the next few minutes we'll go end to end:
+
+00:00:06.281 --> 00:00:11.151
+write a test in plain English, run it on Playwright and Selenium, replay the script
+
+00:00:11.151 --> 00:00:15.662
+it generates, design test cases from a user story, and run everything across
+
+00:00:15.662 --> 00:00:16.738
+machines.
+
+00:00:17.638 --> 00:00:20.005
+Everything happens in the web app.
+
+00:00:20.005 --> 00:00:24.790
+After signing in, the overview shows the pass rate, what needs attention, what is
+
+00:00:24.790 --> 00:00:27.208
+running right now, and recent runs.
+
+00:00:28.108 --> 00:00:32.736
+In Studio, we describe a test the way we would explain it to a colleague.
+
+00:00:32.736 --> 00:00:34.751
+No code and no selectors.
+
+00:00:34.751 --> 00:00:39.924
+Open the shop, search for a wireless mouse, open the first Logitech result, add two
+
+00:00:39.924 --> 00:00:42.538
+to the cart, and check the subtotal.
+
+00:00:43.438 --> 00:00:47.047
+Break down into steps shows exactly how it was understood:
+
+00:00:47.047 --> 00:00:51.740
+one action per step, the element described in words, and the value it will use.
+
+00:00:51.740 --> 00:00:54.318
+You can edit the steps before running.
+
+00:00:55.218 --> 00:00:56.532
+Now we run it.
+
+00:00:56.532 --> 00:00:59.110
+The browser streams into the page live.
+
+00:00:59.110 --> 00:01:03.658
+Each element is found on the live page, outlined in green, and acted on with a
+
+00:01:03.658 --> 00:01:05.579
+native Playwright locator.
+
+00:01:05.579 --> 00:01:09.218
+Every step gets a screenshot, and the locator that found it.
+
+00:01:10.118 --> 00:01:12.159
+Every run has its own page.
+
+00:01:12.159 --> 00:01:14.514
+The steps with their screenshots.
+
+00:01:14.514 --> 00:01:16.188
+The video recording.
+
+00:01:16.188 --> 00:01:20.636
+The generated Playwright and Selenium scripts, with the whole run folder.
+
+00:01:20.636 --> 00:01:22.625
+A single file HTML report.
+
+00:01:22.625 --> 00:01:25.398
+And the data and settings that were used.
+
+00:01:27.150 --> 00:01:30.373
+Replay runs the generated script in script mode.
+
+00:01:30.373 --> 00:01:35.206
+There is no parsing and no AI, just the stored native locators, so it is fast.
+
+00:01:35.206 --> 00:01:40.255
+If the page has changed and a locator breaks, the engine heals it and writes a new
+
+00:01:40.255 --> 00:01:41.276
+script.
+
+00:01:41.276 --> 00:01:43.800
+Here we replay on Selenium instead.
+
+00:01:44.700 --> 00:01:46.520
+Tests are data driven.
+
+00:01:46.520 --> 00:01:51.500
+Placeholders in the test take their values from a grid, one row per run, and each
+
+00:01:51.500 --> 00:01:53.642
+row can use its own browser.
+
+00:01:53.642 --> 00:01:58.461
+We choose both engines, and share the work between the hub and a remote agent.
+
+00:01:58.461 --> 00:02:00.870
+One click, four runs in parallel.
+
+00:02:01.770 --> 00:02:04.382
+Autopilot can also write the tests.
+
+00:02:04.382 --> 00:02:07.383
+Paste a user story, or pick one from Jira.
+
+00:02:07.383 --> 00:02:12.717
+It reads the acceptance criteria and the code behind them, here a Git commit for the
+
+00:02:12.717 --> 00:02:17.941
+sign up form, and designs positive, negative and boundary cases, with rules alone.
+
+00:02:17.941 --> 00:02:19.330
+No AI needed.
+
+00:02:20.230 --> 00:02:23.172
+All thirteen cases were approved and run.
+
+00:02:23.172 --> 00:02:24.448
+One failed.
+
+00:02:24.448 --> 00:02:29.721
+The form accepts an age of one hundred, but the story says eighteen to ninety nine.
+
+00:02:29.721 --> 00:02:34.772
+The run shows the failing step, what was expected, and the page at that moment.
+
+00:02:34.772 --> 00:02:39.990
+Results can go back to Zephyr, Xray and Jira, including a bug with the screenshot.
+
+00:02:40.890 --> 00:02:43.316
+Tests run wherever you need them.
+
+00:02:43.316 --> 00:02:48.490
+The hub runs tests itself, and any Windows, Mac, Linux or Docker machine joins as an
+
+00:02:48.490 --> 00:02:51.347
+agent with one command and its own token.
+
+00:02:51.347 --> 00:02:55.282
+Agents connect out to the hub, so they work behind firewalls.
+
+00:02:55.282 --> 00:02:58.840
+Cloud grids such as BrowserStack plug in the same way.
+
+00:02:59.741 --> 00:03:04.930
+For teams, there are accounts and roles, company single sign on, projects that keep
+
+00:03:04.930 --> 00:03:10.065
+each team's work apart, tokens for Jira, GitHub and test tools, and the AI of your
+
+00:03:10.065 --> 00:03:11.103
+choice:
+
+00:03:11.103 --> 00:03:15.691
+your Claude, Copilot or Cursor subscription, an API key, or none at all.
+
+00:03:19.596 --> 00:03:22.362
+Everything Autopilot produces is yours.
+
+00:03:22.362 --> 00:03:25.073
+Plain Playwright and Selenium scripts.
+
+00:03:25.073 --> 00:03:28.761
+An exported project that runs in any CI without the hub.
+
+00:03:28.761 --> 00:03:32.665
+And every result in a SQLite database, with reporting views.
+
+00:03:32.665 --> 00:03:37.166
+Set it up with one command, and find the full guide in the docs folder.
+

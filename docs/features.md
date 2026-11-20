@@ -1,6 +1,7 @@
 # Feature tour
 
-Screenshots and recordings of every part of Autopilot. All of them come from a hub loaded with
+Screenshots and recordings of every part of Autopilot. For the whole story in one narrated video, see the
+**[end-to-end demo](demo.md)**. All of them come from a hub loaded with
 [demo data](database.md#demo-data) (`./setup.sh --demo`), with AI off, so you'll see exactly this after setup.
 The animated previews play here; each links to a full-quality MP4.
 

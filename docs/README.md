@@ -3,6 +3,7 @@
 | Guide | Read it to |
 |---|---|
 | [Getting started](getting-started.md) | Install (one step on Windows, macOS, Linux or Docker), sign in, run and replay your first test |
+| [End-to-end demo](demo.md) | Watch the whole product in 3½ minutes, narrated, with captions and a transcript |
 | [Feature tour](features.md) | See every feature: screenshots and recordings |
 | [Deployment](deployment.md) | Every mode (one computer, Docker, team server, hub + agents, grids), agents on Windows / macOS / Linux / Docker with autostart, ports, HTTPS |
 | [User guide](user-guide.md) | Write tests in plain English, use test data and iterations, read runs, replay, export, logins, accounts and projects |
@@ -16,5 +17,5 @@
 | [Development](development.md) | Change Autopilot itself: web app, tests, the real-website suite, CI |
 | [Troubleshooting](troubleshooting.md) | Fix common problems |
 
-New here: **Getting started**, the **Feature tour**, then the **User guide**. Setting it up for a team: **Deployment**. Want to see how it works inside: **Architecture**. Want the data:
+New here: watch the **End-to-end demo**, then **Getting started**, the **Feature tour**, then the **User guide**. Setting it up for a team: **Deployment**. Want to see how it works inside: **Architecture**. Want the data:
 **Database**.

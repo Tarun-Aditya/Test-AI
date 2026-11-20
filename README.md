@@ -12,6 +12,10 @@ script** you can replay on any engine, browser or machine, or take away as a sta
                                 report, screenshots   test_selenium.py     → exported project, CI
 ```
 
+[![Watch the end-to-end demo with voice-over](docs/media/demo/e2e-demo-poster.jpg)](docs/media/demo/e2e-demo.mp4)
+
+**[▶ End-to-end demo with voice-over (3:39)](docs/demo.md)**: chapters, transcript and captions on the [demo page](docs/demo.md).
+
 [![Writing a test in plain English and watching it run live](docs/media/videos/studio-run.gif)](docs/media/videos/studio-run.mp4)
 
 | Every run: steps, screenshots, locators | Test design from a story | Hub + agents on any OS |
@@ -65,6 +69,7 @@ Docker instead: `docker compose up --build`. Full instructions: **[Getting start
 | | |
 |---|---|
 | [Getting started](docs/getting-started.md) | Install, sign in, first test, replay, export |
+| [End-to-end demo](docs/demo.md) | 3½-minute narrated walkthrough of every feature, with chapters and transcript |
 | [Feature tour](docs/features.md) | Screenshots and recordings of every feature |
 | [Deployment](docs/deployment.md) | Every mode: one computer, Docker, team server, agents on Windows / macOS / Linux / Docker, grids, HTTPS |
 | [User guide](docs/user-guide.md) | Writing tests, data and iterations, runs, replay, scripts, logins, accounts |
