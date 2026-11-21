@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Complex DOM</title>
+<style>
+  body { font: 15px system-ui, sans-serif; margin: 20px; } section { border: 1px solid #ccc; border-radius: 8px; padding: 10px; margin: 10px 0; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 4px 0; } #log { white-space: pre-wrap; background: #f6f6f6; padding: 8px; min-height: 60px; }
+  iframe { width: 100%; height: 130px; border: 1px solid #bbb; }
+</style></head>
+<body>
+<h1>Complex DOM</h1>
+
+<section id="deep"><h2>Three shadow roots deep</h2><level-a></level-a></section>
+
+<section id="mix"><h2>Frames and shadow roots mixed</h2>
+  <p>A shadow root inside an iframe:</p>
+  <iframe title="Frame with shadow" srcdoc="<!doctype html><body style='font-family:sans-serif'><frame-card></frame-card>
+    <script>
+      class FrameCard extends HTMLElement { constructor(){ super(); const r=this.attachShadow({mode:'open'});
+        r.innerHTML='<label>Coupon code <input aria-label=&quot;Coupon code&quot;></label><button>Redeem</button>';
+        r.querySelector('button').onclick=()=>parent.log('Redeemed '+r.querySelector('input').value); } }
+      customElements.define('frame-card', FrameCard);
+    </script></body>"></iframe>
+  <p>An iframe inside a shadow root:</p>
+  <host-with-frame></host-with-frame>
+</section>
+
+<section id="dyn"><h2>Dynamic elements</h2>
+  <div id="rerender"></div>
+  <div id="late"></div>
+  <div class="row"><button id="load" onclick="loadData()">Load report</button><span id="state">idle</span></div>
+  <table id="rows"><tbody></tbody></table>
+</section>
+
+<section id="same"><h2>The same label in different places</h2>
+  <address-card data-kind="Billing"></address-card><address-card data-kind="Shipping"></address-card>
+</section>
+
+<div id="log" aria-live="polite"></div>
+
+<script>
+  function log(t) { document.getElementById('log').textContent += t + '\n'; }
+  const rnd = () => Math.random().toString(36).slice(2, 9);
+
+  // three levels of shadow roots: level-a > level-b > level-c > button
+  class LevelC extends HTMLElement { constructor() { super(); const r = this.attachShadow({mode: 'open'});
+    r.innerHTML = `<label>Deepest note <input aria-label="Deepest note" id="n-${rnd()}"></label><button id="b-${rnd()}">Confirm deepest</button>`;
+    r.querySelector('button').onclick = () => log('Deepest confirmed: ' + r.querySelector('input').value); } }
+  class LevelB extends HTMLElement { constructor() { super(); const r = this.attachShadow({mode: 'open'}); r.innerHTML = `<div class="b-${rnd()}"><h3>Level B</h3><level-c></level-c></div>`; } }
+  class LevelA extends HTMLElement { constructor() { super(); const r = this.attachShadow({mode: 'open'}); r.innerHTML = `<div class="a-${rnd()}"><h3>Level A</h3><level-b></level-b></div>`; } }
+  customElements.define('level-c', LevelC); customElements.define('level-b', LevelB); customElements.define('level-a', LevelA);
+
+  // an iframe inside a shadow root
+  class HostWithFrame extends HTMLElement { constructor() { super(); const r = this.attachShadow({mode: 'open'});
+    r.innerHTML = `<iframe title="Frame in shadow" srcdoc="<!doctype html><body style='font-family:sans-serif'><label>Gift message <input aria-label='Gift message'></label><button>Wrap gift</button><script>document.querySelector('button').onclick=()=>parent.log('Wrapped: '+document.querySelector('input').value)<\/script></body>"></iframe>`; } }
+  customElements.define('host-with-frame', HostWithFrame);
+
+  // the same "Name" field and "Save" button in two shadow roots: only the context tells them apart
+  class AddressCard extends HTMLElement { connectedCallback() { const kind = this.dataset.kind, r = this.attachShadow({mode: 'open'});
+    r.innerHTML = `<fieldset><legend>${kind} address</legend><label>Name <input aria-label="Name"></label><button>Save</button></fieldset>`;
+    r.querySelector('button').onclick = () => log(kind + ' saved for ' + r.querySelector('input').value); } }
+  customElements.define('address-card', AddressCard);
+
+  // a component that throws its own DOM away and builds a new one (new elements, new ids) on every click, like a re-rendering framework
+  let n = 0;
+  function render() {
+    const box = document.getElementById('rerender');
+    box.innerHTML = `<div class="row"><button id="inc-${rnd()}" class="btn-${rnd()}">Add to basket</button><span>Basket: <b>${n}</b></span></div>`;
+    box.querySelector('button').onclick = () => { n++; render(); log('Basket is ' + n); };
+  }
+  render();
+
+  // elements that show up late, and text that changes after an action
+  setTimeout(() => { document.getElementById('late').innerHTML = '<button id="late-' + rnd() + '" onclick="log(\'Late button used\')">Appears late</button>'; }, 1800);
+  function loadData() {
+    document.getElementById('state').textContent = 'loading…';
+    setTimeout(() => {
+      document.getElementById('state').textContent = 'loaded';
+      document.querySelector('#rows tbody').innerHTML = [101, 102, 103].map(i => `<tr><td>Order #${i}</td><td><button onclick="log('Edit order ${i}')">Edit</button></td></tr>`).join('');
+    }, 1200);
+  }
+</script>
+</body></html>
