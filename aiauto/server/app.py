@@ -1188,7 +1188,7 @@ async def _pump() -> None:
             if m == "local":
                 hub.local_running.add(job["run_id"])
                 hub.local_runners[job["run_id"]] = []
-                db.update_run(job["run_id"], agent=LOCAL_NAME, status="dispatched")
+                db.update_run(job["run_id"], agent="Chrome extension" if job["config"].get("remote_attach") else LOCAL_NAME, status="dispatched")
                 pool.submit(_run_local, job)
                 continue
             a = hub.agents[m]
@@ -1230,7 +1230,7 @@ def _run_local_job(job: dict) -> None:
         holder: list = hub.local_runners.setdefault(job["run_id"], [])
         # AI during the run (tie-breaks, canvas) uses the run owner's own subscription / key
         _as_user(job.get("owner"), run_test, test, cfg, ARTIFACTS, mode=job["mode"], on_event=hub.emit_threadsafe,
-                 agent=job.get("machine") or LOCAL_NAME, run_id=job["run_id"], runner_out=holder)
+                 agent="Chrome extension" if job["config"].get("remote_attach") else (job.get("machine") or LOCAL_NAME), run_id=job["run_id"], runner_out=holder)
         hub.emit_threadsafe({"type": "_finalize", "run_id": job["run_id"]})   # ordered after the run's events
         if cfg.save_session and holder and holder[0].saved_session:
             db.session_put(cfg.save_session, holder[0].saved_session, owner=job.get("owner"), project=job.get("project"))
