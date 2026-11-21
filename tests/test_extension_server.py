@@ -427,3 +427,93 @@ def test_a_page_that_changed_its_ids_still_replays_through_the_servers_fallback_
     assert row["status"] == "passed", row
     steps = api(base, f"/api/runs/{new}")["steps"]
     assert all(st["status"] == "passed" for st in steps) and any(st["picked_by"] in ("script", "fallback", "heal") or st["healed"] for st in steps), steps   # the stored locators / fallbacks, as in the app
+
+
+# ---------------------------------------------------------------------------------------------- the scripts of REPLAYS work as they are
+class _Page(threading.Thread):
+    """A page whose content can change between runs at the same address (a site that changed after the script was made)."""
+    def __init__(self, html):
+        super().__init__(daemon=True)
+        import http.server as hs
+        me = self
+
+        class H(hs.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = me.html.encode()
+                self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        self.html = html
+        self.srv = hs.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}/order"
+
+    def run(self):
+        self.srv.serve_forever()
+
+
+def _assert_scripts_run(tmp_path, run_dir, secrets=None):
+    for script in ("test_playwright.py", "test_selenium.py"):
+        res, out = standalone(tmp_path, run_dir, script, secrets)
+        assert res.returncode == 0 and "PASSED" in res.stdout, (script, (res.stdout + res.stderr)[-2500:])
+
+
+def test_the_scripts_of_replays_work_as_they_are_even_after_the_page_changed(browser, sites, rhub, tmp_path):
+    """Run in natural language -> script. Replay it (replay mode) -> the replay's own script. Change the page, replay again: the engine
+    heals, and the script of THAT replay carries the healed locators and runs on its own on the changed page."""
+    base, arts = rhub
+    original = (ROOT / "examples" / "extension" / "order.html").read_text()
+    page_srv = _Page(original)
+    page_srv.start()
+    known = {r["run_id"] for r in runs(base)}
+    status, panel, page = _run_from_panel(browser, page_srv.url, ORDER)
+    assert status == "passed"
+    saved(panel)
+    first = new_extension_run(base, known)
+    assert wait_run(base, first)["status"] == "passed"
+    time.sleep(1)
+    (tmp_path / "first").mkdir()
+    _assert_scripts_run(tmp_path / "first", arts / first)
+
+    # replay mode, same page: the replay's script works as it is
+    r = api(base, "/api/runs", {"replay_run_id": first, "config": APP_CFG, "agent": "local"})
+    again = wait_run(base, r["run_ids"][0])
+    assert again["status"] == "passed" and again["mode"] == "replay"
+    (tmp_path / "again").mkdir()
+    _assert_scripts_run(tmp_path / "again", arts / again["run_id"])
+
+    # the site changes: the name field is renamed and re-id'd, the quantity gets a new id
+    page_srv.html = (original.replace('id="name"', 'id="visitor-full-name"').replace('for="name"', 'for="visitor-full-name"')
+                     .replace(">Name<", ">Your full name<").replace('getElementById(\'name\')', "getElementById('visitor-full-name')")
+                     .replace('id="qty"', 'id="ticket-count"').replace('for="qty"', 'for="ticket-count"').replace("getElementById('qty')", "getElementById('ticket-count')"))
+    r = api(base, "/api/runs", {"replay_run_id": first, "config": APP_CFG, "agent": "local"})
+    healed = wait_run(base, r["run_ids"][0])
+    detail = api(base, f"/api/runs/{healed['run_id']}")
+    assert healed["status"] == "passed", [(s["raw"], s["error"]) for s in detail["steps"]]
+    assert healed["healed"] >= 1, healed                                            # the engine found the renamed field by its description
+    old = json.loads((arts / first / "script.json").read_text())["steps"][1]["locator"]
+    new = json.loads((arts / healed["run_id"] / "script.json").read_text())["steps"][1]["locator"]
+    assert new != old                                                              # the script was updated with what it found
+    (tmp_path / "healed").mkdir()
+    _assert_scripts_run(tmp_path / "healed", arts / healed["run_id"])              # and runs on its own on the changed page
+
+    # the same replay from the extension's own panel (the engine in the person's tab): its scripts work too
+    known = {r["run_id"] for r in runs(base)}
+    ctx, ext = browser
+    close_extra(browser)
+    tab = ctx.new_page()
+    tab.goto(page_srv.url)
+    tab.bring_to_front()
+    pnl = ctx.new_page()
+    pnl.goto(f"chrome-extension://{ext}/panel.html")
+    ready(pnl)
+    pnl.locator("#hubd summary").click()
+    pnl.locator(f'#hublists button[data-id="{healed["run_id"]}"]').click()
+    pnl.wait_for_selector("#banner:not([hidden])", timeout=90000)
+    assert pnl.locator("#banner").get_attribute("class").split()[-1] == "passed", pnl.locator("#steps").inner_text()
+    from_panel = new_extension_run(base, known)
+    assert wait_run(base, from_panel)["status"] == "passed"
+    time.sleep(1)
+    (tmp_path / "panel").mkdir()
+    _assert_scripts_run(tmp_path / "panel", arts / from_panel)
