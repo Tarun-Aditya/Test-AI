@@ -121,6 +121,8 @@ def run_scenario(browser, url, text, data="", wait=60, expect_banner=True):
     if expect_banner:
         panel.wait_for_selector("#banner:not([hidden])", timeout=wait * 1000)
         status = panel.locator("#banner").get_attribute("class").split()[-1]
+    if status == "failed" and panel.locator("#msg").is_visible():
+        print("PANEL MESSAGE:", panel.locator("#msg").inner_text())
     steps = [(li.get_attribute("class").split()[-1], li.locator(".tx").inner_text(), li.locator(".err").inner_text() if li.locator(".err").count() else "")
              for li in panel.locator("#steps li").all()]
     return status, steps, panel, page

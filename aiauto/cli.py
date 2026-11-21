@@ -143,6 +143,7 @@ def main(argv=None):
 
     if a.cmd == "server":
         import uvicorn
+        os.environ["AIAUTO_BIND_PORT"] = str(a.port)       # the hub's own runs reach its endpoints (the extension's DevTools relay) on it
         uvicorn.run("aiauto.server.app:app", host=a.host, port=a.port)
         return 0
 

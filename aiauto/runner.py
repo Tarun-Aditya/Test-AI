@@ -91,7 +91,8 @@ class Runner:
                            screenshot=res.screenshot, raw=template_step.raw, action=template_step.action.value,
                            locator=template_step.locator.label() if template_step.locator else None,
                            parsed_by=template_step.source, picked_by=res.picked_by, origin=self.mask(template_step.origin),
-                           url=res.url, duration_ms=res.duration_ms, dialog=res.dialog, locate_ms=res.locate_ms)
+                           url=res.url, duration_ms=res.duration_ms, dialog=res.dialog, locate_ms=res.locate_ms,
+                           tab=self.engine.tab_index())
             if self.config.save_session and not failed and not cancelled:
                 self.saved_session = self.engine.storage_state()
                 summary.session_saved = self.config.save_session if self.saved_session else None
@@ -118,7 +119,8 @@ class Runner:
             summary.timings["locate_step"] = {"count": len(located), "avg_ms": round(sum(located) / len(located), 1),
                                               "max_ms": max(located), "total_ms": sum(located)}
         self._write_artifacts(summary, resolved_steps)
-        self._emit("run_finished", status=summary.status.value, healed=summary.healed_steps)
+        crash = next((r.error for r in summary.results if r.step.raw == "<engine>" and r.error), None)     # the browser could not be reached / started
+        self._emit("run_finished", status=summary.status.value, healed=summary.healed_steps, **({"error": crash} if crash else {}))
         return summary
 
     # ---------------------------------------------------------------- steps

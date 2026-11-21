@@ -51,6 +51,10 @@ class Engine(ABC):
         self.on_live = None            # callback(mime, base64) for the live view in the web UI
         self._last_live = 0.0
 
+    def tab_index(self) -> int | None:
+        """1-based number of the tab the run is in, when the engine can tell (several tabs in one run)."""
+        return None
+
     # lifecycle -------------------------------------------------------------
     @abstractmethod
     def start(self) -> None: ...

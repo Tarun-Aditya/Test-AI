@@ -3,6 +3,8 @@
 import { Run, canInject } from "./lib/runner.js";
 import { hub, parse, health, signIn, settings, compileRecording, importChrome, saveToLibrary } from "./lib/hub.js";
 import { Reporter } from "./lib/reporter.js";
+import * as bridge from "./lib/bridge.js";
+import { ServerRun } from "./lib/server-run.js";
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -45,7 +47,37 @@ async function preview({ text, data, sensitive }) {
   return { tab: { id: tab.id, title: tab.title, url: tab.url, ok: canInject(tab.url) }, ...r };
 }
 
-async function start({ text, data, sensitive, steps, tabId, config, sourceRun, name }) {
+// The hub runs it (its own runner and Playwright engine, in this tab, through the bridge): every capability of the server.
+async function startOnServer({ text, data, sensitive, steps, tabId, config, sourceRun, name }) {
+  const tab = tabId ? await chrome.tabs.get(tabId) : await target();
+  if (!tab) throw new Error("Open the website you want to test in a tab first.");
+  for (const r of runs.values()) if (r.tabIds.has(tab.id) && r.status === "running") throw new Error("A scenario is already running in this tab.");
+  if (!canInject(tab.url)) throw new Error("Chrome doesn't let extensions run on this kind of page. Open a normal website (http or https) in the tab and try again.");
+  let plan = steps, d = data || {}, sens = sensitive || [], notes = [], ignored = [];
+  if (!plan) {                                                    // typed: the hub understands it first, so the panel can show the plan
+    const parsed = await parse(text, dataFor(tab, data), sensitive || []);
+    if (parsed.unparsed && parsed.unparsed.length) throw Object.assign(new Error("Some sentences were not understood: " + parsed.unparsed.join(" · ")), { unparsed: parsed.unparsed });
+    plan = parsed.test.steps; d = parsed.test.data || {}; sens = parsed.test.sensitive || []; notes = parsed.notes || []; ignored = parsed.ignored || [];
+  }
+  const id = "r" + Date.now().toString(36) + (nextId++);
+  const run = new ServerRun({ id, tabId: tab.id, onEvent: broadcast });
+  const body = { name: name || undefined, config: { use_llm: true, record_video: true, timeout_ms: (config && config.timeout) || 15000 } };
+  if (sourceRun && sourceRun.startsWith("library:")) { body.library = sourceRun.slice(8); body.data = d; body.sensitive = sens; }
+  else if (sourceRun) { body.replay_run_id = sourceRun; body.data = d; body.sensitive = sens; }
+  else { body.steps = plan; body.data = { ...dataFor(tab, {}), ...d }; body.sensitive = sens; }
+  runs.set(id, run);
+  try { await run.start(body, tab); } catch (e) { runs.delete(id); throw e; }
+  setTimeout(() => runs.delete(id), 6 * 60 * 60 * 1000);
+  run.log.push({ type: "report", runId: id, hubRun: run.hubRun });
+  return { runId: id, hubRun: run.hubRun, total: plan.length, plan: plan.map((x) => ({ raw: x.raw, origin: x.origin || "", action: x.action })), notes, ignored };
+}
+
+async function start(msg) {
+  const mode = (await chrome.storage.local.get({ engine: "server" })).engine;
+  return mode === "builtin" ? startBuiltin(msg) : startOnServer(msg);
+}
+
+async function startBuiltin({ text, data, sensitive, steps, tabId, config, sourceRun, name }) {
   const tab = tabId ? await chrome.tabs.get(tabId) : await target();
   if (!tab) throw new Error("Open the website you want to test in a tab first.");
   for (const r of runs.values()) if (r.tabIds.has(tab.id) && r.status === "running") throw new Error("A scenario is already running in this tab.");
@@ -147,6 +179,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     })()); return true;
     case "hub-lists": done(Promise.all([hub("/api/library").catch(() => []), hub("/api/runs?limit=15").catch(() => [])]).then(([library, runs]) => ({ library, runs }))); return true;
     case "replay-load": done(hub(msg.kind === "library" ? "/api/ext/replay/library/" + encodeURIComponent(msg.id) : "/api/ext/replay/run/" + encodeURIComponent(msg.id))); return true;
+    case "bridge-session": done(bridge.session(msg.tabId)); return true;
     case "compile": done(compileRecording(msg.events, msg.name, msg.data, msg.sensitive)); return true;
     case "import-chrome": done(importChrome(msg.recording, msg.name)); return true;
     case "save-library": done(saveToLibrary(msg.name, msg.test)); return true;

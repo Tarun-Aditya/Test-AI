@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import shutil
+import time
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -207,6 +208,15 @@ class Hub:
             self.events.setdefault(rid, []).append(event)
             if t == "run_finished":
                 self.events.pop(rid, None)
+        lk = cdpbridge.RUN_LINKS.get(rid) if rid else None
+        if lk and t not in ("live_frame", "step_shot", "runs_changed"):
+            try:
+                if lk.ws:
+                    await lk.ws.send_text(json.dumps({"event": "run", "ev": event}))
+            except Exception:
+                pass
+            if t == "run_finished":
+                cdpbridge.RUN_LINKS.pop(rid, None)
         dead = []
         project = None
         if rid:
@@ -290,6 +300,7 @@ class RunRequest(BaseModel):
     spread: Literal["each", "pool"] = "each"   # several machines: run everything on EACH, or share the runs as a POOL
     engines: Optional[list[Literal["playwright", "selenium"]]] = None   # e.g. both: every run once per engine
     reuse_secrets: bool = True                 # replay: fill sensitive values from the original run (kept on the hub)
+    ext_session: Optional[str] = None          # run in a tab of the Chrome extension (a session from /api/ext/session), with the server's own engine
 
 
 class SaveScript(BaseModel):
@@ -428,6 +439,19 @@ async def api_run(req: RunRequest, request: Request):
         if cfg.session_state is None:
             raise HTTPException(404, f"No saved session '{cfg.session}'")
 
+    if req.ext_session:                       # the person's own tab, driven by the server's Playwright engine through the extension
+        sess = cdpbridge.SESSIONS.get(req.ext_session)
+        if not sess or sess.client or sess.used:
+            raise HTTPException(409, "That extension session is gone or already in use. Start the run again from the extension.")
+        if not authmod.can_manage(user, sess.link.owner):
+            raise HTTPException(403, "That extension belongs to someone else")
+        port = os.getenv("AIAUTO_BIND_PORT") or str(request.url.port or 80)
+        cfg = cfg.model_copy(update={"engine": "playwright", "browser": "chromium", "headless": False, "remote_attach": True,
+                                     "ext_token": sess.token, "remote_url": f"ws://127.0.0.1:{port}/cdp/{sess.token}", "session": None, "session_state": None})
+        sess.used, sess.video = True, bool(cfg.record_video)
+        req.iterations, req.engines, req.agent = None, None, "local"
+    else:
+        cfg = cfg.model_copy(update={"remote_attach": False, "ext_token": None})      # only the extension's own session may ask for it
     plan: list[tuple[dict, RunConfig, str | None]] = []
     if req.iterations:
         for i, it in enumerate(req.iterations, 1):
@@ -480,12 +504,14 @@ async def api_run(req: RunRequest, request: Request):
         run_ids.append(rid)
         job = {"run_id": rid, "test": json.loads(t.model_dump_json()), "config": c.model_dump(),
                "session_state": c.session_state, "mode": mode, "targets": target, "owner": owner, "project": project}
-        db.create_run({"run_id": rid, "test_name": title, "status": "queued", "engine": c.engine, "browser": c.browser,
-                       "agent": target[0] if len(target) == 1 and target[0] != "local" else LOCAL_NAME if target == ["local"] else "any", "mode": mode, "started_at": now_iso(), "total": len(t.steps),
+        db.create_run({"run_id": rid, "test_name": title, "status": "queued", "engine": c.engine, "browser": "chrome" if c.remote_attach else c.browser,
+                       "agent": "Chrome extension" if c.remote_attach else target[0] if len(target) == 1 and target[0] != "local" else LOCAL_NAME if target == ["local"] else "any", "mode": mode, "started_at": now_iso(), "total": len(t.steps),
                        "iteration": label, "batch_id": batch, "config_json": c.model_dump_json(),
                        "data_json": json.dumps(masked_data(row, t.sensitive)), "sensitive_json": json.dumps(t.sensitive),
                        "source_run": source_run, "parser": parser, "owner": owner, "project": project})
         hub.run_project[rid] = project
+        if c.remote_attach and c.ext_token and cdpbridge.SESSIONS.get(c.ext_token):
+            cdpbridge.RUN_LINKS[rid] = cdpbridge.SESSIONS[c.ext_token].link
         secrets = {}
         for k in t.sensitive:
             try:
@@ -676,6 +702,70 @@ async def library_upload(request: Request, file: UploadFile = File(...), name: O
     except Exception as e:
         raise HTTPException(400, f"Unrecognised script: {e}")
     return db.lib_put(_slug(name or t.name), json.loads(t.model_dump_json()), owner=_owner_of(request), project=_project(request))
+
+
+# --------------------------------------------------------------------- Chrome extension as a browser for the server's engine
+from .. import cdpbridge  # noqa: E402
+
+
+@app.post("/api/ext/bridge")
+async def ext_bridge(request: Request):
+    """The extension asks to be a browser for this hub: returns the link it connects its WebSocket with."""
+    link = cdpbridge.Link(_owner_of(request), _project(request))
+    cdpbridge.LINKS[link.id] = link
+    for k in [k for k, l in cdpbridge.LINKS.items() if not l.ws and time.time() - l.created > 120]:
+        cdpbridge.LINKS.pop(k, None)                    # links nobody connected
+    return {"link": link.id}
+
+
+@app.websocket("/ws/ext")
+async def ws_ext(ws: WebSocket, link: str = ""):
+    lk = cdpbridge.LINKS.get(link)
+    if not lk:
+        await ws.close(code=4404)
+        return
+    await ws.accept()
+    try:
+        await lk.serve(ws)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        cdpbridge.LINKS.pop(link, None)
+
+
+class ExtSession(BaseModel):
+    link: str
+    tab_id: int
+
+
+@app.post("/api/ext/session")
+async def ext_session(req: ExtSession, request: Request):
+    """A DevTools endpoint for one tab of a connected extension: the server's Playwright engine connects to it as to any browser."""
+    lk = cdpbridge.LINKS.get(req.link)
+    if not lk or not lk.ws:
+        raise HTTPException(409, "The extension is not connected to this hub. Open its panel and try again.")
+    if not authmod.can_manage(_user(request), lk.owner):
+        raise HTTPException(403, "That extension belongs to someone else")
+    sess = cdpbridge.CdpSession(lk, req.tab_id)
+    cdpbridge.SESSIONS[sess.token] = sess
+    base = str(request.base_url).rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
+    return {"cdp_url": f"{base}/cdp/{sess.token}", "token": sess.token}
+
+
+@app.websocket("/cdp/{token}")
+async def ws_cdp(ws: WebSocket, token: str):
+    sess = cdpbridge.SESSIONS.get(token)
+    if not sess or sess.client:
+        await ws.close(code=4404)
+        return
+    await ws.accept()
+    try:
+        await sess.serve_client(ws)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        cdpbridge.SESSIONS.pop(token, None)
+        await sess.close()
 
 
 # --------------------------------------------------------------------- API: runs reported by the Chrome extension

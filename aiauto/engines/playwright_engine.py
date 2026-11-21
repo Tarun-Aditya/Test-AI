@@ -58,12 +58,18 @@ class PlaywrightEngine(Engine):
             ctx["user_agent"] = c.user_agent
         if c.locale:
             ctx["locale"] = c.locale
-        self._native_video = c.record_video
+        self._attached = bool(c.remote_url and c.remote_attach)
+        self._native_video = c.record_video and not self._attached
         self._frame_mode = False
-        if c.record_video:
+        if c.record_video and not self._attached:
             ctx.update(record_video_dir=str(self.run_dir / "_video"), record_video_size=vp)
 
         def open_ctx(opts):
+            if c.remote_url and c.remote_attach:
+                # the Chrome extension's relay: the person's own tab, in their own browser. Nothing is opened or closed here, and no
+                # viewport, video recording or storage state is imposed (their window, their logins).
+                self._browser = self._pw.chromium.connect_over_cdp(c.remote_url)
+                return self._browser.contexts[0]
             if c.remote_url:     # a browser running somewhere else (browser server / cloud grid / DevTools endpoint)
                 u = c.remote_url
                 self._browser = btype.connect(u) if u.startswith(("ws://", "wss://")) else self._pw.chromium.connect_over_cdp(u)
@@ -110,6 +116,12 @@ class PlaywrightEngine(Engine):
         self._ctx.on("page", self._on_new_page)
         self._watch(self.page)
 
+    def tab_index(self):
+        try:
+            return self._ctx.pages.index(self.page) + 1
+        except Exception:
+            return None
+
     def _watch(self, page) -> None:
         page.on("dialog", self._on_dialog)
 
@@ -130,7 +142,31 @@ class PlaywrightEngine(Engine):
         except Exception:
             return None
 
+    def _stop_attached(self) -> str | None:
+        """Leave the person's tab as it is: disconnect, close nothing. The video is the tab's screencast the extension streamed."""
+        video = None
+        try:
+            self.frame()
+        except Exception:
+            pass
+        try:
+            from .. import cdpbridge
+            video = cdpbridge.finish_video(self.config.ext_token, self.run_dir) if self.config.record_video else None
+        except Exception as e:
+            logging.getLogger(__name__).warning("could not build the video: %s", e)
+        try:
+            self._browser.close()
+        except Exception:
+            pass
+        try:
+            self._pw.stop()
+        except Exception:
+            pass
+        return video
+
     def stop(self) -> str | None:
+        if getattr(self, "_attached", False):
+            return self._stop_attached()
         video = None
         try:
             self.frame()
