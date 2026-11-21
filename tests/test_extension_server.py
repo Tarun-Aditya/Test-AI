@@ -386,7 +386,14 @@ def test_the_servers_playground_scenario_runs_in_the_tab_exactly_as_in_the_app(b
     # the scripts made from what the extension ran run on their own: copied elsewhere, no tool on their path
     for script in ("test_playwright.py", "test_selenium.py"):
         res, out = standalone(tmp_path, d, script, {"AIAUTO_SECRET_PASSWORD": "S3cret!!", "AIAUTO_SECRET_CARD": "4111111111114242"})
-        assert res.returncode == 0 and "PASSED" in res.stdout, (script, (res.stdout + res.stderr)[-2500:])
+        if not (res.returncode == 0 and "PASSED" in res.stdout):
+            why = ""
+            try:       # the script's own record of which steps failed and why
+                summ = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+                why = json.dumps([x for x in summ["steps"] if x.get("status") != "passed"][:3], indent=1)[:3000]
+            except Exception:
+                pass
+            raise AssertionError((script, (res.stdout + res.stderr)[-1500:], why))
     # the app replays what the extension ran
     r = api(base, "/api/runs", {"replay_run_id": rid, "config": {**APP_CFG, "timeout_ms": 8000}, "agent": "local"})
     again = wait_run(base, r["run_ids"][0], timeout=240)
@@ -456,7 +463,14 @@ class _Page(threading.Thread):
 def _assert_scripts_run(tmp_path, run_dir, secrets=None):
     for script in ("test_playwright.py", "test_selenium.py"):
         res, out = standalone(tmp_path, run_dir, script, secrets)
-        assert res.returncode == 0 and "PASSED" in res.stdout, (script, (res.stdout + res.stderr)[-2500:])
+        if not (res.returncode == 0 and "PASSED" in res.stdout):
+            why = ""
+            try:       # the script's own record of which steps failed and why
+                summ = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+                why = json.dumps([x for x in summ["steps"] if x.get("status") != "passed"][:3], indent=1)[:3000]
+            except Exception:
+                pass
+            raise AssertionError((script, (res.stdout + res.stderr)[-1500:], why))
 
 
 def test_the_scripts_of_replays_work_as_they_are_even_after_the_page_changed(browser, sites, rhub, tmp_path):
