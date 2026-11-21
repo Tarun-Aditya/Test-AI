@@ -269,6 +269,8 @@ def _random_token(t: str) -> bool:
     letters, digits = len(re.findall(r"[A-Za-z]", t)), len(re.findall(r"\d", t))
     if len(t) >= 7 and letters >= 3 and (digits >= 2 or bool(re.search(r"[A-Za-z]\d[A-Za-z]", t))):
         return True
+    if len(t) >= 8 and digits >= 1 and letters >= 5:        # btn-bkbuhao0: eight characters, one digit among the letters
+        return True
     vowels = len(re.findall(r"[aeiouAEIOU]", t))
     return len(t) >= 8 and digits == 0 and vowels <= len(t) // 5       # eight letters with hardly a vowel: random, not a word
 
