@@ -46,6 +46,29 @@ const out = window.__aiautoDialogs.splice(0); return out.length ? out[out.length
 _HELD = [None]   # the hover a HOVER step holds (see Run.hover / rehover)
 
 
+def choose_option(page, loc, wanted):
+    """Pick option(s) by visible text the way the runner does: a native <select> is set, a text field is filled, and a custom
+    dropdown is opened and each option clicked by its text."""
+    el = loc.first
+    info = el.evaluate("e => ({tag: e.tagName.toLowerCase(), type: (e.getAttribute('type') || '').toLowerCase()})")
+    opts = [o.strip() for o in str(wanted).split("|") if o.strip()]
+    if info["tag"] == "select":
+        try:
+            loc.select_option(label=opts)
+        except Exception:
+            loc.select_option(value=opts)
+    elif info["tag"] in ("input", "textarea") and info["type"] not in ("checkbox", "radio"):
+        loc.fill(opts[0] if opts else "")
+    else:
+        for o in opts:
+            el.click()
+            page.wait_for_timeout(300)
+            cand = page.get_by_role("option", name=o, exact=True)
+            if not cand.count():
+                cand = page.get_by_text(o, exact=True)
+            cand.first.click()
+
+
 def rehover():
     """Hover again over the element a hover step holds (used while waiting for text it reveals)."""
     if _HELD[0]:

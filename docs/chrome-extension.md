@@ -36,19 +36,37 @@ Chrome 126 or newer (Edge and other Chromium browsers work too). Tested in real 
 * **Stop** cancels the run. Closing the panel does not stop it; reopening shows where it is.
 * Every run links to its page on the hub: live view, steps with screenshots, video, report, replay, export.
 
-## Record a flow, replay it exactly
+## Record a flow, get a script
 
-Switch the panel to **Record a flow**, press **Record on this tab** and use the site: click, type, choose, tick, press Enter, open links in new tabs. Each action becomes a step in the same format as a typed scenario.
+The point of recording (and of running in the extension) is the **script** you get out: Playwright and Selenium scripts that run on their own, in CI, without this tool. Switch the panel to **Record a flow**, press **Record on this tab** and use the site like a person.
 
 ![Recorded steps](media/extension-recorder.png)
 
-* The recorder reads the page structure (role, name, label, text, test id and a list of locators: the same fingerprint the engines use). No pixels, no guessing.
-* **Replay is the server's replay**: stored locators first, fallback locators, then finding the element by its description, with the server's self-healing.
-* Passwords are lifted into data (`${password}`), masked, and left out when you save.
-* Remove a step with ✕ after stopping. **Add a check** while recording ("the page should show …", or highlight text and **Use selected text**).
-* **Copy as English** gives plain sentences; **Save to hub** puts them in the library; **Replay on this tab** runs them right here.
-* **Import a Chrome Recorder file** (DevTools → Recorder → Export → JSON): same steps, with Chrome's selectors as the locators.
-* A video file (webm / mp4) has no page structure in it, so it can't be turned into steps without a vision model; record the flow instead.
+**Everything you do is captured**, in the order you did it:
+
+| You do | It becomes |
+|---|---|
+| click, double-click, right-click | `click` / `double_click` / `right_click` |
+| type in a field, an editor (contenteditable), a date / number field | `type` with the final value |
+| move a slider, pick a colour | `type` (set by value) |
+| choose from a dropdown (one or several options) | `select` |
+| tick / untick a checkbox or radio | `check` / `uncheck` |
+| choose a file | `upload` (the file name goes to Data, set its path where the script runs) |
+| Enter, Escape, Tab, arrows in widgets, shortcuts (Ctrl+…) | `press` |
+| rest the mouse on something that reveals a menu | `hover` (only hovers that revealed something) |
+| drag and drop (HTML5 or with the mouse) | `drag` |
+| scroll the page | `scroll` |
+| answer an alert / confirm / prompt | `dismiss` / `accept` the dialog, plus a check of its message |
+| open a link in a new tab, switch back | followed on replay, `switch_tab` when you go back |
+| clicks inside iframes (also inside iframes in iframes, and cross-origin ones), inside shadow roots (nested too) | locators that carry the frame and shadow chain |
+
+Each step stores the element's role, name, label, text, test id and a list of locators (the engines' own fingerprint). Passwords are lifted into data (`${password}`), masked and left out when you save. Add a check while recording ("the page should show …", or highlight text and **Use selected text**): a click stream cannot know what the page was supposed to show.
+
+Then: **Replay on this tab**, **Copy as English**, **Save to hub** (the library: run it from the app, export Playwright / Selenium), or import a **Chrome Recorder** file instead (DevTools → Recorder → Export → JSON). A video file (webm / mp4) has no page structure in it, so it can't be turned into steps without a vision model.
+
+### The scripts run on their own
+
+Runs and recordings both end as `script.json` plus generated `test_playwright.py` and `test_selenium.py` (with `autopilot_runtime.py`). They are checked in the test suite by copying them elsewhere and running them as plain scripts, without this tool on their path: the server's whole playground scenario run from the panel, and a full recorded human session on the same page (inputs, upload, hover menu, custom dropdown, dialogs, editor, drag and drop, nested shadow roots and iframes). Selenium scripts keep up to two more verified locators per step and try them in order.
 
 ## Replay from the app and from the extension
 
@@ -69,4 +87,4 @@ A replay opens the page the run started on, then uses the stored locators. A rep
 
 ## Tests
 
-`tests/test_extension.py` (panel, recorder, sign-in, errors), `tests/test_extension_server.py` (the server's own playground scenario run from the panel, virtualised lists, live events, screenshots, a video whose last frame shows the page, report, stats, replays by the app and the extension, recordings, secrets absent from the hub's files, failures) and `tests/test_recorder.py`.
+`tests/test_extension.py` (panel, recorder, sign-in, errors), `tests/test_extension_recorder_scripts.py` (a whole session recorded, run by the app, and its Playwright and Selenium scripts run standalone), `tests/test_extension_server.py` (the server's own playground scenario run from the panel, virtualised lists, live events, screenshots, a video whose last frame shows the page, report, stats, replays by the app and the extension, recordings, secrets absent from the hub's files, failures) and `tests/test_recorder.py`.

@@ -89,15 +89,20 @@ async function recStart() {
   if (!tab || !canInject(tab.url)) throw new Error("Open the website you want to record in a tab first.");
   rec = { tabs: new Set([tab.id]), order: [tab.id], events: [{ type: "navigate", url: tab.url, tab: 1, t: 0 }], t0: Date.now(), active: true };
   await chrome.scripting.unregisterContentScripts({ ids: ["autopilot-rec"] }).catch(() => {});
-  await chrome.scripting.registerContentScripts([{ id: "autopilot-rec", matches: ["<all_urls>"], js: ["lib/shared.js", "lib/recorder.js"], allFrames: true, runAt: "document_start", matchOriginAsFallback: true }]);
+  await chrome.scripting.unregisterContentScripts({ ids: ["autopilot-rec-dialogs"] }).catch(() => {});
+  await chrome.scripting.registerContentScripts([
+    { id: "autopilot-rec", matches: ["<all_urls>"], js: ["lib/shared.js", "lib/recorder.js"], allFrames: true, runAt: "document_start", matchOriginAsFallback: true },
+    { id: "autopilot-rec-dialogs", matches: ["<all_urls>"], js: ["lib/dialogs.js"], allFrames: true, runAt: "document_start", matchOriginAsFallback: true, world: "MAIN" },
+  ]);
   await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["lib/shared.js", "lib/recorder.js"] });
+  await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["lib/dialogs.js"], world: "MAIN" });
   badge("REC"); saveRec();
   return { tab: { id: tab.id, title: tab.title, url: tab.url } };
 }
 async function recStop() {
   const r = await R(); if (!r) return { events: [] };
   r.active = false;
-  await chrome.scripting.unregisterContentScripts({ ids: ["autopilot-rec"] }).catch(() => {});
+  await chrome.scripting.unregisterContentScripts({ ids: ["autopilot-rec", "autopilot-rec-dialogs"] }).catch(() => {});
   badge(""); saveRec();
   return { events: r.events };
 }
@@ -116,6 +121,33 @@ chrome.tabs.onUpdated.addListener(async (id, info) => {
   if (last && last.url === info.url) return;
   recPush({ type: "navigate", url: info.url }, id);
 });
+
+// CSS selectors of the iframes (outermost first) that lead to one frame of a tab, found from the PARENT frame, which is the only one allowed to name its iframes.
+const chainCache = new Map();
+async function frameChain(tabId, frameId) {
+  const key = tabId + ":" + frameId;
+  if (chainCache.has(key)) return chainCache.get(key);
+  const frames = await chrome.webNavigation.getAllFrames({ tabId });
+  const byId = new Map(frames.map((f) => [f.frameId, f]));
+  const chain = [];
+  for (let f = byId.get(frameId); f && f.parentFrameId >= 0; f = byId.get(f.parentFrameId)) {
+    const [r] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [f.parentFrameId] }, args: [f.url], func: (url) => {
+      const all = Array.from(document.querySelectorAll("iframe,frame"));
+      const mine = all.find((x) => { try { return x.src === url || (x.contentWindow && x.contentWindow.location.href === url); } catch (e) { return x.src === url; } }) || (all.length === 1 ? all[0] : null);
+      if (!mine) return null;
+      if (mine.id && !/\d{5,}/.test(mine.id)) return "#" + CSS.escape(mine.id);
+      if (mine.getAttribute("name")) return `iframe[name="${mine.getAttribute("name")}"]`;
+      if (mine.title) return `iframe[title="${mine.title.replace(/"/g, '\\"')}"]`;
+      if (mine.getAttribute("src")) return `iframe[src="${mine.getAttribute("src")}"]`;
+      return `iframe:nth-of-type(${all.indexOf(mine) + 1})`;
+    } });
+    if (!r || !r.result) return null;
+    chain.unshift(r.result);
+  }
+  chainCache.set(key, chain);
+  return chain;
+}
+chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "loading") for (const k of chainCache.keys()) if (k.startsWith(id + ":")) chainCache.delete(k); });
 
 // Optional: open closed shadow roots on every page (a script that runs before the page's own). Off unless asked for in Settings.
 async function applyShadowSetting(on) {
@@ -140,7 +172,15 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     case "rec-stop": done(recStop()); return true;
     case "rec-state": done(R().then((r) => ({ active: !!(r && r.active), n: r ? r.events.length : 0, events: r ? r.events : [] }))); return true;
     case "rec-clear": rec = null; chrome.storage.session.remove("rec").catch(() => {}); badge(""); reply({ ok: true }); return false;
-    case "rec-event": R().then((r) => { if (r && r.active && sender.tab && r.tabs.has(sender.tab.id)) recPush(msg.ev, sender.tab.id); }); return false;
+    case "rec-event": R().then(async (r) => {
+      if (!r || !r.active || !sender.tab || !r.tabs.has(sender.tab.id)) return;
+      const ev = msg.ev;
+      if (sender.frameId) {                                          // inside an iframe: the chain of iframes that leads to it (cross-origin ones the page cannot name itself)
+        const chain = await frameChain(sender.tab.id, sender.frameId).catch(() => null);
+        for (const e of [ev.el, ev.target]) if (e && chain && chain.length && !(e.frames && e.frames.length >= chain.length)) e.frames = chain;
+      }
+      recPush(ev, sender.tab.id);
+    }); return false;
     case "rec-check": done(R().then((r) => { if (!r) throw new Error("Not recording."); const last = r.events[r.events.length - 1]; r.events.push({ type: "assert_text", value: msg.text, tab: last ? last.tab : 1, t: (Date.now() - r.t0) / 1000 }); saveRec(); return { n: r.events.length }; })); return true;
     case "rec-selection": done((async () => {
       const r = await R(); const id = r && r.order[(r.events[r.events.length - 1] || { tab: 1 }).tab - 1];

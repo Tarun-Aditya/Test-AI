@@ -36,7 +36,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from autopilot_runtime import DIALOG_SHIM_JS, MASK, Run, rehover  # noqa: E402  (standalone runtime shipped next to this script)
+from autopilot_runtime import DIALOG_SHIM_JS, MASK, Run, choose_option, rehover  # noqa: E402  (standalone runtime shipped next to this script)
 
 NAME = {name_lit}
 SOURCE = {source_lit}
@@ -233,7 +233,19 @@ def _data_nth(st: Step) -> bool:
     """'first result containing ${brand}': positional and data-driven, so re-evaluated on every run. A fixed
     description ('the first Add to cart button') uses the element the run recorded: its text may not even
     contain the words (a checkbox has none)."""
-    return st.nth is not None and bool(st.target) and bool(re.search(r"\$\{|\{\{", st.target)) and bool(_nth_text(st))
+    if st.nth is None or not st.target or not _nth_text(st):
+        return False
+    # data-driven, or the recorded element can only be named by a position / generated id that will not exist on the next page load
+    return bool(re.search(r"\$\{|\{\{", st.target)) or _unstable(st.locator)
+
+
+def _unstable(loc: Locator | None) -> bool:
+    if not loc:
+        return False
+    if loc.strategy == "xpath":
+        return True
+    text = (loc.code or loc.value) if loc.strategy == "playwright" else loc.value if loc.strategy == "css" else ""
+    return bool(text) and bool(re.search(r"nth-of-type|nth-child| > |\.nth\(|[#.][\w-]*\d{4,}", text))
 
 
 def _nth_text(st: Step) -> str:
@@ -299,7 +311,7 @@ def _pw_lines(st: Step) -> list[str]:
         Action.APPEND: [f"{one}.press_sequentially({val})"],
         Action.PRESS: [f"{one}.press({val})" if st.locator else f"page.keyboard.press({val})"],
         Action.HOVER: [f"r.hover(lambda: {one}.hover())  # held for the checks that follow"],
-        Action.SELECT: [f"{one}.select_option(label=[o.strip() for o in {val}.split('|')])"],
+        Action.SELECT: [f"choose_option(page, {one}, {val})"],
         Action.CHECK: [f"{one}.check()"],
         Action.UNCHECK: [f"{one}.uncheck()"],
         Action.UPLOAD: [f"{one}.set_input_files({val})"],
@@ -371,7 +383,14 @@ def se_locator(st: Step, attr: str = "locator") -> Locator | None:
     return next((l for l in pool if l and by_for(l, bool(l.shadow))), primary)
 
 
-def se_find(loc: Locator | None, clickable: bool = False) -> str:
+def se_alternates(st: Step) -> list[Locator]:
+    """Other verified locators Selenium can run (after the primary one): tried in order if the first finds nothing."""
+    from .engines.selenium_engine import by_for
+    first = se_locator(st)
+    return [l for l in [st.locator, *st.fallbacks] if l and l is not first and l != first and by_for(l, bool(l.shadow))][:2]
+
+
+def se_find(loc: Locator | None, clickable: bool = False, alts: list[Locator] | None = None) -> str:
     if not loc:
         return "None"
     from .engines.selenium_engine import by_for
@@ -385,6 +404,13 @@ def se_find(loc: Locator | None, clickable: bool = False) -> str:
         args += f", shadow={loc.shadow!r}"
     if clickable:
         args += ", clickable=True"
+    spare = []
+    for a in alts or []:
+        ab = by_for(a, bool(a.shadow))
+        if ab:
+            spare.append(f"({BY_NAME.get(ab[0], repr(ab[0]))}, {_q(ab[1])}, {a.frames!r}, {a.shadow!r})")
+    if spare:
+        args += ", alts=[" + ", ".join(spare) + "]"
     return f"find(driver, {args})"
 
 
@@ -398,9 +424,10 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 TIMEOUT = int(os.getenv("STEP_TIMEOUT", "15000")) / 1000
 
 
-def find(driver, by, value, frames=(), shadow=(), clickable=False):
-    """Native Selenium lookup; enters iframes (switch_to.frame) and nested shadow roots (shadow_root)."""
-    def attempt(_):
+def find(driver, by, value, frames=(), shadow=(), clickable=False, alts=()):
+    """Native Selenium lookup; enters iframes (switch_to.frame) and nested shadow roots (shadow_root).
+    `alts`: other locators of the same element, tried in order when the first finds nothing."""
+    def look(by, value, frames, shadow):
         driver.switch_to.default_content()
         for f in frames:
             driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, f))
@@ -414,6 +441,16 @@ def find(driver, by, value, frames=(), shadow=(), clickable=False):
         if clickable and not (el.is_displayed() and el.is_enabled()):
             return False
         return el
+
+    def attempt(_):
+        for a in [(by, value, frames, shadow), *alts]:
+            try:
+                el = look(*a)
+            except Exception:
+                el = False
+            if el:
+                return el
+        return False
     el = WebDriverWait(driver, TIMEOUT, ignored_exceptions=(Exception,)).until(attempt, f"element not found: {by}={value}")
     if clickable:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'})", el)
@@ -486,10 +523,35 @@ def wait_text(get, expected):
 
 
 def choose(driver, el, wanted):
-    """Pick option(s) by visible text; a transparent, custom-skinned <select> is set the way the page would."""
+    """Pick option(s) by visible text the way the runner does: a native <select> is set (a transparent, custom-skinned one the way the
+    page would), a text field is filled, and a custom dropdown is opened and each option clicked by its text."""
+    import time
+    opts = [o.strip() for o in str(wanted).split("|") if o.strip()]
+    tag = el.tag_name.lower()
+    if tag in ("input", "textarea") and (el.get_attribute("type") or "").lower() not in ("checkbox", "radio"):
+        el.clear()
+        el.send_keys(opts[0] if opts else "")
+        return
+    if tag != "select":
+        for opt in opts:
+            try:
+                el.click()
+            except Exception:
+                driver.execute_script("arguments[0].click()", el)
+            time.sleep(0.3)
+            q = chr(39)
+            lit = (q + opt + q) if q not in opt else "concat(" + (", " + chr(34) + q + chr(34) + ", ").join(q + part + q for part in opt.split(q)) + ")"
+            cands = driver.find_elements(By.XPATH, f"//*[(@role='option' or self::li or self::option or self::div or self::span or self::a) and normalize-space(.)={lit} and not(.//*[normalize-space(.)={lit}])]")
+            shown = [c for c in cands if c.is_displayed()]
+            if not shown:
+                raise AssertionError(f"no option {opt!r} in the dropdown")
+            try:
+                shown[0].click()
+            except Exception:
+                driver.execute_script("arguments[0].click()", shown[0])
+        return
     sel = Select(el)
-    for opt in str(wanted).split("|"):
-        opt = opt.strip()
+    for opt in opts:
         try:
             sel.select_by_visible_text(opt)
         except Exception:
@@ -584,7 +646,7 @@ def _se_lines(st: Step) -> list[str]:
     if pts:
         return pts
     a, val = st.action, _val(st.value)
-    F, FC = se_find(se_locator(st)), se_find(se_locator(st), clickable=True)
+    F, FC = se_find(se_locator(st), alts=se_alternates(st)), se_find(se_locator(st), clickable=True, alts=se_alternates(st))
     if st.locator and _data_nth(st) and not st.locator.shadow:
         F, FC = _se_nth(st, False), _se_nth(st, True)
     tab = _tab(st)

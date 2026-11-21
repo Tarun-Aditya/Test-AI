@@ -81,6 +81,9 @@ def compile_events(events: list[dict], data: dict | None = None, sensitive: list
     last_t = 0.0
     last_acted = False
     last_val: dict[str, str] = {}
+    scroll_y = 0
+    policy = "accept"                             # what the engine does with the next dialogs (the last DIALOG step in force)
+    uploads = 0
 
     def add(action: Action, target: str | None, value: str | None, raw: str, el: dict | None = None, **kw) -> Step:
         loc, fb = _locators(el) if el else (None, [])
@@ -180,7 +183,49 @@ def compile_events(events: list[dict], data: dict | None = None, sensitive: list
             add(Action.ASSERT_VISIBLE, tg, None, f"verify {tg} is visible", el)
         elif t == "hover" and el:
             tg = describe_target(el)
-            add(Action.HOVER, tg, None, f"hover over {tg}", el)
+            if not (steps and steps[-1].action == Action.HOVER and steps[-1].target == tg):
+                add(Action.HOVER, tg, None, f"hover over {tg}", el)
+            last_acted = False
+        elif t == "drag" and el:
+            dst = e.get("target") or {}
+            src_t, dst_t = describe_target(el), describe_target(dst)
+            st = add(Action.DRAG, src_t, dst_t, f"drag {src_t} to {dst_t}", el)
+            dl, _ = _locators(dst)
+            st.target_locator = dl
+            last_acted = False
+        elif t == "upload" and el:
+            names = e.get("files") or []
+            tg = describe_target(el)
+            if not names:
+                notes.append(f"A file was chosen for {tg} but its name was not available.")
+                continue
+            uploads += 1
+            key = f"upload_file_{uploads}" if uploads > 1 else "upload_file"
+            data[key] = names[0]
+            add(Action.UPLOAD, tg, "${" + key + "}", f'upload "{names[0]}" to {tg}', el)
+            notes.append(f"{tg}: the file \"{names[0]}\" was chosen. Put the file where the script runs and set {key} in the data to its path.")
+            last_acted = False
+        elif t == "scroll":
+            y, mx = int(e.get("y", 0)), int(e.get("max", 0))
+            if y <= 5:
+                add(Action.SCROLL, None, "top", "scroll to the top")
+            elif mx and y >= mx - 5:
+                add(Action.SCROLL, None, "bottom", "scroll to the bottom")
+            else:
+                d = y - scroll_y
+                add(Action.SCROLL, None, f"{'down' if d > 0 else 'up'}:{abs(d)}", f"scroll {'down' if d > 0 else 'up'} {abs(d)} pixels")
+            scroll_y = y
+        elif t == "dialog":
+            kind, msg = e.get("kind") or "alert", str(e.get("message", ""))
+            want = "accept" if e.get("accepted", True) else "dismiss"
+            if want != policy and steps:
+                # the engine answers dialogs by a standing policy: set it before the action that opens the dialog
+                steps.insert(len(steps) - 1, Step(action=Action.DIALOG, value=want, raw=f"{'Accept' if want == 'accept' else 'Dismiss'} the next alert", source="recorded"))
+                policy = want
+            add(Action.ASSERT_DIALOG, None, msg, f'Verify alert says "{msg}"')
+            if kind == "prompt" and e.get("answer"):
+                notes.append(f'A prompt ("{msg}") was answered with text; scripts accept or dismiss prompts but cannot type into them.')
+            last_acted = False
         elif t == "wait":
             add(Action.WAIT, None, str(e.get("seconds", 1)), f"wait {e.get('seconds', 1)} seconds")
         else:

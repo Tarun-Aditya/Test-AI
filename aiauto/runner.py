@@ -539,6 +539,24 @@ class Runner:
                             continue
                         good.append(loc)
                 if good:
+                    # scripts and replays must run on Selenium too: keep one locator it can run among the verified ones
+                    from .engines.selenium_engine import by_for as _by_for
+                    if not any(_by_for(g, bool(g.shadow)) is not None for g in good):
+                        port = next((l for l, ok in zip(all_locs, flags) if ok and _by_for(l, bool(l.shadow)) is not None), None)
+                        if port is None:        # the in-page check can't see into every shadow root: ask the engine itself
+                            for l in all_locs:
+                                if _by_for(l, bool(l.shadow)) is None or l in good:
+                                    continue
+                                try:
+                                    n = e.count(l)
+                                    # Playwright's CSS pierces nested shadow roots (more matches than Selenium sees): the first match being ours is enough
+                                    if (n == 1 or (n > 1 and l.shadow and l.strategy == "css")) and (e.marker(l) in (None, cand.get("marker"))):
+                                        port = l
+                                        break
+                                except Exception:
+                                    continue
+                        if port is not None:
+                            good = (good[:2] if len(good) >= 3 else good) + [port]
                     return good
         from .engines.selenium_engine import by_for
         portable = lambda l: by_for(l, bool(l.shadow)) is not None
@@ -546,7 +564,9 @@ class Runner:
             if len(good) >= 3 and (any(portable(g) for g in good) or not portable(loc)):
                 continue           # enough, unless we still need one the other engine (Selenium) can run
             try:
-                if e.count(loc) != 1:
+                n = e.count(loc)
+                # Playwright's CSS pierces nested shadow roots (more matches than Selenium sees): the first match being ours is enough
+                if n != 1 and not (n > 1 and loc.shadow and loc.strategy == "css" and portable(loc) and not any(portable(g) for g in good)):
                     continue
                 if loc.strategy != "playwright":     # Playwright's generator already targets this exact element
                     m = e.marker(loc)

@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -116,6 +117,19 @@ def duration(path):
     if not exe:
         return None
     return float(subprocess.run([exe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout.strip() or 0)
+
+
+def standalone(tmp_path, run_dir, script, env_extra=None):
+    """Copy a generated script and its runtime elsewhere and run it as a plain script: independent of this tool."""
+    alone = tmp_path / f"alone_{script[:-3]}"
+    alone.mkdir()
+    for f in (script, "autopilot_runtime.py"):
+        (alone / f).write_text((run_dir / f).read_text())
+    out = tmp_path / f"res_{script[:-3]}"
+    env = {**os.environ, "HEADLESS": "1", "NO_VIDEO": "1", "RESULTS_DIR": str(out), **(env_extra or {})}
+    r = subprocess.run([sys.executable, "-I", str(alone / script)], cwd=alone, env=env, capture_output=True, text=True, timeout=300)
+    return r, out
+
 
 
 # ---------------------------------------------------------------------------------------------- run -> hub
@@ -369,6 +383,10 @@ def test_the_servers_playground_scenario_runs_in_the_tab_exactly_as_in_the_app(b
         src = (d / name).read_text()
         compile(src, name, "exec")
         assert len(extract_spec(src).steps) == len(script["steps"])
+    # the scripts made from what the extension ran run on their own: copied elsewhere, no tool on their path
+    for script in ("test_playwright.py", "test_selenium.py"):
+        res, out = standalone(tmp_path, d, script, {"AIAUTO_SECRET_PASSWORD": "S3cret!!", "AIAUTO_SECRET_CARD": "4111111111114242"})
+        assert res.returncode == 0 and "PASSED" in res.stdout, (script, (res.stdout + res.stderr)[-2500:])
     # the app replays what the extension ran
     r = api(base, "/api/runs", {"replay_run_id": rid, "config": {**APP_CFG, "timeout_ms": 8000}, "agent": "local"})
     again = wait_run(base, r["run_ids"][0], timeout=240)
