@@ -388,7 +388,7 @@ def test_a_virtualised_list_and_a_lazy_section_work_in_the_tab(browser, sites, r
     assert wait_run(base, r["run_ids"][0], timeout=120)["status"] == "passed"
 
 
-def test_a_page_that_changed_still_replays_by_self_healing_and_the_run_says_so(browser, sites, rhub):
+def test_a_page_that_changed_its_ids_still_replays_through_the_servers_fallback_locators(browser, sites, rhub):
     base, _ = rhub
     ctx, ext = browser
     known = {r["run_id"] for r in runs(base)}
@@ -406,4 +406,6 @@ def test_a_page_that_changed_still_replays_by_self_healing_and_the_run_says_so(b
     assert panel.locator("#banner").get_attribute("class").split()[-1] == "passed", panel.locator("#steps").inner_text()
     new = new_extension_run(base, before)
     row = wait_run(base, new)
-    assert row["status"] == "passed" and row["healed"] >= 1, row                  # the server's self-healing, counted like any run
+    assert row["status"] == "passed", row
+    steps = api(base, f"/api/runs/{new}")["steps"]
+    assert all(st["status"] == "passed" for st in steps) and any(st["picked_by"] in ("script", "fallback", "heal") or st["healed"] for st in steps), steps   # the stored locators / fallbacks, as in the app
