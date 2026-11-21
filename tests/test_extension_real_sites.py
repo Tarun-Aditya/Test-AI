@@ -44,7 +44,7 @@ def first_url(text):
 @pytest.mark.parametrize("name", list(SCENARIOS))
 def test_a_real_site_scenario_runs_in_the_tab_and_its_scripts_run_on_their_own(browser, rhub, tmp_path, name):
     path, data, secrets = SCENARIOS[name]
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     base, arts = rhub
     for attempt in (1, 2):                    # a live site can have a bad moment: one retry of the run itself (never of the scripts)
         known = {r["run_id"] for r in runs(base)}

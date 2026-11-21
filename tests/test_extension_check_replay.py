@@ -6,7 +6,7 @@ from .test_extension import close_extra, ready, sites  # noqa: F401
 from .test_extension_server import _Page, api, browser, rhub, runs  # noqa: F401
 from .test_extension import ROOT
 
-ORDER = (ROOT / "examples" / "extension" / "order.html").read_text()
+ORDER = (ROOT / "examples" / "extension" / "order.html").read_text(encoding="utf-8")
 
 
 def record(browser, url):

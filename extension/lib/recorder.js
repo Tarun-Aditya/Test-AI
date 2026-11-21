@@ -119,21 +119,30 @@
     for (const e of document.querySelectorAll(INTERACTIVE)) { if (++n > 600) break; const r = e.getBoundingClientRect(); if (r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== "hidden") out.add(e); }
     return out;
   };
-  let hoverTimer = null, hoverEl = null, hoverBefore = null, lastHovered = null;
+  // A hover "mattered" if something interactive is visible now that was not while the pointer was over the previous element. The state
+  // under the PREVIOUS element is kept as the baseline: by the time `mouseover` reaches us the browser has already applied :hover, so a
+  // menu opened by this very hover would otherwise already be in a snapshot taken here (the order differs between operating systems).
+  let hoverTimer = null, hoverEl = null, baseline = null, lastHovered = null;
   addEventListener("mouseover", (ev) => {
     if (!ev.isTrusted) return;
     const el = elementOf(ev); if (!el || el === hoverEl) return;
-    hoverEl = el; hoverBefore = visibleSet();
+    const before = baseline || visibleSet();
+    baseline = visibleSet();
+    hoverEl = el;
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(() => {
       if (!hoverEl || hoverEl === lastHovered) return;
       const now = visibleSet(); let revealed = false;
-      for (const e of now) if (!hoverBefore.has(e)) { revealed = true; break; }                // something that was not there is now: the hover mattered
+      for (const e of now) if (!before.has(e)) { revealed = true; break; }                  // something that was not there is now: the hover mattered
       if (!revealed) return;
       const d = describe(hoverEl); if (!d) return;
       lastHovered = hoverEl; flash(hoverEl, "● hover"); send({ type: "hover", el: d });
     }, 450);
   }, opts);
+  // the state of the page before the pointer has touched anything: the baseline for the very first hover
+  const initBaseline = () => { if (!baseline) baseline = visibleSet(); };
+  if (document.readyState !== "loading") initBaseline(); else addEventListener("DOMContentLoaded", initBaseline, opts);
+  addEventListener("load", initBaseline, opts);
   addEventListener("mouseout", (ev) => { if (!ev.relatedTarget) { clearTimeout(hoverTimer); hoverEl = null; } }, opts);
 
   // ------------------------------------------------------------------------------------------------ drag and drop

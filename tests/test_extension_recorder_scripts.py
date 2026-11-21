@@ -34,6 +34,8 @@ def human_session(page):
         page.keyboard.press("ArrowRight")                                    # a slider moved with the keyboard
     page.get_by_label("Bio").click(); page.keyboard.type("Loves testing")
     page.get_by_label("Country").focus(); page.keyboard.press("I")           # picks India
+    if sys.platform == "darwin":                                             # on macOS typing opens the list: confirm the highlighted option
+        page.keyboard.press("Enter")
     page.get_by_role("option", name="English").click()
     page.get_by_role("option", name="Telugu").click(modifiers=["Control"])   # a multiple selection
     page.get_by_label("Pro").click()
@@ -120,5 +122,5 @@ def test_a_whole_session_is_recorded_and_the_scripts_made_from_it_run_on_their_o
     for script in ("test_playwright.py", "test_selenium.py"):
         res, out = standalone(tmp_path, run_dir, script, {"AIAUTO_SECRET_PASSWORD": "S3cret!!"})
         assert res.returncode == 0 and "PASSED" in res.stdout, (script, (res.stdout + res.stderr)[-2500:])
-        summary = json.loads((out / "summary.json").read_text())
+        summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
         assert summary["status"] == "passed" and all(st["status"] == "passed" for st in summary["steps"])

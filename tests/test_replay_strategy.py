@@ -83,7 +83,7 @@ def test_a_fallback_locator_is_used_and_fresh_ones_are_written_back(site, tmp_pa
     site.html = V1.replace('id="em"', 'id="email-field"').replace('for="em"', 'for="email-field"').replace("getElementById('em')", "getElementById('email-field')")   # the id changed only
     s = replay(site, run, tmp_path)
     assert s.status.value == "passed", [r.error for r in s.results if r.error]
-    script = json.loads((tmp_path / "art2" / s.run_id / "script.json").read_text())
+    script = json.loads((tmp_path / "art2" / s.run_id / "script.json").read_text(encoding="utf-8"))
     loc = script["steps"][1]["locator"]
     assert "em\"" not in json.dumps(loc) and "#em" not in json.dumps(loc)       # the stale id is gone from what the script now carries
 
@@ -95,15 +95,15 @@ def test_when_every_stored_locator_breaks_the_element_is_found_by_its_descriptio
     assert s.status.value == "passed", detail
     assert s.healed_steps >= 1, detail                                           # the step the page broke was healed, and counted
     new_dir = tmp_path / "art2" / s.run_id
-    old = json.loads((run / "script.json").read_text())["steps"][1]["locator"]
-    new = json.loads((new_dir / "script.json").read_text())["steps"][1]["locator"]
+    old = json.loads((run / "script.json").read_text(encoding="utf-8"))["steps"][1]["locator"]
+    new = json.loads((new_dir / "script.json").read_text(encoding="utf-8"))["steps"][1]["locator"]
     assert new != old
     # the healed script works as it is on the changed page, on both engines' scripts
     for script in ("test_playwright.py", "test_selenium.py"):
         alone = tmp_path / f"alone_{script[:-3]}"
         alone.mkdir()
         for f in (script, "autopilot_runtime.py"):
-            (alone / f).write_text((new_dir / f).read_text())
+            (alone / f).write_text((new_dir / f).read_text(encoding="utf-8"), encoding="utf-8")
         import os
         r = subprocess.run([sys.executable, "-I", str(alone / script)], cwd=alone, env={**os.environ, "HEADLESS": "1", "NO_VIDEO": "1", "RESULTS_DIR": str(tmp_path / f"res_{script[:-3]}")},
                            capture_output=True, text=True, timeout=180)

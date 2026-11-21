@@ -283,7 +283,7 @@ def test_the_generated_page_library_is_up_to_date():
 
 
 def test_the_manifest_asks_for_what_the_extension_uses():
-    m = json.loads((EXT / "manifest.json").read_text())
+    m = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
     assert m["manifest_version"] == 3 and m["background"]["service_worker"] == "background.js"
     assert {"debugger", "scripting", "tabs", "storage", "sidePanel"} <= set(m["permissions"])
     for f in [m["background"]["service_worker"], m["side_panel"]["default_path"], m["options_page"], *m["icons"].values(),
@@ -309,6 +309,8 @@ def _record_order_flow(browser, sites):
     page.keyboard.type("Asha")
     page.focus("#qty")
     page.keyboard.press("ArrowDown")                 # a real key press (select_option sends untrusted events)
+    if sys.platform == "darwin":                     # on macOS the arrow opens the list: move once more and confirm
+        page.keyboard.press("ArrowDown"); page.keyboard.press("Enter")
     page.check("#news")
     page.click("#go")
     page.wait_for_selector("#out:has-text('Thanks, Asha')")

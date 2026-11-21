@@ -124,7 +124,7 @@ def standalone(tmp_path, run_dir, script, env_extra=None):
     alone = tmp_path / f"alone_{script[:-3]}"
     alone.mkdir()
     for f in (script, "autopilot_runtime.py"):
-        (alone / f).write_text((run_dir / f).read_text())
+        (alone / f).write_text((run_dir / f).read_text(encoding="utf-8"), encoding="utf-8")
     out = tmp_path / f"res_{script[:-3]}"
     env = {**os.environ, "HEADLESS": "1", "NO_VIDEO": "1", "RESULTS_DIR": str(out), **(env_extra or {})}
     r = subprocess.run([sys.executable, "-I", str(alone / script)], cwd=alone, env=env, capture_output=True, text=True, timeout=300)
@@ -349,9 +349,9 @@ def test_the_servers_playground_scenario_runs_in_the_tab_exactly_as_in_the_app(b
     from pathlib import Path
     base, arts = rhub
     resume = tmp_path / "resume.txt"
-    resume.write_text("cv")
+    resume.write_text("cv", encoding="utf-8")
     url = sites["site"] + "/playground.html"
-    text = (Path(ROOT / "examples" / "playground_test.txt").read_text().replace("PLAYGROUND_URL", url).replace("UPLOAD_FILE", str(resume)))
+    text = (Path(ROOT / "examples" / "playground_test.txt").read_text(encoding="utf-8").replace("PLAYGROUND_URL", url).replace("UPLOAD_FILE", str(resume)))
     data = "\n".join(["first = Asha", "last = Rao", "email = asha@example.com", "password* = S3cret!!", "card* = 4111111111114242", "country = India"])
     before = {r["run_id"] for r in runs(base)}
     status, panel, page = _run_from_panel(browser, url, text, data)
@@ -380,7 +380,7 @@ def test_the_servers_playground_scenario_runs_in_the_tab_exactly_as_in_the_app(b
     assert (d / "video.webm").stat().st_size > 10_000
     from aiauto.scriptgen import extract_spec
     for name in ("test_playwright.py", "test_selenium.py"):                        # the generated scripts carry the spec and compile
-        src = (d / name).read_text()
+        src = (d / name).read_text(encoding="utf-8")
         compile(src, name, "exec")
         assert len(extract_spec(src).steps) == len(script["steps"])
     # the scripts made from what the extension ran run on their own: copied elsewhere, no tool on their path
@@ -463,7 +463,7 @@ def test_the_scripts_of_replays_work_as_they_are_even_after_the_page_changed(bro
     """Run in natural language -> script. Replay it (replay mode) -> the replay's own script. Change the page, replay again: the engine
     heals, and the script of THAT replay carries the healed locators and runs on its own on the changed page."""
     base, arts = rhub
-    original = (ROOT / "examples" / "extension" / "order.html").read_text()
+    original = (ROOT / "examples" / "extension" / "order.html").read_text(encoding="utf-8")
     page_srv = _Page(original)
     page_srv.start()
     known = {r["run_id"] for r in runs(base)}
@@ -492,8 +492,8 @@ def test_the_scripts_of_replays_work_as_they_are_even_after_the_page_changed(bro
     detail = api(base, f"/api/runs/{healed['run_id']}")
     assert healed["status"] == "passed", [(s["raw"], s["error"]) for s in detail["steps"]]
     assert healed["healed"] >= 1, healed                                            # the engine found the renamed field by its description
-    old = json.loads((arts / first / "script.json").read_text())["steps"][1]["locator"]
-    new = json.loads((arts / healed["run_id"] / "script.json").read_text())["steps"][1]["locator"]
+    old = json.loads((arts / first / "script.json").read_text(encoding="utf-8"))["steps"][1]["locator"]
+    new = json.loads((arts / healed["run_id"] / "script.json").read_text(encoding="utf-8"))["steps"][1]["locator"]
     assert new != old                                                              # the script was updated with what it found
     (tmp_path / "healed").mkdir()
     _assert_scripts_run(tmp_path / "healed", arts / healed["run_id"])              # and runs on its own on the changed page
