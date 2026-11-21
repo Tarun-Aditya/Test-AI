@@ -264,7 +264,10 @@ def _data_nth(st: Step) -> bool:
 def _random_token(t: str) -> bool:
     """A piece of an id that looks generated: long, letters mixed with digits (two or more, or one inside the word)."""
     letters, digits = len(re.findall(r"[A-Za-z]", t)), len(re.findall(r"\d", t))
-    return len(t) >= 7 and letters >= 3 and (digits >= 2 or bool(re.search(r"[A-Za-z]\d[A-Za-z]", t)))
+    if len(t) >= 7 and letters >= 3 and (digits >= 2 or bool(re.search(r"[A-Za-z]\d[A-Za-z]", t))):
+        return True
+    vowels = len(re.findall(r"[aeiouAEIOU]", t))
+    return len(t) >= 8 and digits == 0 and vowels <= len(t) // 5       # eight letters with hardly a vowel: random, not a word
 
 
 def _unstable(loc: Locator | None) -> bool:
