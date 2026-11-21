@@ -60,7 +60,7 @@ async function startOnServer({ text, data, sensitive, steps, tabId, config, sour
   }
   const id = "r" + Date.now().toString(36) + (nextId++);
   const run = new ServerRun({ id, tabId: tab.id, onEvent: broadcast });
-  const body = { name: name || undefined, config: { use_llm: true, record_video: true, timeout_ms: (config && config.timeout) || 15000 } };
+  const body = { name: name || undefined, start_url: tab.url, config: { use_llm: true, record_video: true, timeout_ms: (config && config.timeout) || 15000 } };
   if (sourceRun && sourceRun.startsWith("library:")) { body.library = sourceRun.slice(8); body.data = d; body.sensitive = sens; }
   else if (sourceRun) { body.replay_run_id = sourceRun; body.data = d; body.sensitive = sens; }
   else { body.steps = plan; body.data = { ...dataFor(tab, {}), ...d }; body.sensitive = sens; }

@@ -300,6 +300,7 @@ class RunRequest(BaseModel):
     spread: Literal["each", "pool"] = "each"   # several machines: run everything on EACH, or share the runs as a POOL
     engines: Optional[list[Literal["playwright", "selenium"]]] = None   # e.g. both: every run once per engine
     reuse_secrets: bool = True                 # replay: fill sensitive values from the original run (kept on the hub)
+    start_url: Optional[str] = None            # the page the extension's tab was on: a replay opens it first
     ext_session: Optional[str] = None          # run in a tab of the Chrome extension (a session from /api/ext/session), with the server's own engine
 
 
@@ -406,6 +407,12 @@ async def api_run(req: RunRequest, request: Request):
     else:
         raise HTTPException(400, "Provide text, steps, replay_run_id or library")
 
+    if req.start_url and not test.base_url:
+        test = test.model_copy(update={"base_url": req.start_url})       # the run happens on a page that was already open
+    if (req.replay_run_id or req.library) and test.base_url and test.steps and test.steps[0].action.value != "navigate":
+        # a script recorded on an open page: replay it from that page
+        from ..models import Action as _A
+        test = test.model_copy(update={"steps": [Step(action=_A.NAVIGATE, value=test.base_url, raw=f"open {test.base_url}", source="rules"), *test.steps]})
     cfg = req.config
     if cfg.session:
         if not authmod.can_manage(user, db.session_owner(cfg.session)):
