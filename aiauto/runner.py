@@ -57,6 +57,33 @@ class Runner:
         self._picked: str | None = None
         self.timings: dict[str, list[float]] = {}
         self.cancel = threading.Event()          # set from another thread to stop after the current step
+        self.hold = bool(config.start_paused)    # pause before the next step (set from another thread)
+        self._go = threading.Event()             # let exactly one step through while held
+
+    # ---------------------------------------------------------------- pause / step (from another thread)
+    def pause(self) -> None:
+        self.hold = True
+
+    def resume(self) -> None:
+        self.hold = False
+        self._go.set()
+
+    def step(self) -> None:
+        """While paused: run the next step, then hold again."""
+        self.hold = True
+        self._go.set()
+
+    def _gate(self, i: int) -> None:
+        if not self.hold:
+            return
+        self._emit("paused", index=i)
+        while not self.cancel.is_set():
+            if self._go.wait(0.2):
+                self._go.clear()
+                break
+            if not self.hold:
+                break
+        self._emit("resumed", index=i)
 
     # ---------------------------------------------------------------- public
     def run(self) -> RunSummary:
@@ -73,6 +100,7 @@ class Runner:
             self.engine.start()
             self.engine.live_tick(force=True)
             for i, template_step in enumerate(resolved_steps):
+                self._gate(i)
                 if self.cancel.is_set():
                     cancelled = True
                     res = StepResult(index=i, step=template_step, status=StepStatus.SKIPPED, error="Cancelled by user")

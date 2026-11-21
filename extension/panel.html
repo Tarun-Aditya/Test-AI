@@ -7,27 +7,62 @@
 <link rel="stylesheet" href="panel.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to the main part</a>
+<div id="live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
 <header>
   <div class="logo" aria-hidden="true">✦</div>
-  <div class="brand"><b>Autopilot</b><small>Run a scenario on this page</small></div>
-  <button id="gear" class="icon" title="Hub address and sign-in" aria-label="Settings">⚙</button>
+  <div class="brand"><h1>Autopilot</h1><small>Run or record a scenario on this page</small></div>
+  <button id="gear" class="icon" title="Settings: hub address, sign-in, sites" aria-label="Settings">⚙</button>
 </header>
 
-<section class="card" id="target">
-  <div class="row"><span class="dot" id="tdot"></span><div class="grow"><div id="ttitle" class="t">Looking for your tab…</div><div id="turl" class="u"></div></div></div>
+<main id="main">
+<section class="card" id="target" aria-label="The tab Autopilot will use">
+  <div class="row"><span class="dot" id="tdot" aria-hidden="true"></span><div class="grow"><div id="ttitle" class="t">Looking for your tab…</div><div id="turl" class="u"></div></div></div>
   <div id="hubline" class="hub"></div>
 </section>
 
-<nav class="modes" role="tablist"><button id="mrun" class="on" role="tab">▶ Run a scenario</button><button id="mrec" role="tab">● Record a flow</button></nav>
+<section class="card setup" id="setup" aria-labelledby="setuph" hidden>
+  <h2 id="setuph">Connect to your hub</h2>
+  <p class="hint">Autopilot runs your scenario with a hub: the server that understands the text, drives the page and keeps the results. Start one on this computer (see below) or use your team's.</p>
+  <label for="hubaddr" class="lbl">Hub address</label>
+  <div class="inline"><input id="hubaddr" value="http://localhost:8000" autocomplete="off" spellcheck="false"><button id="hubconnect" class="btn primary">Connect</button></div>
+  <div id="signin" hidden>
+    <p class="hint">This hub has accounts. Sign in once; Chrome keeps the cookie, the extension never stores your password.</p>
+    <div class="inline2"><label for="suser" class="sr-only">Username</label><input id="suser" placeholder="Username" autocomplete="username"><label for="spass" class="sr-only">Password</label><input id="spass" type="password" placeholder="Password" autocomplete="current-password"><button id="slogin" class="btn primary">Sign in</button></div>
+  </div>
+  <div id="setupmsg" class="setupmsg" role="status"></div>
+  <details><summary>How do I start a hub?</summary>
+    <p class="hint">In the folder you downloaded, run <code>./start.sh</code> (macOS, Linux) or <code>start.bat</code> (Windows). It opens at <code>http://localhost:8000</code>. Docker: <code>docker compose up</code>.</p>
+  </details>
+</section>
 
-<section class="card" id="recview" hidden>
-  <div class="lbl">Record a flow</div>
+<section class="card welcome" id="welcome" aria-labelledby="welcomeh" hidden>
+  <h2 id="welcomeh">Before you start</h2>
+  <ul>
+    <li><b>Why the access?</b> To click and type on the page for you, Autopilot uses Chrome's debugging interface on the tab you choose. It only touches a tab while a run or recording is active.</li>
+    <li><b>Chrome's "debugging this browser" bar</b> appears during a run. Please don't press Cancel on it: that stops the run.</li>
+    <li><b>Your sites.</b> Autopilot asks before it runs on a site you haven't allowed (change this in Settings).</li>
+  </ul>
+  <button id="welcomeok" class="btn primary">Got it</button>
+</section>
+
+<nav class="modes" role="tablist" aria-label="What to do">
+  <button id="mrun" class="on" role="tab" aria-selected="true" aria-controls="runview">▶ Run a scenario</button>
+  <button id="mrec" role="tab" aria-selected="false" aria-controls="recview">● Record a flow</button>
+</nav>
+
+<section class="card" id="recview" aria-labelledby="recheading" hidden>
+  <h2 class="lbl" id="recheading">Record a flow</h2>
   <p class="hint">Click through the page the way a person would. Every click, entry and choice becomes a step, in the same format as a typed scenario, so it can be replayed, edited and exported.</p>
   <div class="actions">
     <button id="recstart" class="btn primary">● Record on this tab</button>
+    <button id="recpause" class="btn" aria-pressed="false" hidden>Ⅱ Pause</button>
+    <button id="recundo" class="btn" title="Remove the last thing recorded" hidden>↶ Undo last</button>
     <button id="recstop" class="btn danger" hidden>■ Stop recording</button>
   </div>
   <div id="recadd" class="addcheck" hidden>
+    <label for="checktext" class="sr-only">A check: text the page should show</label>
     <input id="checktext" placeholder="Add a check: the page should show…" spellcheck="false">
     <button id="checkadd" class="btn">Add</button>
     <button id="checksel" class="btn" title="Highlight text on the page first">Use selected text</button>
@@ -35,43 +70,70 @@
   <div class="imp"><label class="btn" for="chromefile">Import a Chrome Recorder file…</label><input type="file" id="chromefile" accept=".json,application/json" hidden></div>
 </section>
 
-<section class="card" id="recout" hidden>
-  <div class="lbl">Recorded steps <span class="mut" id="reccount"></span></div>
+<section class="card" id="recout" aria-labelledby="recoutheading" hidden>
+  <h2 class="lbl" id="recoutheading">Recorded steps <span class="mut" id="reccount"></span></h2>
   <ol id="recsteps" class="recsteps"></ol>
-  <div class="actions">
+  <div class="actions wrap">
     <button id="reccheck" class="btn primary" title="Replays it now, on this tab, and marks every step that does not reproduce">✓ Check replay</button>
     <button id="recreplay" class="btn">▶ Replay on this tab</button>
     <button id="reccopy" class="btn">Copy as English</button>
   </div>
-  <div id="checkres" class="checkres" hidden></div>
-  <div class="save"><input id="recname" value="Recorded flow" spellcheck="false" aria-label="Name"><button id="recsave" class="btn">Save to hub</button></div>
+  <div id="checkres" class="checkres" role="status" hidden></div>
+  <div class="save"><label for="recname" class="sr-only">Name of this recording</label><input id="recname" value="Recorded flow" spellcheck="false"><button id="recsave" class="btn">Save to hub</button></div>
 </section>
 
-<section class="card" id="runview">
-  <label for="text" class="lbl">Your scenario</label>
+<section class="card" id="runview" aria-labelledby="runheading">
+  <h2 class="lbl" id="runheading"><label for="text">Your scenario</label></h2>
   <textarea id="text" spellcheck="false" placeholder="Paste it as you have it. For example:&#10;&#10;The visitor enters the email test.user@example.com, a username testuser and age 30, then submits the registration form. The system should confirm that the account was created successfully."></textarea>
-  <details id="datad"><summary>Data <span class="mut">(optional)</span></summary>
-    <textarea id="data" spellcheck="false" placeholder="one per line:&#10;brand = Logitech&#10;password* = secret&#10;&#10;The page you are on is ${base_url}. A * after the name hides the value."></textarea>
+  <div class="inline namerow"><label for="runname" class="sr-only">Name of this run</label><input id="runname" placeholder="Name this run (optional)" spellcheck="false" autocomplete="off"></div>
+  <details id="datad"><summary>Data <span class="mut">(optional: values the scenario uses, and secrets)</span></summary>
+    <table id="datatable" class="datatable" aria-label="Test data"><thead><tr><th scope="col">Name</th><th scope="col">Value</th><th scope="col">Secret</th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead><tbody></tbody></table>
+    <button id="dataadd" class="btn small" type="button">+ Add a value</button>
+    <button id="astextbtn" class="btn small" type="button" aria-expanded="true" aria-controls="astext">Edit as text</button>
+    <div id="astext"><textarea id="data" spellcheck="false" aria-label="Test data as text" placeholder="one per line:&#10;brand = Logitech&#10;password* = secret&#10;&#10;The page you are on is ${base_url}. A * after the name hides the value."></textarea></div>
   </details>
   <details id="hubd" class="hubd"><summary>From the hub <span class="mut">(replay a saved script or a past run)</span></summary>
+    <div class="inline"><label for="hubsearch" class="sr-only">Search saved scripts and runs</label><input id="hubsearch" type="search" placeholder="Search…" autocomplete="off"></div>
     <div id="hublists" class="hublists">Loading…</div>
+    <button id="hubmore" class="btn small" hidden>Show more</button>
   </details>
+  <label class="check"><input type="checkbox" id="stepmode"> Run step by step <span class="mut">(pauses before each step)</span></label>
   <div class="actions">
     <button id="preview" class="btn">Preview steps</button>
-    <button id="run" class="btn primary">▶ Run on this tab</button>
-    <button id="stop" class="btn danger" hidden>■ Stop</button>
+    <button id="run" class="btn primary" title="Run (Ctrl/Cmd + Enter)">▶ Run on this tab</button>
+  </div>
+  <div id="runctl" class="actions" hidden>
+    <button id="pause" class="btn" aria-pressed="false">Ⅱ Pause</button>
+    <button id="next" class="btn" hidden>⏭ Next step</button>
+    <button id="stop" class="btn danger">■ Stop</button>
   </div>
 </section>
 
-<div id="msg" class="msg" hidden></div>
+<div id="msg" class="msg" role="alert" hidden></div>
+<section id="barnote" class="callout" hidden><b>Chrome's "debugging this browser" bar</b>It appears while a run is active: that is how real clicks and typing reach the page. Please don't press Cancel on it. <button id="barok" class="btn small">OK</button></section>
 <section id="notes" class="callout" hidden></section>
-<section id="banner" class="banner" hidden></section>
+<section id="banner" class="banner" role="status" hidden></section>
 <div id="reportline" class="reportline" hidden></div>
+<section id="results" class="results card" aria-label="Results" hidden>
+  <div class="actions wrap"><button id="watch" class="btn">▶ Watch the video</button><a id="reportlink" class="btn" target="_blank" rel="noopener">Open the report</a><button id="savescript" class="btn">Save as a script</button></div>
+  <video id="video" controls preload="metadata" hidden></video>
+</section>
 <section id="tabs" class="tabs" hidden></section>
-<ol id="steps" class="steps"></ol>
+<div id="steptools" class="steptools" hidden>
+  <label class="check"><input type="checkbox" id="onlyfailed"> Show only failed steps</label>
+  <label class="check"><input type="checkbox" id="allshots"> Show all screenshots</label>
+</div>
+<ol id="steps" class="steps" aria-label="Steps"></ol>
+</main>
 
-<footer>Real clicks and typing in your own tab. Chrome shows a "debugging this browser" bar while it runs.</footer>
-<div id="zoom" hidden><img alt="Step screenshot"></div>
+<footer>Real clicks and typing in your own tab. Shortcuts: Ctrl/Cmd + Enter runs, Esc closes a picture or cancels picking.</footer>
+
+<div id="zoom" role="dialog" aria-modal="true" aria-label="Screenshot" tabindex="-1" hidden><button id="zoomclose" class="btn">Close</button><img alt="Step screenshot"></div>
+<div id="confirm" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmh" tabindex="-1" hidden>
+  <div class="box"><h2 id="confirmh"></h2><div id="confirmb"></div>
+    <label class="check" id="confirmalways"><input type="checkbox" id="confirmcheck"> <span id="confirmchecklabel"></span></label>
+    <div class="actions"><button id="confirmno" class="btn">Cancel</button><button id="confirmyes" class="btn primary">Continue</button></div></div>
+</div>
 <script type="module" src="panel.js"></script>
 </body>
 </html>

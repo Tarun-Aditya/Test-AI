@@ -34,6 +34,12 @@ export class ServerRun {
       if (ev.run_id === this.hubRun) this.chain = this.chain.then(() => this.translate(ev)).catch(() => {});
     };
     bridge.runListeners.add(this.listener);
+    this.onDetach = (tabId, reason) => {                    // the person pressed Cancel on Chrome's "debugging this browser" bar
+      if (reason !== "canceled_by_user" || !this.tabIds.has(tabId) || this.status !== "running") return;
+      this.emit("debugger_closed", {});
+      this.cancel();
+    };
+    bridge.detachListeners.add(this.onDetach);
     try {
       const r = await hub("/api/runs", { method: "POST", body: { ...body, ext_session: session.token } });
       this.hubRun = r.run_ids[0];
@@ -43,10 +49,14 @@ export class ServerRun {
     return this.hubRun;
   }
 
+  async control(action) { if (this.hubRun) await hub(`/api/runs/${encodeURIComponent(this.hubRun)}/control`, { method: "POST", body: { action } }); }
+
   async cancel() { if (this.hubRun) try { await hub(`/api/runs/${encodeURIComponent(this.hubRun)}/cancel`, { method: "POST", body: {} }); } catch (e) { /* already over */ } }
 
   async translate(ev) {
     switch (ev.type) {
+      case "paused": this.emit("paused", { index: ev.index }); break;
+      case "resumed": this.emit("resumed", { index: ev.index }); break;
       case "run_started": this.emit("run_started", { total: ev.total, tab: await this.tabInfo(this.tabId) }); break;
       case "step_started": this.emit("step_started", { index: ev.index, raw: ev.raw, action: ev.action, target: ev.target, value: ev.value }); break;
       case "step_finished": {
@@ -64,7 +74,7 @@ export class ServerRun {
       case "run_finished": {
         this.status = ev.status || "failed";
         const tabs = await Promise.all(this.tabList.filter((x) => x != null).map((id) => this.tabInfo(id)));
-        bridge.runListeners.delete(this.listener);
+        bridge.runListeners.delete(this.listener); bridge.detachListeners.delete(this.onDetach);
         this.emit("run_finished", { status: this.status, error: ev.error || null, tabs });
         this.emit("report_done", { ok: true, hubRun: this.hubRun, error: null });
         break;

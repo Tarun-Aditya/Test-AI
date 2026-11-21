@@ -44,7 +44,7 @@ def browser(tmp_path_factory, rhub):
         pw.stop()
         pytest.skip("this Chromium did not load the unpacked extension")
     ext = sw.url.split("/")[2]
-    sw.evaluate("(hub) => chrome.storage.local.set({hub})", rhub[0])
+    sw.evaluate("(hub) => chrome.storage.local.set({hub, askBeforeRunning: false, welcomed: true, seenBarNote: true})", rhub[0])
     ctx.on("dialog", lambda d: None)
     ctx.sw = sw
     yield ctx, ext

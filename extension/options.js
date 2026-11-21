@@ -2,9 +2,21 @@ const $ = (id) => document.getElementById(id);
 const ask = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, (r) => res(r || { ok: false, error: "No answer" })));
 const say = (el, text, cls) => { el.textContent = text; el.className = cls || ""; };
 
+async function renderAllowed() {
+  const s = await chrome.storage.local.get({ allowedSites: [] });
+  $("noallowed").hidden = s.allowedSites.length > 0;
+  $("allowed").innerHTML = s.allowedSites.map((o, i) => `<li style="display:flex;justify-content:space-between;padding:3px 0"><span>${o.replace(/[<>&]/g, "")}</span><button class="ghost" data-i="${i}" aria-label="Stop allowing ${o.replace(/[<>&"]/g, "")}">Remove</button></li>`).join("");
+}
+$("allowed").onclick = async (e) => {
+  const b = e.target.closest("button[data-i]"); if (!b) return;
+  const s = await chrome.storage.local.get({ allowedSites: [] }); s.allowedSites.splice(+b.dataset.i, 1);
+  await chrome.storage.local.set({ allowedSites: s.allowedSites }); renderAllowed();
+};
+$("ask").onchange = async () => { await chrome.storage.local.set({ askBeforeRunning: $("ask").checked }); say($("astatus"), $("ask").checked ? "On." : "Off: Autopilot will not ask.", "ok"); };
+
 (async () => {
-  const s = await chrome.storage.local.get({ hub: "http://localhost:8000", project: "default" });
-  $("hub").value = s.hub; $("project").value = s.project;
+  const s = await chrome.storage.local.get({ hub: "http://localhost:8000", project: "default", askBeforeRunning: true });
+  $("hub").value = s.hub; $("project").value = s.project; $("ask").checked = s.askBeforeRunning; renderAllowed();
 })();
 
 async function granted(url) {                 // the hub is on a host the extension may not reach yet? (it has <all_urls>, so yes)

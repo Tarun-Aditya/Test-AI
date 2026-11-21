@@ -47,7 +47,7 @@ async function preview({ text, data, sensitive }) {
 }
 
 // The hub runs it: its own runner and Playwright engine drive this tab through the bridge, so every capability of the server applies.
-async function startOnServer({ text, data, sensitive, steps, tabId, config, sourceRun, name }) {
+async function startOnServer({ text, data, sensitive, steps, tabId, config, sourceRun, name, noOpen }) {
   const tab = tabId ? await chrome.tabs.get(tabId) : await target();
   if (!tab) throw new Error("Open the website you want to test in a tab first.");
   for (const r of runs.values()) if (r.tabIds.has(tab.id) && r.status === "running") throw new Error("A scenario is already running in this tab.");
@@ -60,10 +60,10 @@ async function startOnServer({ text, data, sensitive, steps, tabId, config, sour
   }
   // A script has to open the page it starts on: a run that began on a page that was already open starts with that step, so the run and the
   // script made from it are the same sequence (and run on their own).
-  if (!sourceRun && plan[0] && plan[0].action !== "navigate") plan = [{ action: "navigate", value: tab.url, raw: "open " + tab.url, source: "rules" }, ...plan];
+  if (!sourceRun && !noOpen && plan[0] && plan[0].action !== "navigate") plan = [{ action: "navigate", value: tab.url, raw: "open " + tab.url, source: "rules" }, ...plan];
   const id = "r" + Date.now().toString(36) + (nextId++);
   const run = new ServerRun({ id, tabId: tab.id, onEvent: broadcast });
-  const body = { name: name || undefined, start_url: tab.url, config: { use_llm: true, record_video: true, timeout_ms: (config && config.timeout) || 15000 } };
+  const body = { name: name || undefined, start_url: tab.url, config: { use_llm: true, record_video: true, timeout_ms: (config && config.timeout) || 15000, start_paused: !!(config && config.startPaused) } };
   if (sourceRun && sourceRun.startsWith("library:")) { body.library = sourceRun.slice(8); body.data = d; body.sensitive = sens; }
   else if (sourceRun) { body.replay_run_id = sourceRun; body.data = d; body.sensitive = sens; }
   else { body.steps = plan; body.data = { ...dataFor(tab, {}), ...d }; body.sensitive = sens; }
@@ -71,7 +71,7 @@ async function startOnServer({ text, data, sensitive, steps, tabId, config, sour
   try { await run.start(body, tab); } catch (e) { runs.delete(id); throw e; }
   setTimeout(() => runs.delete(id), 6 * 60 * 60 * 1000);
   run.log.push({ type: "report", runId: id, hubRun: run.hubRun });
-  return { runId: id, hubRun: run.hubRun, total: plan.length, plan: plan.map((x) => ({ raw: x.raw, origin: x.origin || "", action: x.action })), notes, ignored };
+  return { runId: id, hubRun: run.hubRun, steps: plan, total: plan.length, plan: plan.map((x) => ({ raw: x.raw, origin: x.origin || "", action: x.action })), notes, ignored };
 }
 
 const start = startOnServer;
@@ -110,6 +110,7 @@ async function recStop() {
   return { events: r.events };
 }
 function recPush(ev, tabId) {
+  if (rec.paused) return;                                           // recording is paused: what you do now is not part of it
   const i = rec.order.indexOf(tabId); if (i < 0) return;
   rec.events.push({ ...ev, tab: i + 1, t: (Date.now() - rec.t0) / 1000 });
   saveRec(); chrome.runtime.sendMessage({ type: "rec_changed", n: rec.events.length }).catch(() => {});
@@ -124,6 +125,12 @@ chrome.tabs.onUpdated.addListener(async (id, info) => {
   if (last && last.url === info.url) return;
   recPush({ type: "navigate", url: info.url }, id);
 });
+
+let picking = null;
+async function stopPicker() {
+  const id = picking; picking = null; if (id == null) return;
+  try { await chrome.scripting.executeScript({ target: { tabId: id, allFrames: true }, func: () => { if (window.__aiautoPicker) window.__aiautoPicker.stop(); } }); } catch (e) { /* tab gone */ }
+}
 
 // CSS selectors of the iframes (outermost first) that lead to one frame of a tab, found from the PARENT frame, which is the only one allowed to name its iframes.
 const chainCache = new Map();
@@ -158,14 +165,24 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     case "target": done(target().then((t) => ({ tab: t && { id: t.id, title: t.title, url: t.url, ok: canInject(t.url) } }))); return true;
     case "preview": done(preview(msg)); return true;
     case "run": done(start(msg)); return true;
+    case "test-detach": done((async () => {                     // only when a test switches hooks on: acts as if the person pressed Cancel on Chrome's debugging bar
+      if (!(await chrome.storage.local.get({ testHooks: false })).testHooks) throw new Error("Not available.");
+      for (const f of bridge.detachListeners) f(msg.tabId, "canceled_by_user"); return {};
+    })()); return true;
+    case "set-hub": done(chrome.storage.local.set({ hub: String(msg.hub || "").replace(/\/+$/, "") }).then(() => ({}))); return true;
+    case "step-from-element": done(hub("/api/record/step-from-element", { method: "POST", body: { step: msg.step, el: msg.el } })); return true;
+    case "save-run": done(hub("/api/library/from-run", { method: "POST", body: { run_id: msg.id, name: msg.name || null } })); return true;
+    case "run-control": done((async () => { const r = runs.get(msg.runId); if (!r || !r.control) throw new Error("That run is not active."); await r.control(msg.action); return {}; })()); return true;
     case "stop": { const r = runs.get(msg.runId); if (r) r.cancel(); reply({ ok: true }); return false; }
     case "state": { const r = runs.get(msg.runId) || [...runs.values()].pop(); reply({ ok: true, runId: r && r.id, status: r && r.status, log: r ? r.log.filter((e) => e.type !== "dialog" || true) : [] }); return false; }
     case "health": done(health().then((h) => ({ health: h }))); return true;
     case "signin": done(signIn(msg.username, msg.password).then((u) => ({ user: u.user }))); return true;
     case "settings": done(settings().then((s) => ({ settings: s }))); return true;
     case "rec-start": done(recStart()); return true;
+    case "rec-pause": done(R().then((r) => { if (!r) throw new Error("Not recording."); r.paused = !!msg.on; saveRec(); badge(r.paused ? "II" : "REC"); return { paused: r.paused }; })); return true;
+    case "rec-undo": done(R().then((r) => { if (!r) throw new Error("Not recording."); if (r.events.length > 1) r.events.pop(); saveRec(); chrome.runtime.sendMessage({ type: "rec_changed", n: r.events.length }).catch(() => {}); return { n: r.events.length }; })); return true;
     case "rec-stop": done(recStop()); return true;
-    case "rec-state": done(R().then((r) => ({ active: !!(r && r.active), n: r ? r.events.length : 0, events: r ? r.events : [] }))); return true;
+    case "rec-state": done(R().then((r) => ({ active: !!(r && r.active), paused: !!(r && r.paused), n: r ? r.events.length : 0, events: r ? r.events : [] }))); return true;
     case "rec-clear": rec = null; chrome.storage.session.remove("rec").catch(() => {}); badge(""); reply({ ok: true }); return false;
     case "rec-event": R().then(async (r) => {
       if (!r || !r.active || !sender.tab || !r.tabs.has(sender.tab.id)) return;
@@ -183,9 +200,28 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       const rs = await chrome.scripting.executeScript({ target: { tabId: id, allFrames: true }, func: () => String(getSelection() || "").trim() });
       return { text: (rs.map((x) => x.result).find(Boolean)) || "" };
     })()); return true;
-    case "hub-lists": done(Promise.all([hub("/api/library").catch(() => []), hub("/api/runs?limit=15").catch(() => [])]).then(([library, runs]) => ({ library, runs }))); return true;
+    case "hub-lists": done(Promise.all([hub("/api/library").catch(() => []), hub("/api/runs?limit=60").catch(() => [])]).then(([library, runs]) => ({ library, runs }))); return true;
     case "replay-load": done(hub(msg.kind === "library" ? "/api/ext/replay/library/" + encodeURIComponent(msg.id) : "/api/ext/replay/run/" + encodeURIComponent(msg.id))); return true;
     case "bridge-session": done(bridge.session(msg.tabId)); return true;
+    case "pick-start": done((async () => {
+      const t = await chrome.tabs.get(msg.tabId); if (!canInject(t.url)) throw new Error("Open the page first: this kind of page can't be picked from.");
+      picking = msg.tabId; await chrome.tabs.update(msg.tabId, { active: true }).catch(() => {});
+      await chrome.scripting.executeScript({ target: { tabId: msg.tabId, allFrames: true }, files: ["lib/shared.js", "lib/picker.js"] });
+      return {};
+    })()); return true;
+    case "pick-stop": done(stopPicker().then(() => ({}))); return true;
+    case "pick-result": (async () => {
+      const tabId = sender.tab && sender.tab.id; if (tabId == null || tabId !== picking) return;
+      const el = msg.el; if (el && sender.frameId) { const chain = await frameChain(tabId, sender.frameId).catch(() => null); if (chain && chain.length && !(el.frames && el.frames.length >= chain.length)) el.frames = chain; }
+      await stopPicker(); chrome.runtime.sendMessage({ type: "picked", el }).catch(() => {});
+    })(); return false;
+    case "pick-cancel": stopPicker().then(() => chrome.runtime.sendMessage({ type: "picked", el: null }).catch(() => {})); return false;
+    case "site-status": done((async () => {
+      const u = new URL(msg.url || "about:blank"); const st = await chrome.storage.local.get({ askBeforeRunning: true, allowedSites: [], localAllowed: true });
+      const local = /^(localhost|127\.0\.0\.1|\[::1\]|.*\.local|.*\.localhost)$/.test(u.hostname) || u.protocol === "file:";
+      return { origin: u.origin === "null" ? u.protocol : u.origin, ask: st.askBeforeRunning, allowed: (local && st.localAllowed) || st.allowedSites.includes(u.origin) };
+    })()); return true;
+    case "site-allow": done(chrome.storage.local.get({ allowedSites: [] }).then((st) => chrome.storage.local.set({ allowedSites: [...new Set([...st.allowedSites, msg.origin])] })).then(() => ({}))); return true;
     case "compile": done(compileRecording(msg.events, msg.name, msg.data, msg.sensitive)); return true;
     case "import-chrome": done(importChrome(msg.recording, msg.name)); return true;
     case "save-library": done(saveToLibrary(msg.name, msg.test)); return true;

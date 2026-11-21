@@ -20,6 +20,16 @@ button { border:0; background:var(--acc); color:#fff; padding:8px 14px; border-r
     <label for="project">Project</label><input id="project" placeholder="default" autocomplete="off">
     <div class="row"><button id="save">Save and test</button><span id="status"></span></div>
   </section>
+  <section class="card"><h2>Sites</h2>
+    <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400"><input id="ask" type="checkbox" style="width:auto;margin-top:4px">
+      <span><b>Ask before running on a site I haven't allowed</b><br><small>Autopilot clicks and types on the page like a person. It asks once per site, and before a scenario that does things that are hard to undo (delete, pay, send). This computer's own pages (localhost, file) are always allowed.</small></span></label>
+    <div class="row"><span id="astatus"></span></div>
+    <label>Sites you allowed</label>
+    <ul id="allowed" style="list-style:none;padding:0;margin:0"></ul><small id="noallowed">None yet.</small>
+  </section>
+  <section class="card"><h2>Why these permissions</h2>
+    <small>To click and type for you, Autopilot attaches Chrome's debugging interface to the one tab you choose, only while a run or recording is active (Chrome shows its "debugging this browser" bar then). It reads the page to find elements and to record what you do. It sends the steps and the page's elements to your hub, never anywhere else. Passwords you type while recording are masked and kept out of the saved steps.</small>
+  </section>
   <section class="card"><h2>Sign in</h2>
     <small>Only if the hub has accounts. Your password is sent to the hub once; Chrome keeps the sign-in cookie. The extension never stores it.</small>
     <label for="u">Username</label><input id="u" autocomplete="username">

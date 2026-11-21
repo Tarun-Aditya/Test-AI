@@ -86,7 +86,7 @@ def browser(tmp_path_factory, hub):
         pw.stop()
         pytest.skip("this Chromium did not load the unpacked extension")
     ext = sw.url.split("/")[2]
-    sw.evaluate("(hub) => chrome.storage.local.set({hub})", hub)
+    sw.evaluate("(hub) => chrome.storage.local.set({hub, askBeforeRunning: false, welcomed: true, seenBarNote: true})", hub)
     ctx.on("dialog", lambda d: None)        # Playwright dismisses dialogs nobody handles; the extension under test handles them
     yield ctx, ext
     ctx.close()

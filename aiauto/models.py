@@ -133,6 +133,7 @@ class RunConfig(BaseModel):
     # Selenium: the hub URL; Playwright: ws(s):// (browser server) or http(s):// (Chrome DevTools endpoint)
     remote_url: Optional[str] = None
     remote_caps: dict[str, Any] = Field(default_factory=dict)   # Selenium capabilities (platformName, bstack:options, ...)
+    start_paused: bool = False            # hold before the first step: the person steps through (Next step) or resumes
     remote_attach: bool = False           # remote_url is the Chrome extension's DevTools relay: drive the person's own tab, don't open a browser
     ext_token: Optional[str] = None       # that relay's session (set by the hub, never by a client)
     record_video: bool = True

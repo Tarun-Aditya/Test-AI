@@ -544,6 +544,26 @@ class _CancelledHolder(list):
         super().append(r)
 
 
+class RunControl(BaseModel):
+    action: Literal["pause", "resume", "step"]
+
+
+@app.post("/api/runs/{run_id}/control")
+async def run_control(run_id: str, req: RunControl, request: Request):
+    """Pause a running test before its next step, resume it, or let exactly one step through (step-through)."""
+    row = db.raw_run(_safe(run_id))
+    if not row or (row.get("project") or "default") not in _projects_for(_user(request)):
+        raise HTTPException(404, "run not found")
+    if not authmod.can_manage(_user(request), row.get("owner")):
+        raise HTTPException(403, "Only the owner of this run or an admin can control it")
+    h = hub.local_runners.get(run_id)
+    if not h or not hasattr(h[0], req.action):
+        raise HTTPException(409, "That run is not running on this machine right now")
+    getattr(h[0], req.action)()
+    await hub.broadcast({"type": "run_control", "run_id": run_id, "action": req.action})
+    return {"ok": True}
+
+
 @app.post("/api/runs/cancel")
 async def api_cancel(req: CancelRequest, request: Request):
     ids = list(req.run_ids)
@@ -805,6 +825,26 @@ def record_compile(req: RecordCompile, request: Request):
     from ..recorder import compile_events
     test, notes = compile_events(req.events, req.data, req.sensitive, req.name, req.base_url)
     return {"test": json.loads(test.model_dump_json()), "notes": notes}
+
+
+class StepFromElement(BaseModel):
+    step: dict[str, Any]
+    el: dict[str, Any]
+
+
+@app.post("/api/record/step-from-element")
+def record_step_from_element(req: StepFromElement, request: Request):
+    """The person clicked the right element on the page for a step that could not find its own: the step with that element's locators."""
+    from ..recorder import _locators, describe_target
+    try:
+        st = Step(**req.step)
+    except Exception as e:
+        raise HTTPException(400, f"Bad step: {e}")
+    loc, fallbacks = _locators(req.el)
+    if loc is None:
+        raise HTTPException(422, "That element has no usable locators")
+    st = st.model_copy(update={"locator": loc, "fallbacks": fallbacks, "source": "user", "optional": st.optional})
+    return {"step": json.loads(st.model_dump_json()), "described_as": describe_target(req.el)}
 
 
 class RecordImport(BaseModel):

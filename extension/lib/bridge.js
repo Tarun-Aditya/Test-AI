@@ -90,8 +90,10 @@ chrome.debugger.onEvent.addListener((src, method, params) => {
   }
   send({ event: "cdp", tabId: src.tabId, ...(src.sessionId ? { sessionId: src.sessionId } : {}), method, params });
 });
-chrome.debugger.onDetach.addListener((src) => {
+export const detachListeners = new Set();           // (tabId, reason) => void: called when the person closes Chrome's "debugging this browser" bar
+chrome.debugger.onDetach.addListener((src, reason) => {
   if (!attached.delete(src.tabId)) return;
+  for (const f of detachListeners) { try { f(src.tabId, reason); } catch (e) { /* a listener failed */ } }
   send({ event: "tab", kind: "removed", tabId: src.tabId });
 });
 // a tab the driven tab opens (target=_blank, window.open): driven too
