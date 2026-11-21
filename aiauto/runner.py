@@ -823,7 +823,7 @@ class Runner:
                 a, "element text" if loc else "page")
             raise StepError(f"Expected {what} to contain {expected!r}; got {_excerpt(actual, expected)!r}")
         elif a == Action.ASSERT_VISUAL:
-            self._visual(v)
+            self._visual_check(v)
         elif a == Action.ASSERT_ACCESSIBLE:
             from .script_runtime import A11Y_JS, a11y_problems
             problem = a11y_problems(e.eval_js(A11Y_JS), v)
@@ -866,7 +866,7 @@ class Runner:
         slug = re.sub(r"[^a-z0-9]+", "-", re.sub(r"\$\{[^}]*\}", "", self.test.name or "test").lower()).strip("-")[:50] or "test"
         return Path(base) / slug / (re.sub(r"[^\w.-]", "_", name) + ".png")
 
-    def _visual(self, value: str | None) -> None:
+    def _visual_check(self, value: str | None) -> None:
         """Compare the page with this step's baseline screenshot (made on the first run, replaced with update_baselines)."""
         from .script_runtime import visual_compare
         name, _, tol = (value or "").partition(":")
