@@ -252,6 +252,8 @@ class Runner:
                             template.locator, template.fallbacks = loc, [l for l in stored if l is not loc][:3]
                     if idx > usable0:
                         self._emit("healing", target=self.mask(target), how=f"fallback locator {loc.label()}")
+                    if idx <= usable0 and attr == "locator":
+                        self._refresh_if_loose(template, loc, target)
                     self._picked = "script" if idx <= usable0 else "fallback"
                     return loc, idx > usable0
             # not rendered yet (virtualised list, lazy section)? scroll and look for the stored locators
@@ -506,6 +508,34 @@ class Runner:
                 seen.add(xp)
                 out.append(l.model_copy(update={"strategy": "xpath", "value": xp, "role": None, "code": None}))
         return out
+
+    def _refresh_if_loose(self, template: Step, loc: Locator, target: str | None) -> None:
+        """A stored semantic locator (role + name, label, placeholder, text) that matched only loosely (Playwright compares names as
+        substrings, ignoring case; Selenium compares them exactly): describe the element again so the script carries locators that
+        match it exactly on both engines."""
+        if loc.strategy not in ("role", "label", "placeholder", "text", "playwright"):
+            return
+        stored = loc.value
+        if loc.strategy == "playwright":
+            m = re.search(r'name="(.*?)"i?\]', loc.value) or re.search(r'text=(?:"(.*?)"|(.*?))(?:i)?$', loc.value)
+            stored = (m.group(1) or m.group(2) or "") if m else ""
+        if not stored:
+            return
+        describe = getattr(self.engine, "describe_loc", None)
+        if not describe:
+            return
+        try:
+            d = describe(loc)
+            if not d:
+                return
+            norm = lambda x: " ".join(str(x or "").split()).lower()
+            if norm(stored) in {norm(d.get(k)) for k in ("name", "label", "text", "placeholder", "aria_label", "value")}:
+                return                                         # an exact match already
+            fresh = self._verify({**d, "uid": 0}, target or "", described=True)
+            if fresh:
+                template.locator, template.fallbacks = fresh[0], fresh[1:4]
+        except Exception as ex:
+            log.debug("could not refresh loose locator: %s", ex)
 
     def _refresh(self, loc: Locator, target: str | None) -> list[Locator] | None:
         """The element a fallback locator found, described again: fresh verified locators for the script, whose old ones no longer match."""
