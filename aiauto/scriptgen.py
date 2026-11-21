@@ -240,12 +240,11 @@ def _data_nth(st: Step) -> bool:
 
 
 def _unstable(loc: Locator | None) -> bool:
+    """The recorded element is named by an id / class that was generated for this page load (long digit runs): it will not exist next time."""
     if not loc:
         return False
-    if loc.strategy == "xpath":
-        return True
-    text = (loc.code or loc.value) if loc.strategy == "playwright" else loc.value if loc.strategy == "css" else ""
-    return bool(text) and bool(re.search(r"nth-of-type|nth-child| > |\.nth\(|[#.][\w-]*\d{4,}", text))
+    text = (loc.code or loc.value) if loc.strategy == "playwright" else loc.value if loc.strategy in ("css", "id") else ""
+    return bool(text) and bool(re.search(r"[#.][\w-]*\d{4,}|^\w*-?\w*\d{6,}", text))
 
 
 def _nth_text(st: Step) -> str:

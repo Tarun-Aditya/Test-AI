@@ -46,10 +46,13 @@ def test_a_real_site_scenario_runs_in_the_tab_and_its_scripts_run_on_their_own(b
     path, data, secrets = SCENARIOS[name]
     text = path.read_text()
     base, arts = rhub
-    known = {r["run_id"] for r in runs(base)}
-    status, panel, page = _run_from_panel(browser, first_url(text), text, data, timeout=420)
-    steps = [(li.get_attribute("class").split()[-1], li.locator(".tx").inner_text(), li.locator(".err").inner_text() if li.locator(".err").count() else "")
-             for li in panel.locator("#steps li").all()]
+    for attempt in (1, 2):                    # a live site can have a bad moment: one retry of the run itself (never of the scripts)
+        known = {r["run_id"] for r in runs(base)}
+        status, panel, page = _run_from_panel(browser, first_url(text), text, data, timeout=420)
+        steps = [(li.get_attribute("class").split()[-1], li.locator(".tx").inner_text(), li.locator(".err").inner_text() if li.locator(".err").count() else "")
+                 for li in panel.locator("#steps li").all()]
+        if status == "passed":
+            break
     assert status == "passed", [s for s in steps if s[0] != "passed"][:3]
     saved(panel, timeout=120)
     rid = new_extension_run(base, known)
