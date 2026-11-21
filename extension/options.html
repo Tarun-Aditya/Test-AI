@@ -20,20 +20,6 @@ button { border:0; background:var(--acc); color:#fff; padding:8px 14px; border-r
     <label for="project">Project</label><input id="project" placeholder="default" autocomplete="off">
     <div class="row"><button id="save">Save and test</button><span id="status"></span></div>
   </section>
-  <section class="card"><h2>Engine</h2>
-    <label for="engine">Run scenarios with</label>
-    <select id="engine" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit">
-      <option value="server">The hub's engine, in this tab (recommended)</option>
-      <option value="builtin">The built-in lightweight engine</option>
-    </select>
-    <small>The hub's engine is the very one that runs tests in the app (Playwright and the server's runner): same element finding, self-healing, AI help, assertions, uploads, report and video. The extension carries your tab to it. The built-in engine is a smaller copy that runs inside the extension; use it only if you can't use the hub's.</small>
-    <div class="row"><span id="estatus"></span></div>
-  </section>
-  <section class="card"><h2>Reports</h2>
-    <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400"><input id="report" type="checkbox" style="width:auto;margin-top:4px" checked>
-      <span><b>Send runs to the hub</b><br><small>Every run is kept on the hub like a run from the app: history and stats, a live view while it runs, a screenshot per step, a video, a report and a script you can replay or export. Turn off to run without leaving anything behind.</small></span></label>
-    <div class="row"><span id="rstatus"></span></div>
-  </section>
   <section class="card"><h2>Pages</h2>
     <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400"><input id="shadow" type="checkbox" style="width:auto;margin-top:4px">
       <span><b>Open closed shadow roots</b><br><small>Some components hide their insides in a "closed" shadow root, which no tool can see into. This makes them open on every page, before the page's own scripts run, so elements inside can be found. Takes effect on pages you load after turning it on.</small></span></label>

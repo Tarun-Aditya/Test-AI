@@ -339,7 +339,7 @@ class CdpSession:
 def finish_video(token: str | None, run_dir) -> str | None:
     """The screencast of a finished session -> run_dir/video.webm (None if there was none)."""
     import shutil
-    from .extruns import build_video
+    from .video import build_video
     sess = SESSIONS.get(token or "")
     if not sess or not sess.frames:
         return None

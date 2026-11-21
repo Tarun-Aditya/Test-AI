@@ -289,28 +289,6 @@ def test_signing_in_to_a_hub_with_accounts(browser, sites, tmp_path):
 
 
 # ------------------------------------------------------------------------------------------------ not browser tests
-def test_the_hubs_locate_endpoint_picks_like_the_engines(tmp_path, monkeypatch):
-    import importlib
-    monkeypatch.setenv("AIAUTO_DB", str(tmp_path / "h.db"))
-    monkeypatch.setenv("AIAUTO_ARTIFACTS", str(tmp_path / "a"))
-    import aiauto.server.app as appmod
-    appmod = importlib.reload(appmod)
-    from fastapi.testclient import TestClient
-    base = {"frames": [], "shadow": [], "anc": [], "label": "", "placeholder": "", "aria_label": "", "nameattr": "", "title": "", "alt": "",
-            "value": "", "href": "", "testid": "", "cls": "", "editable": False, "options": [], "visible": True, "id": "", "text": ""}
-    cands = [{**base, "uid": 1, "tag": "input", "type": "text", "role": "textbox", "name": "Email", "label": "Email"},
-             {**base, "uid": 2, "tag": "button", "type": "submit", "role": "button", "name": "Create account", "text": "Create account"}]
-    with TestClient(appmod.app) as c:
-        h = {"X-Requested-With": "autopilot"}
-        def ask(step):
-            return c.post("/api/locate", json={"step": step, "candidates": json.loads(json.dumps(cands))}, headers=h).json()
-        assert ask({"action": "type", "target": "Email", "value": "a@b.c"})["uid"] == 1
-        assert ask({"action": "click", "target": "submit button"})["uid"] == 2          # "submit button" names the control by its type
-        r = ask({"action": "click", "target": "Unicorn"})
-        assert r["uid"] is None and r["problem"] and r["near"]
-        assert c.post("/api/locate", json={"step": {"action": "nonsense"}, "candidates": []}, headers=h).status_code == 400
-
-
 def test_the_generated_page_library_is_up_to_date():
     """extension/lib/shared.js comes from the Python engines' own scripts: run tools/build_extension.py after changing them."""
     r = subprocess.run([sys.executable, str(ROOT / "tools" / "build_extension.py"), "--check"], capture_output=True, text=True)
@@ -322,7 +300,7 @@ def test_the_manifest_asks_for_what_the_extension_uses():
     assert m["manifest_version"] == 3 and m["background"]["service_worker"] == "background.js"
     assert {"debugger", "scripting", "tabs", "storage", "sidePanel"} <= set(m["permissions"])
     for f in [m["background"]["service_worker"], m["side_panel"]["default_path"], m["options_page"], *m["icons"].values(),
-              "lib/runner.js", "lib/cdp.js", "lib/hub.js", "lib/page.js", "lib/shared.js", "panel.js", "options.js", "panel.css"]:
+              "lib/bridge.js", "lib/server-run.js", "lib/hub.js", "lib/tabs.js", "lib/recorder.js", "lib/shared.js", "panel.js", "options.js", "panel.css"]:
         assert (EXT / f).is_file(), f
 
 
@@ -368,7 +346,7 @@ def test_recording_a_flow_makes_steps_and_replaying_them_does_it_again(browser, 
     panel.locator("#recreplay").click()
     panel.wait_for_selector("#banner:not([hidden])", timeout=60000)
     assert panel.locator("#banner").get_attribute("class").split()[-1] == "passed", panel.locator("#steps").inner_text()
-    assert "recorded" in panel.locator("#steps").inner_text()           # found by the stored locator, not by guessing
+    assert "element: script" in panel.locator("#steps").inner_text()      # the stored locators were used           # found by the stored locator, not by guessing
     assert "Thanks, Asha" in page.locator("#out").inner_text()
     assert page.locator("#news").is_checked()
 

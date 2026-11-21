@@ -1,8 +1,7 @@
 // The extension's service worker: the panel asks it to preview or run a scenario on a tab; it parses through the hub, runs it
 // with the engine (lib/runner.js) and streams progress back. One run per tab at a time.
-import { Run, canInject } from "./lib/runner.js";
+import { canInject } from "./lib/tabs.js";
 import { hub, parse, health, signIn, settings, compileRecording, importChrome, saveToLibrary } from "./lib/hub.js";
-import { Reporter } from "./lib/reporter.js";
 import * as bridge from "./lib/bridge.js";
 import { ServerRun } from "./lib/server-run.js";
 
@@ -47,7 +46,7 @@ async function preview({ text, data, sensitive }) {
   return { tab: { id: tab.id, title: tab.title, url: tab.url, ok: canInject(tab.url) }, ...r };
 }
 
-// The hub runs it (its own runner and Playwright engine, in this tab, through the bridge): every capability of the server.
+// The hub runs it: its own runner and Playwright engine drive this tab through the bridge, so every capability of the server applies.
 async function startOnServer({ text, data, sensitive, steps, tabId, config, sourceRun, name }) {
   const tab = tabId ? await chrome.tabs.get(tabId) : await target();
   if (!tab) throw new Error("Open the website you want to test in a tab first.");
@@ -72,35 +71,7 @@ async function startOnServer({ text, data, sensitive, steps, tabId, config, sour
   return { runId: id, hubRun: run.hubRun, total: plan.length, plan: plan.map((x) => ({ raw: x.raw, origin: x.origin || "", action: x.action })), notes, ignored };
 }
 
-async function start(msg) {
-  const mode = (await chrome.storage.local.get({ engine: "server" })).engine;
-  return mode === "builtin" ? startBuiltin(msg) : startOnServer(msg);
-}
-
-async function startBuiltin({ text, data, sensitive, steps, tabId, config, sourceRun, name }) {
-  const tab = tabId ? await chrome.tabs.get(tabId) : await target();
-  if (!tab) throw new Error("Open the website you want to test in a tab first.");
-  for (const r of runs.values()) if (r.tabIds.has(tab.id) && r.status === "running") throw new Error("A scenario is already running in this tab.");
-  const parsed = steps ? { test: { steps, data: data || {}, sensitive: sensitive || [] } } : await parse(text, dataFor(tab, data), sensitive || []);
-  if (parsed.unparsed && parsed.unparsed.length) throw Object.assign(new Error("Some sentences were not understood: " + parsed.unparsed.join(" · ")), { unparsed: parsed.unparsed });
-  const t = parsed.test;
-  const id = "r" + Date.now().toString(36) + (nextId++);
-  const all = { ...(t.data || {}), ...dataFor(tab, data) };
-  // report the run to the hub (history, stats, live view, video, report, replayable script) unless that is switched off
-  const rep = (await chrome.storage.local.get({ report: true })).report ? new Reporter() : null;
-  if (rep) await rep.start({ name: name || t.name || (t.steps[0] && t.steps[0].raw) || "Extension run", steps: t.steps, data: all, sensitive: t.sensitive || [], url: tab.url, sourceRun });
-  const onEvent = (ev) => {
-    broadcast(ev);
-    if (!rep) return;
-    if (ev.type === "run_finished") rep.finish(ev).then((ok) => broadcast({ type: "report_done", runId: id, ok, hubRun: rep.id, error: rep.error }));
-    else rep.event(ev);
-  };
-  const run = new Run({ id, tabId: tab.id, steps: t.steps, data: all, sensitive: t.sensitive || [], config, onEvent, onFrame: rep && rep.id ? (d, ts) => rep.frame(d, ts) : null });
-  run.log.push({ type: "report", runId: id, hubRun: rep && rep.id, error: rep && !rep.id ? rep.error : null });
-  runs.set(id, run);
-  run.execute().finally(() => setTimeout(() => runs.delete(id), 30 * 60 * 1000));
-  return { runId: id, hubRun: rep && rep.id, reportError: rep && !rep.id ? rep.error : null, total: t.steps.length, plan: t.steps.map((x) => ({ raw: x.raw, origin: x.origin || "", action: x.action })), notes: parsed.notes || [], ignored: parsed.ignored || [] };
-}
+const start = startOnServer;
 
 // ------------------------------------------------------------------------------------------------ recording
 // While recording, a content script (lib/recorder.js) runs in every frame of the tab and of any tab it opens. Events collect here

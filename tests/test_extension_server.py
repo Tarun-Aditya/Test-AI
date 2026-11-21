@@ -1,8 +1,8 @@
-"""Everything a run leaves on the hub, end to end, in a real Chromium with the extension loaded next to a real hub:
-
-  a scenario run from the panel  ->  a run on the hub (live events, screenshots, video, report, stats, script)
-  that run replayed by the app (Playwright) and by the extension; a recording saved, replayed by both
-  secrets never reaching the hub's files, a failure reported as one, reporting switched off, a hub that is down
+"""The extension is another way to run the server's own engine: its panel carries the person's tab to the hub, whose runner and
+Playwright engine run the scenario in that tab. Everything is checked here in a real Chromium with the extension loaded next to a
+real hub: the same scenario the server's own suite runs (every kind of input, upload, dialogs, drag, nested shadow roots and
+iframes, secrets), what each run leaves on the hub (live events, screenshots, a video of the tab, report, stats, script), replays of
+a run and of a recording by the app and by the extension, and failures.
 """
 import json
 import os
@@ -43,7 +43,7 @@ def browser(tmp_path_factory, rhub):
         pw.stop()
         pytest.skip("this Chromium did not load the unpacked extension")
     ext = sw.url.split("/")[2]
-    sw.evaluate("(hub) => chrome.storage.local.set({hub, report: true})", rhub[0])
+    sw.evaluate("(hub) => chrome.storage.local.set({hub})", rhub[0])
     ctx.on("dialog", lambda d: None)
     ctx.sw = sw
     yield ctx, ext
@@ -143,10 +143,10 @@ def first_run(browser, sites, rhub):
 def test_a_run_from_the_panel_is_a_run_on_the_hub_with_its_steps_screenshots_video_and_report(first_run, rhub):
     base, _ = rhub
     r, d = first_run["row"], first_run["arts"]
-    assert r["status"] == "passed" and r["engine"] == "extension" and r["agent"] == "Chrome extension"
+    assert r["status"] == "passed" and r["engine"] == "playwright" and r["agent"] == "Chrome extension" and r["browser"] == "chrome"
     detail = api(base, f"/api/runs/{first_run['id']}")
     assert [s["status"] for s in detail["steps"]] == ["passed"] * 4 and detail["video"] == "video.webm"
-    assert any(s["picked_by"] == "heuristic" for s in detail["steps"])
+    assert any(s["picked_by"] == "heuristic" for s in detail["steps"])            # ranked by the server's own element finder
     assert len(list((d / "screenshots").glob("step-*"))) == 4
     assert (d / "video.webm").stat().st_size > 2000
     dur = duration(d / "video.webm")
@@ -226,7 +226,7 @@ def test_the_run_replays_in_the_extension_from_the_hubs_recent_runs(browser, fir
     panel.locator(f'#hublists button[data-id="{first_run["id"]}"]').click()
     panel.wait_for_selector("#banner:not([hidden])", timeout=60000)
     assert panel.locator("#banner").get_attribute("class").split()[-1] == "passed", panel.locator("#steps").inner_text()
-    assert "recorded" in panel.locator("#steps").inner_text()                # found by the locators the first run stored
+    assert "element: script" in panel.locator("#steps").inner_text()         # found by the locators the first run stored
     saved(panel)
     rid = new_extension_run(base, before)
     row = wait_run(base, rid)
@@ -308,37 +308,101 @@ def test_a_failing_scenario_is_reported_as_a_failure_with_its_evidence(browser, 
     assert "Order shipped" in (arts / rid / "report.html").read_text(encoding="utf-8")
 
 
-def test_reporting_can_be_switched_off_and_a_recording_still_replays_when_the_hub_is_down(browser, sites, rhub):
+# ---------------------------------------------------------------------------------------------- the server's own scenarios, from the panel
+def _run_from_panel(browser, url, text, data="", timeout=240):
+    ctx, ext = browser
+    close_extra(browser)
+    page = ctx.new_page()
+    page.goto(url)
+    page.bring_to_front()
+    panel = ctx.new_page()
+    panel.goto(f"chrome-extension://{ext}/panel.html")
+    ready(panel)
+    panel.locator("#text").fill(text)
+    if data:
+        panel.locator("#datad summary").click()
+        panel.locator("#data").fill(data)
+    panel.locator("#run").click()
+    panel.wait_for_selector("#banner:not([hidden])", timeout=timeout * 1000)
+    status = panel.locator("#banner").get_attribute("class").split()[-1]
+    return status, panel, page
+
+
+def test_the_servers_playground_scenario_runs_in_the_tab_exactly_as_in_the_app(browser, sites, rhub, tmp_path):
+    """Every kind of input (text, date, range, colour, select, multi-select, radio, checkbox), a file upload, double and right click,
+    native dialogs, a contenteditable editor, a hover menu, drag and drop, lazy loading, 'the second ...', nested shadow roots and
+    nested iframes, secrets: the same scenario file the server's own suite runs, run from the extension's panel."""
+    from pathlib import Path
+    base, arts = rhub
+    resume = tmp_path / "resume.txt"
+    resume.write_text("cv")
+    url = sites["site"] + "/playground.html"
+    text = (Path(ROOT / "examples" / "playground_test.txt").read_text().replace("PLAYGROUND_URL", url).replace("UPLOAD_FILE", str(resume)))
+    data = "\n".join(["first = Asha", "last = Rao", "email = asha@example.com", "password* = S3cret!!", "card* = 4111111111114242", "country = India"])
+    before = {r["run_id"] for r in runs(base)}
+    status, panel, page = _run_from_panel(browser, url, text, data)
+    steps = [(li.get_attribute("class").split()[-1], li.locator(".tx").inner_text(), li.locator(".err").inner_text() if li.locator(".err").count() else "")
+             for li in panel.locator("#steps li").all()]
+    assert status == "passed", [s for s in steps if s[0] != "passed"][:3]
+    saved(panel)
+    rid = new_extension_run(base, before)
+    row = wait_run(base, rid)
+    assert row["status"] == "passed" and row["engine"] == "playwright" and row["agent"] == "Chrome extension"
+    detail = api(base, f"/api/runs/{rid}")
+    assert len(detail["steps"]) >= 40 and all(s["status"] == "passed" for s in detail["steps"])
+    d = arts / rid
+    script = json.loads((d / "script.json").read_text(encoding="utf-8"))
+    labels = []
+    for st in script["steps"]:
+        for loc in [st.get("locator")] if st.get("locator") else []:
+            labels.append(("iframe:" * len(loc.get("frames", []))) + ("shadow:" * len(loc.get("shadow", []))) + loc["strategy"])
+    assert any("shadow:shadow:" in l for l in labels), labels                      # nested shadow roots
+    assert any(l.startswith("iframe:iframe:") for l in labels), labels             # nested iframes
+    assert any(l.endswith("role") for l in labels)                                 # semantic native locators
+    for f in d.rglob("*"):                                                         # secrets never land in the hub's files
+        if f.is_file() and f.suffix in (".json", ".py", ".html", ".txt"):
+            body = f.read_text(errors="ignore")
+            assert "S3cret!!" not in body and "4111111111114242" not in body, f
+    assert (d / "video.webm").stat().st_size > 10_000
+    from aiauto.scriptgen import extract_spec
+    for name in ("test_playwright.py", "test_selenium.py"):                        # the generated scripts carry the spec and compile
+        src = (d / name).read_text()
+        compile(src, name, "exec")
+        assert len(extract_spec(src).steps) == len(script["steps"])
+    # the app replays what the extension ran
+    r = api(base, "/api/runs", {"replay_run_id": rid, "config": {**APP_CFG, "timeout_ms": 8000}, "agent": "local"})
+    again = wait_run(base, r["run_ids"][0], timeout=240)
+    assert again["status"] == "passed", [(s["raw"], s["error"]) for s in api(base, f"/api/runs/{again['run_id']}")["steps"] if s["error"]]
+
+
+def test_a_virtualised_list_and_a_lazy_section_work_in_the_tab(browser, sites, rhub):
+    base, _ = rhub
+    before = {r["run_id"] for r in runs(base)}
+    url = sites["site"] + "/virtual.html"
+    status, panel, page = _run_from_panel(browser, url, 'Click Open order 750\nVerify page contains "Opened order 750"\nClick Subscribe to newsletter\nVerify page contains "Subscribed"')
+    assert status == "passed", panel.locator("#steps").inner_text()
+    saved(panel)
+    rid = new_extension_run(base, before)
+    assert wait_run(base, rid)["status"] == "passed"
+    r = api(base, "/api/runs", {"replay_run_id": rid, "config": {**APP_CFG, "timeout_ms": 8000}, "agent": "local"})   # the replay re-finds row 750
+    assert wait_run(base, r["run_ids"][0], timeout=120)["status"] == "passed"
+
+
+def test_a_page_that_changed_still_replays_by_self_healing_and_the_run_says_so(browser, sites, rhub):
     base, _ = rhub
     ctx, ext = browser
-    sw = ctx.sw
-    n = len(runs(base))
-    sw.evaluate("() => chrome.storage.local.set({ report: false })")
-    status, steps, panel, page = run_scenario(browser, sites["site"] + "/extension/order.html", ORDER)
+    status, panel, page = _run_from_panel(browser, sites["site"] + "/extension/order.html", ORDER)
     assert status == "passed"
-    time.sleep(1.5)
-    assert len(runs(base)) == n                                              # nothing was left on the hub
-    close_extra(browser)
-    sw.evaluate("() => chrome.storage.local.set({ report: true, hub: 'http://127.0.0.1:9' })")     # nothing listens there
-    try:
-        # finding an element by its description needs the hub; a recorded step carries its own locator and does not
-        page = ctx.new_page()
-        page.goto(sites["site"] + "/extension/order.html")
-        page.bring_to_front()
-        panel = ctx.new_page()
-        panel.goto(f"chrome-extension://{ext}/panel.html")
-        ready(panel)
-        r = panel.evaluate("""async () => {
-            const steps = [{action: "type", target: "Name", value: "Asha", raw: 'type "Asha" into Name', source: "recorded", locator: {strategy: "label", value: "Name"}},
-                           {action: "click", target: "Place order button", raw: "click Place order button", source: "recorded", locator: {strategy: "role", value: "Place order", role: "button"}}];
-            const t = (await new Promise((res) => chrome.runtime.sendMessage({type: "target"}, res))).tab;
-            return await new Promise((res) => chrome.runtime.sendMessage({type: "run", tabId: t.id, steps, data: {}, sensitive: []}, res));
-        }""")
-        assert r["ok"] and r["hubRun"] is None and "reach the hub" in (r["reportError"] or "")
-        end = time.time() + 30
-        while time.time() < end and "Thanks" not in page.locator("#out").inner_text():
-            time.sleep(0.3)
-        st = panel.evaluate("""async (id) => await new Promise((res) => chrome.runtime.sendMessage({type: "state", runId: id}, res))""", r["runId"])
-        assert "Thanks, Asha" in page.locator("#out").inner_text(), json.dumps(st)[:1500]          # the run itself did its job
-    finally:
-        sw.evaluate("(hub) => chrome.storage.local.set({ hub })", base)
+    saved(panel)
+    rid = new_extension_run(base, {r["run_id"] for r in runs(base)} - {r["run_id"] for r in runs(base)})
+    wait_run(base, rid)
+    before = {r["run_id"] for r in runs(base)}
+    page.goto(sites["site"] + "/extension/order2.html")                           # same labels and texts, every id changed
+    page.bring_to_front()
+    panel.locator("#hubd summary").click()
+    panel.locator(f'#hublists button[data-id="{rid}"]').click()
+    panel.wait_for_selector("#banner:not([hidden])", timeout=90000)
+    assert panel.locator("#banner").get_attribute("class").split()[-1] == "passed", panel.locator("#steps").inner_text()
+    new = new_extension_run(base, before)
+    row = wait_run(base, new)
+    assert row["status"] == "passed" and row["healed"] >= 1, row                  # the server's self-healing, counted like any run

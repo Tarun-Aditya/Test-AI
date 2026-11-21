@@ -3,7 +3,7 @@
 // finding, acting, waiting and healing; here a command arrives, Chrome runs it, the answer goes back.
 import { hub, settings } from "./hub.js";
 
-let ws = null, link = null, connecting = null, pingTimer = null;
+let ws = null, link = null, linkBase = "", connecting = null, pingTimer = null;
 const order = [];                                   // tab ids in the order the hub's run met them (tab 1, tab 2, …)
 export const attachedOrder = () => order.slice();
 const attached = new Set();                         // tab ids the debugger is attached to for the hub
@@ -13,7 +13,9 @@ let screencast = false;                             // stream each driven tab's 
 const send = (obj) => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch (e) { /* closing */ } };
 
 export async function connect() {
-  if (ws && ws.readyState === 1) return link;
+  const cur = (await settings()).hub;
+  if (ws && ws.readyState === 1 && linkBase === cur) return link;
+  if (ws && linkBase !== cur) { const old = ws; ws = null; link = null; try { old.close(); } catch (e) { /* gone */ } }      // the hub address changed
   if (connecting) return connecting;
   connecting = (async () => {
     const r = await hub("/api/ext/bridge", { method: "POST", body: {} });
@@ -24,7 +26,7 @@ export async function connect() {
       s.onopen = () => { ws = s; res(); };
       s.onerror = () => rej(new Error("Can't open the live connection to the hub at " + base));
     });
-    link = r.link;
+    link = r.link; linkBase = base;
     ws.onmessage = (m) => onMessage(m).catch(() => {});
     ws.onclose = () => { ws = null; link = null; clearInterval(pingTimer); releaseAll(); };
     clearInterval(pingTimer);

@@ -357,31 +357,6 @@ def api_parse(req: ParseRequest, request: Request):
     return {"test": json.loads(test.model_dump_json()), **info}
 
 
-class LocateRequest(BaseModel):
-    step: dict[str, Any]                      # {action, target, value, nth, raw}
-    candidates: list[dict[str, Any]]          # what the browser extension found on the page (the engines' DOM-walk format)
-    target: Optional[str] = None              # the description to rank by (default: step.target)
-    use_llm: bool = True
-
-
-@app.post("/api/locate")
-def api_locate(req: LocateRequest, request: Request):
-    """Which element does this step mean? Same ranking, ties and AI tie-break as the Playwright / Selenium engines, for a
-    caller that only has the page: the Chrome extension snapshots the tab, asks here, and acts on the answer."""
-    from .. import locators as L
-    from ..models import Action
-    try:
-        step = Step(action=Action(req.step.get("action") or "click"), target=req.step.get("target"), value=req.step.get("value"),
-                    nth=req.step.get("nth"), raw=req.step.get("raw") or "")
-    except ValueError as e:
-        raise HTTPException(400, f"Bad step: {e}")
-    winner, ranked, problem = _as_user(_owner_of(request), L.choose, step, req.candidates, target=req.target,
-                                       use_llm=req.use_llm, on_ambiguous="fail")
-    near = [{"uid": c.get("uid"), "what": L.describe(c), "score": round(float(c.get("score") or 0), 2)} for c in ranked[:3]]
-    return {"uid": winner.get("uid") if winner else None, "score": round(float(winner.get("score") or 0), 2) if winner else None,
-            "picked_by": winner.get("picked_by") if winner else None, "problem": problem, "near": near}
-
-
 @app.post("/api/runs")
 async def api_run(req: RunRequest, request: Request):
     user, owner = _user(request), _owner_of(request)
@@ -769,95 +744,7 @@ async def ws_cdp(ws: WebSocket, token: str):
 
 
 # --------------------------------------------------------------------- API: runs reported by the Chrome extension
-from ..extruns import ExtRuns  # noqa: E402
-EXT_RUNS = ExtRuns(ARTIFACTS)
-
-
-class ExtStart(BaseModel):
-    name: str = "Extension run"
-    steps: list[dict[str, Any]]
-    data: dict[str, Any] = {}
-    sensitive: list[str] = []
-    url: str = ""
-    source_run: Optional[str] = None                 # the run or library script this one replays
-
-
-def _ext_run_row(run_id: str, request: Request) -> dict:
-    row = db.raw_run(_safe(run_id))
-    if not row or (row.get("project") or "default") not in _projects_for(_user(request)):
-        raise HTTPException(404, "run not found")
-    if not authmod.can_manage(_user(request), row.get("owner")):
-        raise HTTPException(403, "Only the owner of this run or an admin can add to it")
-    return row
-
-
-@app.post("/api/ext/runs")
-async def ext_start(req: ExtStart, request: Request):
-    """The extension is about to run steps in the browser: open the run record (live view, dashboards and stats see it from now)."""
-    try:
-        steps = [Step(**s) for s in req.steps]
-    except Exception as e:
-        raise HTTPException(400, f"Bad steps: {e}")
-    owner, project = _owner_of(request), _project(request)
-    test = TestCase(name=req.name or "Extension run", base_url=req.url or None, steps=steps, data=req.data, sensitive=req.sensitive)
-    title = _display_name(test.name, req.data, test.sensitive)
-    test = test.model_copy(update={"title": title})
-    rid = new_run_id(title)
-    mode = "replay" if req.source_run or (steps and all(s.source == "recorded" for s in steps)) else "ai"
-    db.create_run({"run_id": rid, "test_name": title, "status": "running", "engine": "extension", "browser": "chrome",
-                   "agent": "Chrome extension", "mode": mode, "started_at": now_iso(), "total": len(steps),
-                   "config_json": "{}", "data_json": json.dumps(masked_data(req.data, req.sensitive)),
-                   "sensitive_json": json.dumps(req.sensitive), "source_run": req.source_run,
-                   "parser": "script" if mode == "replay" else "rules", "owner": owner, "project": project})
-    secrets = {}
-    for k in req.sensitive:
-        try:
-            v = lookup(req.data, k)
-            if v not in (None, "", MASK):
-                secrets[k] = v
-        except (KeyError, IndexError, ValueError):
-            pass
-    db.put_secrets(rid, secrets)
-    hub.run_project[rid] = project
-    EXT_RUNS.create(rid, test, mode)
-    await hub.broadcast({"type": "runs_changed"})
-    return {"run_id": rid}
-
-
-class ExtEvents(BaseModel):
-    events: list[dict[str, Any]]
-
-
-@app.post("/api/ext/runs/{run_id}/events")
-async def ext_events(run_id: str, body: ExtEvents, request: Request):
-    _ext_run_row(run_id, request)
-    loop = asyncio.get_running_loop()
-    for ev in body.events:
-        if ev.get("type") == "run_finished":
-            done = await loop.run_in_executor(None, EXT_RUNS.finish, run_id, ev)
-            await hub.broadcast({"type": "run_finished", "run_id": run_id, "status": done["status"], "healed": 0,
-                                 **({"error": done["error"]} if done.get("error") else {})})
-            await hub.broadcast({"type": "_finalize", "run_id": run_id})
-            continue
-        for out in EXT_RUNS.handle(run_id, ev):
-            await hub.broadcast(out)
-    return {"ok": True}
-
-
-class ExtFrames(BaseModel):
-    frames: list[dict[str, Any]]
-
-
-@app.post("/api/ext/runs/{run_id}/frames")
-async def ext_frames(run_id: str, body: ExtFrames, request: Request):
-    """Screencast frames of the tab under test: they become the run's video, and the newest one is the live view."""
-    _ext_run_row(run_id, request)
-    live = await asyncio.get_running_loop().run_in_executor(None, EXT_RUNS.add_frames, run_id, body.frames)
-    if live:
-        await hub.broadcast(live)
-    return {"ok": True}
-
-
+# --------------------------------------------------------------------- replay payloads for the extension (past runs, saved scripts)
 def _replay_payload(test: dict, secrets: dict) -> dict:
     needs = []
     for k in test.get("sensitive", []):
