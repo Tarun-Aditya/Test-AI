@@ -156,12 +156,29 @@ return (function(){
     if (!inShadow) add('xpath', xpathPath(el));
     return c;
   }
+  // every match of a selector in a document, through open shadow roots too (what Playwright's CSS sees)
+  function deepAll(root, sel, out){
+    out = out || [];
+    try { root.querySelectorAll(sel).forEach(e => out.push(e)); } catch(e) {}
+    root.querySelectorAll('*').forEach(e => { if (e.shadowRoot) deepAll(e.shadowRoot, sel, out); });
+    return out;
+  }
+  // a selector for an <iframe> that matches only it: its id, name, title or src when one of them is unique, else its position
+  function frameSel(f){
+    const doc = f.ownerDocument, cands = [];
+    if (f.id && !dyn(f.id)) cands.push('#' + CSS.escape(f.id));
+    const nm = f.getAttribute('name'); if (nm && !dyn(nm)) cands.push('iframe[name="' + q(nm) + '"]');
+    const ti = f.getAttribute('title'); if (ti) cands.push('iframe[title="' + q(ti) + '"]');
+    const sr = f.getAttribute('src'); if (sr && sr.length < 100) cands.push('iframe[src="' + q(sr) + '"]');
+    for (const c of cands) { try { if (deepAll(doc, c).length === 1) return c; } catch(e) {} }
+    return cssPathIn(f);
+  }
   // Where an element lives: iframe chain (outermost first) and shadow-host chain inside its own document.
   function chains(el){
     const shadow = []; let root = el.getRootNode();
     while (root && root.host) { shadow.unshift(cssPathIn(root.host)); root = root.host.getRootNode(); }
     const frames = []; let win = el.ownerDocument.defaultView;
-    try { while (win && win.frameElement) { frames.unshift(cssPathIn(win.frameElement)); win = win.parent; } } catch(e) {}
+    try { while (win && win.frameElement) { frames.unshift(frameSel(win.frameElement)); win = win.parent; } } catch(e) {}
     return {frames, shadow};
   }
 
@@ -397,12 +414,29 @@ return (function(){
     if (!inShadow) add('xpath', xpathPath(el));
     return c;
   }
+  // every match of a selector in a document, through open shadow roots too (what Playwright's CSS sees)
+  function deepAll(root, sel, out){
+    out = out || [];
+    try { root.querySelectorAll(sel).forEach(e => out.push(e)); } catch(e) {}
+    root.querySelectorAll('*').forEach(e => { if (e.shadowRoot) deepAll(e.shadowRoot, sel, out); });
+    return out;
+  }
+  // a selector for an <iframe> that matches only it: its id, name, title or src when one of them is unique, else its position
+  function frameSel(f){
+    const doc = f.ownerDocument, cands = [];
+    if (f.id && !dyn(f.id)) cands.push('#' + CSS.escape(f.id));
+    const nm = f.getAttribute('name'); if (nm && !dyn(nm)) cands.push('iframe[name="' + q(nm) + '"]');
+    const ti = f.getAttribute('title'); if (ti) cands.push('iframe[title="' + q(ti) + '"]');
+    const sr = f.getAttribute('src'); if (sr && sr.length < 100) cands.push('iframe[src="' + q(sr) + '"]');
+    for (const c of cands) { try { if (deepAll(doc, c).length === 1) return c; } catch(e) {} }
+    return cssPathIn(f);
+  }
   // Where an element lives: iframe chain (outermost first) and shadow-host chain inside its own document.
   function chains(el){
     const shadow = []; let root = el.getRootNode();
     while (root && root.host) { shadow.unshift(cssPathIn(root.host)); root = root.host.getRootNode(); }
     const frames = []; let win = el.ownerDocument.defaultView;
-    try { while (win && win.frameElement) { frames.unshift(cssPathIn(win.frameElement)); win = win.parent; } } catch(e) {}
+    try { while (win && win.frameElement) { frames.unshift(frameSel(win.frameElement)); win = win.parent; } } catch(e) {}
     return {frames, shadow};
   }
 

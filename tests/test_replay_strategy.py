@@ -111,12 +111,14 @@ def test_when_every_stored_locator_breaks_the_element_is_found_by_its_descriptio
 
 
 def test_two_equally_good_matches_fail_clearly_instead_of_guessing(site, tmp_path):
-    run = first_run(site, tmp_path)
-    s = replay(site, run, tmp_path, html=V3.replace('id="em"', 'id="x1"').replace('for="em"', 'for="x1"').replace("getElementById('em')", "getElementById('x1')"))
+    """When the engine has to pick an element from a description and two are equally good, it says so instead of guessing."""
+    site.html = ('<!doctype html><title>Contact</title><body><section><label for="a1">Email address</label> <input id="a1" type="email"></section>'
+                 '<section><label for="b1">Email address</label> <input id="b1" type="email"></section><button id="send">Send message</button></body>')
+    test, _ = parse_text(f'Open {site.url}\nType "me@example.com" into Email address', {}, use_llm=False)
+    s = run_test(test, RunConfig(**CFG), tmp_path / "art")
     bad = [r for r in s.results if r.status.value == "failed"]
     assert s.status.value == "failed" and bad
-    assert "equally well" in bad[0].error or "Could not identify" in bad[0].error, bad[0].error
-    assert all(r.status.value == "skipped" for r in s.results[s.results.index(bad[0]) + 1:])
+    assert "equally well" in bad[0].error and "Say which one" in bad[0].error, bad[0].error
 
 
 def test_a_check_is_never_healed_when_the_page_says_something_else(site, tmp_path):

@@ -424,13 +424,27 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 TIMEOUT = int(os.getenv("STEP_TIMEOUT", "15000")) / 1000
 
 
+def find_frame(driver, css):
+    """An <iframe> by CSS, also when it lives inside a shadow root (WebDriver's own lookup does not look in there)."""
+    try:
+        return driver.find_element(By.CSS_SELECTOR, css)
+    except Exception:
+        el = driver.execute_script("""const sel = arguments[0];
+          const walk = (root) => { const f = root.querySelector(sel); if (f) return f;
+            for (const e of root.querySelectorAll('*')) if (e.shadowRoot) { const r = walk(e.shadowRoot); if (r) return r; } return null; };
+          return walk(document);""", css)
+        if el is None:
+            raise
+        return el
+
+
 def find(driver, by, value, frames=(), shadow=(), clickable=False, alts=()):
     """Native Selenium lookup; enters iframes (switch_to.frame) and nested shadow roots (shadow_root).
     `alts`: other locators of the same element, tried in order when the first finds nothing."""
     def look(by, value, frames, shadow):
         driver.switch_to.default_content()
         for f in frames:
-            driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, f))
+            driver.switch_to.frame(find_frame(driver, f))
         ctx = driver
         for host in shadow:
             ctx = ctx.find_element(By.CSS_SELECTOR, host).shadow_root

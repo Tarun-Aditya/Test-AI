@@ -152,14 +152,6 @@ async function frameChain(tabId, frameId) {
 }
 chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "loading") for (const k of chainCache.keys()) if (k.startsWith(id + ":")) chainCache.delete(k); });
 
-// Optional: open closed shadow roots on every page (a script that runs before the page's own). Off unless asked for in Settings.
-async function applyShadowSetting(on) {
-  const have = (await chrome.scripting.getRegisteredContentScripts({ ids: ["open-shadow"] }).catch(() => [])).length > 0;
-  if (on && !have) await chrome.scripting.registerContentScripts([{ id: "open-shadow", matches: ["<all_urls>"], js: ["lib/open-shadow.js"], runAt: "document_start", world: "MAIN", allFrames: true, matchOriginAsFallback: true, persistAcrossSessions: true }]);
-  if (!on && have) await chrome.scripting.unregisterContentScripts({ ids: ["open-shadow"] });
-}
-chrome.runtime.onInstalled.addListener(async () => applyShadowSetting((await chrome.storage.local.get({ openShadow: false })).openShadow));
-
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const done = (p) => p.then((v) => reply({ ok: true, ...v }), (e) => reply({ ok: false, error: String(e && e.message || e), unparsed: e && e.unparsed, status: e && e.status }));
   switch (msg.type) {
@@ -197,7 +189,6 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     case "compile": done(compileRecording(msg.events, msg.name, msg.data, msg.sensitive)); return true;
     case "import-chrome": done(importChrome(msg.recording, msg.name)); return true;
     case "save-library": done(saveToLibrary(msg.name, msg.test)); return true;
-    case "shadow": done(applyShadowSetting(!!msg.on).then(() => ({}))); return true;
     default: return false;
   }
 });

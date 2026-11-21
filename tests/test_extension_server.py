@@ -159,7 +159,7 @@ def test_a_run_from_the_panel_is_a_run_on_the_hub_with_its_steps_screenshots_vid
     r, d = first_run["row"], first_run["arts"]
     assert r["status"] == "passed" and r["engine"] == "playwright" and r["agent"] == "Chrome extension" and r["browser"] == "chrome"
     detail = api(base, f"/api/runs/{first_run['id']}")
-    assert [s["status"] for s in detail["steps"]] == ["passed"] * 4 and detail["video"] == "video.webm"
+    assert [s["status"] for s in detail["steps"]] == ["passed"] * 5 and detail["video"] == "video.webm"
     assert any(s["picked_by"] == "heuristic" for s in detail["steps"])            # ranked by the server's own element finder
     assert len([f for f in (d / "screenshots").iterdir() if f.is_file()]) >= 4
     assert (d / "video.webm").stat().st_size > 2000
@@ -187,7 +187,7 @@ def test_someone_watching_the_hub_sees_the_run_live(first_run):
         assert k in kinds, (k, sorted(set(kinds)))
     assert kinds.index("run_started") < kinds.index("step_finished") < kinds.index("run_finished")
     finished = [e for e in first_run["events"] if e.get("type") == "step_finished" and e.get("run_id") == first_run["id"]]
-    assert [e["status"] for e in finished] == ["passed"] * 4
+    assert [e["status"] for e in finished] == ["passed"] * 5
     frames = [e for e in first_run["events"] if e.get("type") == "live_frame"]
     assert frames and frames[0]["mime"] == "image/jpeg" and len(frames[0]["image"]) > 1000
 

@@ -198,24 +198,11 @@ def test_a_cross_origin_iframe(browser, sites):
     close_extra(browser)
 
 
-def test_closed_shadow_roots_are_opt_in(browser, sites):
-    ctx, ext = browser
+def test_closed_shadow_roots_work_because_the_servers_engine_opens_them(browser, sites):
     scenario = "The visitor enters the promo code SAVE10 and clicks Apply promo. The page should show Promo SAVE10 applied."
-    status, steps, panel, page = run_scenario(browser, sites["xsite"] + "/outer.html", scenario, wait=40)
-    assert status == "failed" and any("promo" in e.lower() for _, _, e in steps)          # nothing can see inside a closed shadow root
+    status, steps, panel, page = run_scenario(browser, sites["xsite"] + "/outer.html", scenario)       # components that hide their insides in a closed shadow root
+    assert status == "passed", steps
     close_extra(browser)
-    opt = ctx.new_page(); opt.goto(f"chrome-extension://{ext}/options.html")
-    opt.locator("#shadow").check()
-    opt.locator("#sstatus", has_text="On").wait_for(timeout=10000)
-    try:
-        status, steps, panel, page = run_scenario(browser, sites["xsite"] + "/outer.html", scenario)          # loaded after the option was turned on
-        assert status == "passed", steps
-    finally:
-        close_extra(browser)
-        opt = ctx.new_page(); opt.goto(f"chrome-extension://{ext}/options.html")
-        opt.locator("#shadow").uncheck()
-        opt.locator("#sstatus", has_text="Off").wait_for(timeout=10000)
-        opt.close()
 
 
 def test_a_secret_typed_into_the_page_is_masked_and_never_shown_in_the_panel(browser, sites):

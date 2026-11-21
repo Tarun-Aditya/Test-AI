@@ -5,14 +5,7 @@ const say = (el, text, cls) => { el.textContent = text; el.className = cls || ""
 (async () => {
   const s = await chrome.storage.local.get({ hub: "http://localhost:8000", project: "default" });
   $("hub").value = s.hub; $("project").value = s.project;
-  $("shadow").checked = !!(await chrome.storage.local.get({ openShadow: false })).openShadow;
 })();
-
-$("shadow").onchange = async () => {
-  await chrome.storage.local.set({ openShadow: $("shadow").checked });
-  const r = await ask({ type: "shadow", on: $("shadow").checked });
-  say($("sstatus"), r.ok ? ($("shadow").checked ? "On: reload the page you want to test." : "Off.") : r.error, r.ok ? "ok" : "bad");
-};
 
 async function granted(url) {                 // the hub is on a host the extension may not reach yet? (it has <all_urls>, so yes)
   try { new URL(url); return true; } catch (e) { return false; }
