@@ -121,7 +121,7 @@ def main():
         env["AIAUTO_DISABLE_LLM"] = "1"
     matrix = [tuple(x.split(":", 1)) for x in a.matrix.split(",") if ":" in x]
     hub = subprocess.Popen([sys.executable, "-m", "aiauto", "server", "--host", "127.0.0.1", "--port", str(port)], cwd=out, env=env,
-                           stdout=open(out / "hub.log", "w"), stderr=subprocess.STDOUT)
+                           stdout=open(out / "hub.log", "w", encoding="utf-8"), stderr=subprocess.STDOUT)
     base = f"http://127.0.0.1:{port}"
     try:
         for _ in range(120):

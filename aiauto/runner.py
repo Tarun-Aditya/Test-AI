@@ -801,7 +801,7 @@ class Runner:
         (d / "test_playwright.py").write_text(scriptgen.playwright_script(resolved, cfg), encoding="utf-8")
         (d / "test_selenium.py").write_text(scriptgen.selenium_script(resolved, cfg), encoding="utf-8")
         # the standalone runtime the scripts use (report, video, screenshots, highlight) - no dependency on this tool
-        (d / "autopilot_runtime.py").write_text(Path(__file__).with_name("script_runtime.py").read_text(), encoding="utf-8")
+        (d / "autopilot_runtime.py").write_text(Path(__file__).with_name("script_runtime.py").read_text(encoding="utf-8"), encoding="utf-8")
         (d / "data.json").write_text(json.dumps(safe_data, indent=2), encoding="utf-8")
         summary.artifacts = {
             "report": "report.html", "script": "script.json", "playwright": "test_playwright.py",

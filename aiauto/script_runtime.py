@@ -25,6 +25,11 @@ import re
 import shutil
 import subprocess
 import sys
+for _stream in (sys.stdout, sys.stderr):          # a console that is not UTF-8 (Windows) must not crash a script over a character in a step title
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
 import threading
 import time
 import traceback
@@ -673,7 +678,7 @@ class Run:
         skips = sum(1 for r in s["steps"] if r["status"] == "skipped")
         (self.dir / "junit.xml").write_text(
             f'<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="{e(s["name"])} ({e(s["engine"])}/{e(s["browser"])})" tests="{len(s["steps"])}" '
-            f'failures="{fails}" skipped="{skips}" time="{s["duration_ms"] / 1000:.3f}">\n' + "\n".join(cases) + "\n</testsuite>\n")
+            f'failures="{fails}" skipped="{skips}" time="{s["duration_ms"] / 1000:.3f}">\n' + "\n".join(cases) + "\n</testsuite>\n", encoding="utf-8")
 
     def _report(self, s, video):
         e = lambda x: html.escape(str(x if x is not None else ""))
