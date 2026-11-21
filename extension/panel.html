@@ -39,9 +39,11 @@
   <div class="lbl">Recorded steps <span class="mut" id="reccount"></span></div>
   <ol id="recsteps" class="recsteps"></ol>
   <div class="actions">
-    <button id="recreplay" class="btn primary">▶ Replay on this tab</button>
+    <button id="reccheck" class="btn primary" title="Replays it now, on this tab, and marks every step that does not reproduce">✓ Check replay</button>
+    <button id="recreplay" class="btn">▶ Replay on this tab</button>
     <button id="reccopy" class="btn">Copy as English</button>
   </div>
+  <div id="checkres" class="checkres" hidden></div>
   <div class="save"><input id="recname" value="Recorded flow" spellcheck="false" aria-label="Name"><button id="recsave" class="btn">Save to hub</button></div>
 </section>
 

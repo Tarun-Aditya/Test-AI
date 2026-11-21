@@ -62,11 +62,26 @@ The point of recording (and of running in the extension) is the **script** you g
 
 Each step stores the element's role, name, label, text, test id and a list of locators (the engines' own fingerprint). Passwords are lifted into data (`${password}`), masked and left out when you save. Add a check while recording ("the page should show …", or highlight text and **Use selected text**): a click stream cannot know what the page was supposed to show.
 
-Then: **Replay on this tab**, **Copy as English**, **Save to hub** (the library: run it from the app, export Playwright / Selenium), or import a **Chrome Recorder** file instead (DevTools → Recorder → Export → JSON). A video file (webm / mp4) has no page structure in it, so it can't be turned into steps without a vision model.
+Then: **Check replay** (replays it right now on this tab with the server's engine and marks every step that does not reproduce, with why, before you save), **Replay on this tab**, **Copy as English**, **Save to hub** (the library: run it from the app, export Playwright / Selenium), or import a **Chrome Recorder** file instead (DevTools → Recorder → Export → JSON). A video file (webm / mp4) has no page structure in it, so it can't be turned into steps without a vision model.
 
 ### The scripts run on their own
 
 Runs and recordings both end as `script.json` plus generated `test_playwright.py` and `test_selenium.py` (with `autopilot_runtime.py`). They are checked in the test suite by copying them elsewhere and running them as plain scripts, without this tool on their path: the server's whole playground scenario run from the panel, and a full recorded human session on the same page (inputs, upload, hover menu, custom dropdown, dialogs, editor, drag and drop, nested shadow roots and iframes). Selenium scripts keep up to two more verified locators per step and try them in order.
+
+### What happens when a replayed step does not match
+
+The server's runner (the same one in the app and in the extension) works through these layers for every step:
+
+1. the **stored locator**, which must match exactly one element that still fits the step's description;
+2. the **fallback locators**; when one works, the element is described again and the script is rewritten with fresh, verified locators (the stale ones go);
+3. **late content**: it scrolls and searches for lazy sections and virtualised lists;
+4. **heal by description**: it re-finds the element from the step's English description (ranking, plus the AI tie-break if a key is set), verifies new locators and updates the script; the report counts the step as healed;
+5. the **visual fallback** for canvas-style UIs (AI);
+6. otherwise it **fails clearly**: when it has to pick from a description and two elements tie it says so and never guesses; a check never heals (different text is a finding); missing data fails with a clear message. The step is marked with the closest candidates and a screenshot.
+
+An optional click that was absent when the run happened ("Accept cookies if shown") has no locator, so its script looks for it by its words and clicks it if present.
+
+Tested in `tests/test_replay_strategy.py` (each layer, Playwright and Selenium), `tests/test_extension_check_replay.py`, `tests/test_extension_complex.py` (shadow roots three deep, shadow inside an iframe, an iframe inside a shadow root, the same label in two shadow roots, elements rebuilt on every click, late elements, identical rows) and `tests/test_extension_real_sites.py` (saucedemo checkout, the-internet shadow DOM / nested frames / iframe editor / alerts, selenium.dev shadow root, todomvc, the UI testing playground's dynamic ids and AJAX, and Amazon as far as the network lets it: from some networks Amazon answers searches with 503 or a CAPTCHA, so the full `examples/amazon_cart.txt` is for a machine it likes). Each real-site scenario runs from the panel, its generated Playwright and Selenium scripts run standalone, and the app replays it.
 
 ## Replay from the app and from the extension
 

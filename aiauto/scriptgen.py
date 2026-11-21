@@ -131,10 +131,32 @@ def _secret(st: Step, sensitive: list[str]) -> bool:
     return any(k in sensitive for k in referenced_keys(st.value))
 
 
-def _step_block(i: int, st: Step, lines: list[str], target: str, sensitive: list[str], locator_desc: str) -> list[str]:
+def _optional_lookup(st: Step, engine: str) -> list[str] | None:
+    """An optional click ("Accept cookies if shown", "Continue shopping") whose element was absent when the run happened has no locator:
+    the script still looks for it by its words and clicks it if it is there, so it works on a fresh browser where it does show."""
+    if not (st.optional and st.target and st.action in (Action.CLICK, Action.DOUBLE_CLICK)):
+        return None
+    words = re.sub(_KIND_WORDS, " ", re.sub(r"(?i)^\s*(?:the\s+)?", "", st.target)).strip().strip("\"'")
+    if not words:
+        return None
+    if engine == "playwright":
+        w = _q(words)
+        return [f"cand = page.get_by_role('button', name=re.compile(re.escape({w}), re.I)).or_(page.get_by_role('link', name=re.compile(re.escape({w}), re.I))).or_(page.get_by_text({w}))",
+                "if cand.count():", "    cand.first.click()"]
+    low = words.lower().replace("'", "")
+    return ["cands = [e for e in driver.find_elements(By.XPATH, \"//*[self::button or self::a or @role='button' or @role='link' or (self::input and (@type='submit' or @type='button'))]"
+            f"[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{low}') or contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{low}')]\") if e.is_displayed()]",
+            "if cands:", "    cands[0].click()"]
+
+
+def _step_block(i: int, st: Step, lines: list[str], target: str, sensitive: list[str], locator_desc: str, engine: str = "playwright") -> list[str]:
     """with r.step(...): the runtime draws the boxes, screenshots the step and records pass/fail."""
     from .models import ELEMENT_ACTIONS
     if st.action in ELEMENT_ACTIONS and st.locator is None:
+        look = _optional_lookup(st, engine)
+        if look:
+            args = [str(i), _q(_title(st)), f"action={_q(st.action.value)}", "optional=True"]
+            return [f"with r.step({', '.join(args)}):"] + ["    " + l for l in look]
         return [f"r.skip({i}, {_q(_title(st))}, 'no element was identified for this step during recording')"]
     secret = _secret(st, sensitive)
     shown = "MASK" if secret else (_val(st.value) if st.value else "None")
@@ -612,7 +634,7 @@ def selenium_script(test: TestCase, config: dict | None = None) -> str:
         lines = _se_lines(st) + ["dialog = answer_alert(driver, accept) or dialog"]   # after a dialog step: the new answer applies
         loc = se_locator(st) if st.locator else None
         desc = loc.label() if loc and loc.strategy != "point" else ""
-        out.extend("    " + line for line in _step_block(i, st, lines, _se_target(st), test.sensitive, desc))
+        out.extend("    " + line for line in _step_block(i, st, lines, _se_target(st), test.sensitive, desc, engine="selenium"))
     out.append('''
 
 if __name__ == "__main__":

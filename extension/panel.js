@@ -234,6 +234,40 @@ $("recsave").onclick = async () => {
   if (!r.ok) return showError(r.error);
   showError(""); $("recsave").textContent = "Saved ✓"; setTimeout(() => { $("recsave").textContent = "Save to hub"; }, 1800);
 };
+// Check replay: the recording is replayed now on this tab by the server's engine (the same replay, with the same strategy, as later on), and
+// every step that does not reproduce is marked here with why, before anything is saved.
+let checkRun = null;
+$("reccheck").onclick = async () => {
+  if (!recTest || !recTest.steps.length) return;
+  showError("");
+  const t = await refreshTarget(); if (!t) return showError("Open the page you recorded on in a tab first.");
+  const box = $("checkres"); box.hidden = false; box.className = "checkres"; box.textContent = "Replaying on this tab…";
+  document.querySelectorAll("#recsteps li").forEach((li) => { li.classList.remove("ok", "bad"); li.querySelectorAll(".why").forEach((x) => x.remove()); });
+  $("reccheck").disabled = true;
+  const r = await ask({ type: "run", tabId: t.id, steps: recTest.steps, data: recTest.data || {}, sensitive: recTest.sensitive || [], name: "Replay check: " + ($("recname").value.trim() || "recording") });
+  if (!r.ok) { $("reccheck").disabled = false; box.hidden = true; return showError(r.error); }
+  checkRun = r.runId; checkHub = r.hubRun; checkBad = 0; checkTotal = r.total;
+};
+let checkHub = null, checkBad = 0, checkTotal = 0;
+chrome.runtime.onMessage.addListener((ev) => {
+  if (!ev || !checkRun || ev.runId !== checkRun) return;
+  const items = Array.from(document.querySelectorAll("#recsteps li"));
+  if (ev.type === "step_started") { const li = items[ev.index]; if (li) li.classList.add("run"); }
+  if (ev.type === "step_finished") {
+    const li = items[ev.index]; if (!li) return;
+    li.classList.remove("run");
+    if (ev.status === "failed") { li.classList.add("bad"); checkBad++; if (ev.error) { const w = document.createElement("span"); w.className = "why"; w.textContent = ev.error; li.children[1].append(w); } }
+    else if (ev.status === "passed") li.classList.add("ok");
+  }
+  if (ev.type === "run_finished") {
+    $("reccheck").disabled = false;
+    const box = $("checkres"), skipped = items.filter((li) => !li.classList.contains("ok") && !li.classList.contains("bad")).length;
+    if (ev.status === "passed") { box.className = "checkres ok"; box.textContent = `✓ All ${items.length} steps reproduced. It is safe to save.`; }
+    else { box.className = "checkres bad"; box.textContent = `✕ ${checkBad || 1} step${checkBad > 1 ? "s" : ""} did not reproduce${skipped ? ` (${skipped} after it not run)` : ""}. Fix the page or the data, or remove the step (✕), then check again.${ev.error ? " " + ev.error : ""}`; }
+    checkRun = null;
+  }
+});
+
 $("recreplay").onclick = () => {
   if (!recTest || !recTest.steps.length) return;
   const text = english(); $("text").value = text;
