@@ -3,6 +3,7 @@ import { ago, api, art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
 import { Dots } from "./Automation.jsx";
+import GetStarted from "../components/GetStarted.jsx";
 
 export function StepBar({ r }) {
   const t = r.total || 1;
@@ -112,6 +113,7 @@ export default function Dashboard() {
 
   return (
     <section className="view on">
+      <GetStarted />
       <div className="kpis">
         <div className="kpi"><div className="l">Pass rate</div><div className="v" style={{ color: finished ? (rate >= 80 ? "var(--ok)" : rate >= 50 ? "var(--warn)" : "var(--bad)") : undefined }}>{finished ? `${rate}%` : "–"}</div><div className="s">{stats?.passed || 0} of {finished} finished runs</div></div>
         <div className="kpi"><div className="l">Runs, last 24 h</div><div className="v">{stats?.day || 0}</div><div className="s">{stats?.day_failed ? <span style={{ color: "var(--bad)", fontWeight: 600 }}>{stats.day_failed} failed</span> : "none failed"}</div></div>

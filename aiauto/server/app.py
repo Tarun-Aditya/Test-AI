@@ -1418,7 +1418,8 @@ async def run_due_schedules(now=None) -> list[str]:
         SCHEDULES.mark(s["id"], last_fired=now.strftime("%Y-%m-%d %H:%M"))       # first: a slow start never fires twice
         try:
             ids = await _launch_saved(s)
-            SCHEDULES.mark(s["id"], last_run_ids=ids, last_error=None, last_run=now.isoformat(timespec="minutes"))
+            SCHEDULES.mark(s["id"], last_error=None)
+            SCHEDULES.record(s["id"], ids, now.isoformat(timespec="minutes"))
             started += ids
         except HTTPException as e:
             SCHEDULES.mark(s["id"], last_error=str(e.detail)[:300], last_run=now.isoformat(timespec="minutes"))
@@ -1458,7 +1459,8 @@ def _check_saved(request: Request, library: str) -> None:
 
 @app.get("/api/schedules")
 async def api_schedules(request: Request):
-    return SCHEDULES.list(_projects_for(_user(request)))
+    tz = automation.tz_info()
+    return [{**s, "tz": tz} for s in SCHEDULES.list(_projects_for(_user(request)))]
 
 
 @app.put("/api/schedules")
@@ -1488,11 +1490,13 @@ async def api_schedule_delete(sid: str, request: Request):
 
 @app.post("/api/schedules/{sid}/run")
 async def api_schedule_run_now(sid: str, request: Request):
+    from datetime import datetime
     s = SCHEDULES.get(sid)
     if not s or s.get("project", "default") not in _projects_for(_user(request)):
         raise HTTPException(404, "No such schedule")
     ids = await _launch_saved(s)
-    SCHEDULES.mark(sid, last_run_ids=ids, last_error=None)
+    SCHEDULES.mark(sid, last_error=None)
+    SCHEDULES.record(sid, ids, datetime.now().astimezone().isoformat(timespec="minutes"))
     return {"run_ids": ids}
 
 
@@ -1503,7 +1507,7 @@ async def api_cron_preview(cron: str, count: int = 5):
         for _ in range(max(1, min(count, 20))):
             t = c.next_after(t)
             out.append(t.isoformat(timespec="minutes"))
-        return {"cron": c.expr, "next": out}
+        return {"cron": c.expr, "next": out, "tz": automation.tz_info()}
     except automation.CronError as e:
         raise HTTPException(422, str(e))
 
@@ -1555,7 +1559,7 @@ async def api_hook_run(token: str, request: Request):
     if isinstance(extra, dict) and isinstance(extra.get("data"), dict):
         item["data"] = {**(load_data(h.get("data")) or {}), **extra["data"]}
     ids = await _launch_saved(item)
-    HOOKS.mark(h["id"], last_run=now_iso(), last_run_ids=ids)
+    HOOKS.record(h["id"], ids, now_iso())
     return {"run_ids": ids}
 
 
@@ -1588,6 +1592,23 @@ async def api_notification_delete(nid: str):
     return {"ok": True}
 
 
+@app.post("/api/notifications/test")
+async def api_notification_try(req: NotifyReq):
+    """Try a channel before saving it."""
+    rule = {k: v for k, v in req.model_dump().items() if v is not None}
+    if rule.get("kind") not in automation.KINDS:
+        raise HTTPException(422, f"channel must be one of {', '.join(automation.KINDS)}")
+    if rule["kind"] == "email" and not rule.get("to") or rule["kind"] != "email" and not str(rule.get("url", "")).startswith(("http://", "https://")):
+        raise HTTPException(422, "Fill in the address first")
+    msg = automation.message({"run_id": "test", "test_name": "Autopilot test message", "status": "failed", "passed": 3, "total": 4,
+                              "error": "This is only a test of the channel."}, os.getenv("AIAUTO_PUBLIC_URL", ""))
+    try:
+        await asyncio.to_thread(automation.deliver, rule, msg, NOTIFIER._smtp())
+    except Exception as e:
+        raise HTTPException(502, f"The channel did not accept it: {e}")
+    return {"ok": True}
+
+
 @app.post("/api/notifications/{nid}/test")
 async def api_notification_test(nid: str):
     rule = next((r for r in NOTIFIER.list() if r["id"] == nid), None)
@@ -1600,6 +1621,95 @@ async def api_notification_test(nid: str):
     except Exception as e:
         raise HTTPException(502, f"The channel did not accept it: {e}")
     return {"ok": True}
+
+
+# --------------------------------------------------------------------- visual baselines
+BASELINES = Path(os.getenv("AIAUTO_BASELINES") or ARTIFACTS.parent / "baselines").resolve()
+
+
+def _bl_slug(name: str) -> str:
+    """The folder the runner keeps a test's baselines in (same rule as Runner._baseline_file)."""
+    return re.sub(r"[^a-z0-9]+", "-", re.sub(r"\$\{[^}]*\}", "", (name or "test").lower())).strip("-")[:50] or "test"
+
+
+def _bl_file(test: str, name: str) -> Path:
+    t, n = _safe(test), _safe(name)
+    p = (BASELINES / t / (n + ".png")).resolve()
+    if BASELINES not in p.parents:
+        raise HTTPException(400, "Bad baseline name")
+    return p
+
+
+@app.get("/api/baselines")
+async def api_baselines():
+    out = []
+    for p in sorted(BASELINES.glob("*/*.png")) if BASELINES.is_dir() else []:
+        st = p.stat()
+        out.append({"test": p.parent.name, "name": p.stem, "updated": st.st_mtime, "size": st.st_size, "url": f"/api/baselines/{p.parent.name}/{p.stem}.png"})
+    return out
+
+
+@app.get("/api/baselines/{test}/{name}.png")
+async def api_baseline_image(test: str, name: str):
+    p = _bl_file(test, name)
+    if not p.exists():
+        raise HTTPException(404, "No such baseline")
+    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+@app.delete("/api/baselines/{test}/{name}")
+async def api_baseline_delete(test: str, name: str):
+    p = _bl_file(test, name)
+    if not p.exists():
+        raise HTTPException(404, "No such baseline")
+    p.unlink()
+    return {"ok": True}
+
+
+@app.get("/api/runs/{run_id}/visual")
+async def api_run_visual(run_id: str, request: Request):
+    """The visual checks of a run: this run's screenshot, the baseline it was compared with, and the diff when they differed."""
+    if (db.run_project(run_id) or "default") not in _projects_for(_user(request)):
+        raise HTTPException(404, "No such run")
+    run_dir = ARTIFACTS / _safe(run_id)
+    try:
+        test_name = json.loads((run_dir / "script.json").read_text(encoding="utf-8")).get("name") or "test"
+    except Exception:
+        test_name = (db.get_run(run_id) or {}).get("test_name") or "test"
+    slug, out = _bl_slug(test_name), []
+    for shot in sorted((run_dir / "screenshots").glob("visual_*.png")):
+        if shot.stem.endswith("_diff"):
+            continue
+        name = shot.stem[len("visual_"):]
+        diff = shot.with_name(shot.stem + "_diff.png")
+        base = BASELINES / slug / f"{name}.png"
+        out.append({"name": name, "actual": f"screenshots/{shot.name}", "diff": f"screenshots/{diff.name}" if diff.exists() else None,
+                    "baseline": f"/api/baselines/{slug}/{name}.png" if base.exists() else None, "different": diff.exists()})
+    return out
+
+
+class ApproveReq(BaseModel):
+    run_id: str
+    name: str
+
+
+@app.post("/api/baselines/approve")
+async def api_baseline_approve(req: ApproveReq, request: Request):
+    """Accept how a run's page looked as the new baseline (the run's screenshot of that visual check)."""
+    if (db.run_project(req.run_id) or "default") not in _projects_for(_user(request)):
+        raise HTTPException(404, "No such run")
+    run_dir = ARTIFACTS / _safe(req.run_id)
+    shot = run_dir / "screenshots" / f"visual_{re.sub(r'[^\w.-]', '_', req.name)}.png"
+    if not shot.exists():
+        raise HTTPException(404, "That run has no screenshot for this visual check")
+    try:
+        test_name = json.loads((run_dir / "script.json").read_text(encoding="utf-8")).get("name") or "test"
+    except Exception:
+        test_name = (db.get_run(req.run_id) or {}).get("test_name") or "test"
+    dest = _bl_file(_bl_slug(test_name), re.sub(r"[^\w.-]", "_", req.name))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(shot, dest)
+    return {"ok": True, "test": dest.parent.name, "name": dest.stem}
 
 
 @app.get("/api/flaky")

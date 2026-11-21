@@ -112,6 +112,24 @@ def _public(item: dict) -> dict:
     return {k: v for k, v in item.items() if k not in ("token_hash",)}
 
 
+def add_history(db, key: str, item_id: str, ids: list[str], at: str, keep: int = 10) -> None:
+    items = _load(db, key)
+    for i in items:
+        if i["id"] == item_id:
+            i["history"] = ([{"at": at, "ids": ids}] + list(i.get("history") or []))[:keep]
+            i["last_run_ids"], i["last_run"] = ids, at
+    _save(db, key, items)
+
+
+def tz_info(now: datetime | None = None) -> dict:
+    """The hub's clock zone, as a person reads it: {"name": "IST", "offset": "+05:30", "label": "IST (UTC+05:30)"}."""
+    t = (now or datetime.now()).astimezone()
+    off = t.strftime("%z")
+    off = f"{off[:3]}:{off[3:]}" if off else "+00:00"
+    name = t.tzname() or ""
+    return {"name": name, "offset": off, "label": f"{name} (UTC{off})" if name else f"UTC{off}"}
+
+
 class Schedules:
     def __init__(self, db):
         self.db = db
@@ -168,6 +186,10 @@ class Schedules:
                 i.update(fields)
         _save(self.db, "schedules", items)
 
+    def record(self, sid: str, ids: list[str], at: str) -> None:
+        """Remember which runs a schedule started (the last ten), so its card can show how they went."""
+        add_history(self.db, "schedules", sid, ids, at)
+
 
 class Hooks:
     """A URL a CI system calls to run a saved script: no sign-in, the secret is in the URL path."""
@@ -200,6 +222,9 @@ class Hooks:
             if i["id"] == hid:
                 i.update(fields)
         _save(self.db, "hooks", items)
+
+    def record(self, hid: str, ids: list[str], at: str) -> None:
+        add_history(self.db, "hooks", hid, ids, at)
 
 
 # ------------------------------------------------------------------------------------------------ notifications

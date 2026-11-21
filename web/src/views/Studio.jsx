@@ -19,6 +19,68 @@ const ACTIONS = ["navigate", "click", "double_click", "right_click", "type", "ap
   "drag", "scroll", "wait", "pause", "upload", "assert_text", "assert_visible", "assert_url", "assert_title", "assert_dialog", "dialog",
   "switch_tab", "back", "refresh", "screenshot", "api", "mock", "assert_accessible", "assert_visual"];
 
+
+const jparse = (t) => { try { const o = JSON.parse(t || "{}"); return o && typeof o === "object" ? o : {}; } catch { return {}; } };
+const jstr = (o) => { const c = Object.fromEntries(Object.entries(o).filter(([, v]) => v !== "" && v != null && !(typeof v === "object" && !Object.keys(v).length))); return Object.keys(c).length ? JSON.stringify(c) : null; };
+
+/** The steps that are more than "a thing and a value" get proper fields instead of a hand-written JSON value. */
+function ToolFields({ s, upd }) {
+  const v = jparse(s.value);
+  const setv = (patch) => upd({ value: jstr({ ...v, ...patch }) });
+  const lbl = (t, node) => <label className="gf"><span>{t}</span>{node}</label>;
+  if (s.action === "api") {
+    const [m, ...rest] = (s.target || "GET ").split(" ");
+    const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
+    const method = METHODS.includes(m.toUpperCase()) ? m.toUpperCase() : "GET";
+    const url = METHODS.includes(m.toUpperCase()) ? rest.join(" ") : s.target || "";
+    return (
+      <div className="guided" aria-label="API call">
+        {lbl("Method", <select value={method} onChange={(e) => upd({ target: `${e.target.value} ${url}` })}>{METHODS.map((x) => <option key={x}>{x}</option>)}</select>)}
+        {lbl("Address", <input value={url} placeholder="/api/health or https://…" onChange={(e) => upd({ target: `${method} ${e.target.value}` })} />)}
+        {lbl("Expect status", <input value={v.expect_status ?? ""} inputMode="numeric" placeholder="200" onChange={(e) => setv({ expect_status: e.target.value ? +e.target.value || "" : "" })} />)}
+        {lbl("Answer contains", <input value={v.expect_contains || ""} placeholder="text" onChange={(e) => setv({ expect_contains: e.target.value })} />)}
+        {["POST", "PUT", "PATCH"].includes(method) && lbl("Body (JSON)", <input className="mono" value={typeof v.body === "string" ? v.body : v.body ? JSON.stringify(v.body) : ""} placeholder='{"sku": 7}'
+          onChange={(e) => { let b = e.target.value; try { b = JSON.parse(b); } catch { /* keep text until it parses */ } setv({ body: b }); }} />)}
+        {lbl("Save from answer", <input className="mono" value={Object.entries(v.save || {}).map(([k, p]) => `${k}=${p}`).join(", ")} placeholder="token=data.token"
+          onChange={(e) => setv({ save: Object.fromEntries(e.target.value.split(",").map((x) => x.split("=").map((y) => y.trim())).filter((x) => x[0] && x[1])) })} />)}
+        <small className="mut">Saved values can be used in later steps as <code>${"{token}"}</code>.</small>
+      </div>);
+  }
+  if (s.action === "mock") {
+    const mode = v.clear ? "clear" : v.block ? "block" : "respond";
+    const body = typeof v.body === "string" ? v.body : v.body ? JSON.stringify(v.body) : "";
+    return (
+      <div className="guided" aria-label="Network rule">
+        {lbl("What to do", <select value={mode} onChange={(e) => upd(e.target.value === "clear" ? { target: null, value: JSON.stringify({ clear: true }) } : e.target.value === "block" ? { value: JSON.stringify({ block: true }) } : { value: JSON.stringify({ status: 200, body: "" }) })}>
+          <option value="respond">Answer with…</option><option value="block">Block the request</option><option value="clear">Stop mocking (clear all)</option></select>)}
+        {mode !== "clear" && lbl("Requests to", <input value={s.target || ""} placeholder="/api/cart  (contains; * wildcard; re:regex)" onChange={(e) => upd({ target: e.target.value || null })} />)}
+        {mode === "respond" && lbl("Status", <input value={v.status ?? ""} inputMode="numeric" placeholder="500" onChange={(e) => setv({ status: +e.target.value || "" })} />)}
+        {mode === "respond" && lbl("Body", <input className="mono" value={body} placeholder='{"items": []}' onChange={(e) => setv({ body: e.target.value })} />)}
+        <small className="mut">Applies to the page's fetch / XHR calls. Images and page loads are not intercepted.</small>
+      </div>);
+  }
+  if (s.action === "assert_visual") {
+    const [name = "", tol = ""] = (s.value || "").split(":");
+    const put = (n, t) => upd({ value: n || t ? `${n}${t ? ":" + t : ""}` : null });
+    return (
+      <div className="guided" aria-label="Visual check">
+        {lbl("Baseline name", <input value={name} placeholder="home" onChange={(e) => put(e.target.value.replace(/[^\w.-]/g, ""), tol)} />)}
+        {lbl("Allowed difference (%)", <input value={tol} inputMode="decimal" placeholder="0.1" onChange={(e) => put(name, e.target.value.replace(/[^\d.]/g, ""))} />)}
+        <small className="mut">The first run saves the picture; later runs compare with it. Accept a change from the run's page.</small>
+      </div>);
+  }
+  if (s.action === "assert_accessible") {
+    return (
+      <div className="guided" aria-label="Accessibility scan">
+        {lbl("Fail on", <select value={s.value || "serious"} onChange={(e) => upd({ value: e.target.value })}>
+          {[["minor", "any issue (minor and worse)"], ["moderate", "moderate and worse"], ["serious", "serious and worse"], ["critical", "critical only"]].map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>)}
+        <small className="mut">Checks image text, button and link names, form labels, page language and title, duplicate ids.</small>
+      </div>);
+  }
+  return null;
+}
+const TOOLS = ["api", "mock", "assert_visual", "assert_accessible"];
+
 /** The AI (or rule) breakdown of the English, editable before running. */
 function Breakdown() {
   const { form, setForm, health } = useApp();
@@ -40,14 +102,16 @@ function Breakdown() {
           <div className="bd-row" key={i}>
             <span className="n">{i + 1}</span>
             <select value={s.action} onChange={(e) => upd(i, { action: e.target.value })}>{ACTIONS.map((a) => <option key={a}>{a}</option>)}</select>
-            <input value={s.target || ""} placeholder="element (in words)" onChange={(e) => upd(i, { target: e.target.value || null })} />
-            <input value={s.value || ""} placeholder="value" onChange={(e) => upd(i, { value: e.target.value || null })} />
+            {TOOLS.includes(s.action) ? <span className="bd-tool"><span className="mut">{s.raw || ""}</span></span> : <>
+              <input value={s.target || ""} placeholder="element (in words)" onChange={(e) => upd(i, { target: e.target.value || null })} />
+              <input value={s.value || ""} placeholder="value" onChange={(e) => upd(i, { value: e.target.value || null })} /></>}
             <span className="bd-meta">
               {s.nth != null && <span className="pill">#{s.nth < 0 ? "last" : s.nth + 1}</span>}
               {s.optional && <span className="pill">optional</span>}
               <span className={"prov " + (s.source === "ai" ? "ai" : "")}>{s.source === "ai" ? "AI" : s.source === "user" ? "edited" : "rules"}</span>
             </span>
             <button className="x" title="Remove step" onClick={() => setForm((f) => ({ steps: f.steps.filter((_, j) => j !== i) }))}><Icon name="x" size={14} /></button>
+            {TOOLS.includes(s.action) && <ToolFields s={s} upd={(patch) => upd(i, patch)} />}
             {(fill(s.target) || fill(s.value)) && <div className="bd-fill">with your data: {[fill(s.target), fill(s.value)].filter(Boolean).join(" · ")}</div>}
             {s.origin && <div className="bd-origin">from your text: “{s.origin}”</div>}
           </div>

@@ -513,3 +513,45 @@ th,td{position:relative}
 .dots i{width:9px;height:14px;border-radius:3px;background:var(--ok)}.dots i.f{background:var(--bad)}
 .card.off{opacity:.6}
 .mono{font-family:var(--mono)}
+
+/* status dots, summaries, confirm dialog, thumbnails, guided step fields, getting started */
+.dots i.u{background:var(--line-2)}
+.card h4 .dotc{margin-right:2px}
+.pill.bad{color:var(--bad);background:var(--bad-soft)}
+.sumstrip{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+.sum{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 14px;min-width:96px;display:flex;flex-direction:column;gap:1px}
+.sum b{font-size:18px;font-weight:650}.sum b.bad{color:var(--bad)}.sum b.ok{color:var(--ok)}
+.sum span{font-size:11.5px;color:var(--mut)}
+.formcard{max-width:760px}
+.formcard fieldset{border:1px solid var(--line);border-radius:10px;padding:4px 14px 8px;margin:0 0 12px;min-width:0}
+.formcard legend{font-size:11.5px;font-weight:650;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;padding:0 6px}
+.codebox{white-space:pre-wrap;background:var(--sunken);padding:10px;border-radius:8px;margin:10px 0 0;font-size:12px;overflow-x:auto}
+.btn.danger.solid{background:var(--bad);border-color:transparent;color:#fff}
+.modal-back{position:fixed;inset:0;background:rgba(10,12,20,.45);display:flex;align-items:center;justify-content:center;z-index:80;padding:16px}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:440px;width:100%;box-shadow:0 24px 60px -20px rgba(0,0,0,.5)}
+.modal h3{margin:0 0 6px;font-size:16px}.modal p{margin:0}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.thumb{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.thumb a{display:block;background:var(--sunken);aspect-ratio:16/10;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover;object-position:top;display:block}
+.thumb figcaption{padding:8px 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px}
+.thumb figcaption .btn{margin-left:auto}
+.guided{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 12px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:10px;margin-top:6px}
+.guided small{grid-column:1/-1}
+.gf{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--mut);font-weight:550}
+.gf input,.gf select{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;color:var(--fg);width:100%}
+.bd-tool{grid-column:span 2;padding:0 4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.visual{margin:12px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--panel-2)}
+.vgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.vpic{margin:0}.vpic figcaption{font-size:11.5px;font-weight:600;color:var(--fg-2);margin-bottom:4px}
+.vpic img{width:100%;border:1px solid var(--line);border-radius:6px;background:#fff}
+.getstarted{margin-bottom:16px}
+.gs{list-style:none;margin:0;padding:6px 14px 12px;display:flex;flex-direction:column;gap:2px}
+.gs li{display:grid;grid-template-columns:30px 1fr auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.gs li:last-child{border-bottom:0}
+.gs li>div{display:flex;flex-direction:column;gap:1px;min-width:0}.gs li .mut{font-size:12.5px}
+.gsn{width:26px;height:26px;border-radius:50%;background:var(--sunken);display:grid;place-items:center;font-size:12px;font-weight:650;color:var(--fg-2)}
+.gs li.done .gsn{background:none;color:var(--ok)}.gs li.done b{color:var(--mut);text-decoration:line-through;text-decoration-thickness:1px}
+@media (max-width:600px){.gs li{grid-template-columns:30px 1fr}.gs .gsa{grid-column:2}}
+.tabs{overflow-x:auto;scrollbar-width:none}.tabs button{white-space:nowrap}
+.tabs button:focus-visible{outline:2px solid var(--acc);outline-offset:-2px;border-radius:6px}

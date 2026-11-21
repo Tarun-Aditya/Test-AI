@@ -1,7 +1,7 @@
 # Automation: schedules, CI hooks, alerts, flaky tests, and more kinds of steps
 
 Everything here works on the hub, on the same saved scripts and runs you already have. In the web app it is the **Automation** page in the sidebar,
-with four tabs (Schedules, CI hooks, Alerts, Flaky tests); a library script's card has a **Schedule** button, and Overview shows a **Flaky tests** panel when there are any.
+with five tabs (Schedules, CI hooks, Alerts, Flaky tests, Baselines), each with a summary strip; a library script's card has a **Schedule** button, and Overview shows a **Flaky tests** panel when there are any.
 Each piece also has an API ([endpoints](api.md#schedules-ci-hooks-notifications-flaky-tests)). In Studio, the step editor offers the new step kinds, and
 **Settings → Accept the new look in visual checks** accepts a changed baseline for that run.
 
@@ -18,6 +18,7 @@ curl -X PUT $HUB/api/schedules -H 'Content-Type: application/json' -H 'X-Request
 * The hub checks every 20 seconds and starts each schedule once in its minute, even across a restart. A schedule that cannot start (script deleted, no such machine) records why in `last_error`.
 * The run is made as the person who created the schedule, in the schedule's project, with that person's saved sessions and AI settings.
 * `POST /api/schedules/{id}/run` runs it now. `enabled: false` pauses it.
+* In the app each card shows a dot for how the last launch went, a strip of the last eight, the next run and the hub's time zone (`tz` in the API). The hub keeps the last ten launches of every schedule and hook (`history`).
 
 ## Run from CI
 
@@ -34,7 +35,7 @@ It answers `{run_ids}`; poll `GET /api/runs/{id}` for the result, as in the [CI 
 Channels (admin): Slack incoming webhook, Microsoft Teams webhook, any webhook (JSON of the run), or email (set `AIAUTO_SMTP_HOST`, `AIAUTO_SMTP_PORT`, `AIAUTO_SMTP_USER`, `AIAUTO_SMTP_PASSWORD`, `AIAUTO_SMTP_FROM`).
 `on` is `failed` (default), `always`, or `recovered` (a pass after a failure). `project` limits a channel to one project. Set `AIAUTO_PUBLIC_URL`
 (e.g. `https://autopilot.example.com`) so the message links to the run. `POST /api/notifications/{id}/test` sends a clearly-marked test message. A channel that is
-down never affects a run.
+down never affects a run. In the app, **Send a test first** tries a channel before you save it (`POST /api/notifications/test`).
 
 ## Flaky tests
 
@@ -51,9 +52,26 @@ All of these work from English, in the editor, from the API, and in the Playwrig
 | **API call** | `Call GET /api/health expecting status 200 containing "ok"` | `POST /api/orders expecting 201`. In JSON: `{"headers": {}, "body": {...}, "expect_status": 200, "expect_contains": "ok", "expect_json": {"data.id": 5}, "save": {"token": "data.token"}}`. `save` makes `${token}` available to later steps. Relative addresses use the page's origin |
 | **Mock or block the network** | `Mock /api/cart to return 500` · `Mock "/api/items" to return 200 with body '{"items": []}'` · `Block requests to analytics` · `Stop mocking` | Answers the page's `fetch` and XHR calls whose URL contains the text (`*` wildcards; `re:` + a regular expression). The newest rule for a URL wins. Chrome and Edge keep it across page loads; in Firefox and Safari (Selenium) set it again after a navigation. Images, scripts and page loads are not intercepted |
 | **Accessibility scan** | `Verify the page has no accessibility issues` · `Check there are no serious accessibility issues` | Built-in rules (not axe): image alt, button and link names, form labels, `lang`, page title, duplicate ids, positive tabindex, empty headings, focusable `aria-hidden`. Impacts: minor < moderate < serious < critical; the step fails at the level you name (default serious). Looks into open shadow roots; not iframes; no colour-contrast check |
-| **Visual comparison** | `Verify the page looks the same as home` · `... as baseline named home within 0.5%` | The first run saves the screenshot as the baseline (the step passes and says so). Later runs compare pixels; a changed pixel is a colour channel moving by more than 24; `within N%` is the share of pixels allowed to differ (default 0.1%). A failure writes `screenshots/visual_<name>_diff.png`. To accept a change on purpose run with `config.update_baselines: true` (scripts: `UPDATE_BASELINES=1`). Baselines live next to the artifacts (`baselines/<test>/`, or `config.baselines_dir` / `AIAUTO_BASELINES`) **on the machine that runs the test**; scripts use `./baselines` (`BASELINES_DIR`). Same browser, size and fonts give the same pixels, so compare on the same machine |
+| **Visual comparison** (see also *Baselines* below) | `Verify the page looks the same as home` · `... as baseline named home within 0.5%` | The first run saves the screenshot as the baseline (the step passes and says so). Later runs compare pixels; a changed pixel is a colour channel moving by more than 24; `within N%` is the share of pixels allowed to differ (default 0.1%). A failure writes `screenshots/visual_<name>_diff.png`. To accept a change on purpose run with `config.update_baselines: true` (scripts: `UPDATE_BASELINES=1`). Baselines live next to the artifacts (`baselines/<test>/`, or `config.baselines_dir` / `AIAUTO_BASELINES`) **on the machine that runs the test**; scripts use `./baselines` (`BASELINES_DIR`). Same browser, size and fonts give the same pixels, so compare on the same machine |
 | **One-time passwords** | type `${totp:seed}` | `seed` is the authenticator secret (the base32 text behind the QR code), kept as a secret data value. The code is worked out at the step (RFC 6238, 6 digits, 30 s) and masked everywhere |
 | **Codes from an inbox** | type `${code:inbox}` | `inbox` is a URL that shows the latest message: a mail catcher (Mailpit `http://localhost:8025/api/v1/message/latest`, MailHog), a webhook inbox or an SMS gateway page. The step waits up to 30 s for a 4-8 digit code, preferring one after "code", "otp" or "verification" |
 | **Saved logins** | *(already there)* | Log in once, save the session, reuse it: `config.session` / `save_session` ([user guide](user-guide.md)) |
 
 Needs `Pillow` (in `requirements.txt`) for the pixel comparison; without it a visual step only tells you whether the screenshots are byte-identical.
+
+## Baselines
+
+The **Baselines** tab shows every saved picture (`GET /api/baselines`, images at `/api/baselines/{test}/{name}.png`) and can delete one (the next check saves a fresh one).
+When a visual check fails, open the run and select the step: the page shows the baseline, this run's picture and the difference side by side
+(`GET /api/runs/{id}/visual`), with **Accept the new look**, which makes this run's picture the baseline (`POST /api/baselines/approve` `{run_id, name}`).
+Baselines are kept in `baselines/` next to the artifacts folder (override with `AIAUTO_BASELINES`).
+
+## In the step editor
+
+API calls, network rules, visual checks and accessibility scans have their own fields in Studio's step list (method, address, expected status, body,
+what to save; answer / block / clear; baseline name and allowed difference; the level to fail on) instead of a JSON box.
+
+## For new users
+
+Overview shows a **Getting started** checklist (write a test, run it, keep the script, run it automatically, get told when it breaks) that ticks itself off
+and can be hidden.

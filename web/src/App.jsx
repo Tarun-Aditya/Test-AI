@@ -12,6 +12,7 @@ import Settings from "./views/Settings.jsx";
 import MyAI from "./views/MyAI.jsx";
 import Requirements from "./views/Requirements.jsx";
 import Automation from "./views/Automation.jsx";
+import Confirm from "./components/Confirm.jsx";
 import MachinePicker, { agentsOf } from "./components/MachinePicker.jsx";
 import RunPage from "./components/RunDrawer.jsx";
 
@@ -66,6 +67,9 @@ export default function App({ me = null, reloadMe = () => {} }) {
   const [toastMsg, setToastMsg] = useState(null);
   const [theme, setTheme] = useState(() => store.get("theme", "auto"));
   const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(null);
+  const ask = useCallback((opts) => new Promise((resolve) => setAsking({ ...opts, resolve })), []);
+  const answer = useCallback((v) => { setAsking((a) => { a?.resolve(v); return null; }); }, []);
   const listeners = useRef(new Set());
 
   const setForm = useCallback((patch) => setFormState((f) => { const n = { ...f, ...(typeof patch === "function" ? patch(f) : patch) }; saveForm(n); return n; }), []);
@@ -151,8 +155,8 @@ export default function App({ me = null, reloadMe = () => {} }) {
   const ctx = useMemo(() => ({
     form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy,
     loadRuns, loadMachines, loadSessions, loadLibrary, openRun: (id, tab) => nav("runs", id, tab), me, can,
-    projects, project, loadProjects,
-  }), [form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy, loadRuns, loadMachines, loadSessions, loadLibrary, me, projects, project, loadProjects]);
+    projects, project, loadProjects, ask,
+  }), [form, setForm, runs, stats, machines, sessions, library, health, toast, nav, route, subscribe, startRun, busy, loadRuns, loadMachines, loadSessions, loadLibrary, me, projects, project, loadProjects, ask]);
   const signOut = async () => { try { await api("/api/auth/logout", { method: "POST" }); } catch { /* already out */ } reloadMe(); };
   const changePassword = async () => {
     const current = me?.has_password ? window.prompt("Current password") : "";
@@ -249,6 +253,7 @@ export default function App({ me = null, reloadMe = () => {} }) {
           </div>}
         </nav>
       </div>
+      {asking && <Confirm ask={asking} onAnswer={answer} />}
       <div className={"toast" + (toastMsg ? " on" : "") + (toastMsg?.err ? " err" : "")} role="status">{toastMsg?.msg}</div>
     </Ctx.Provider>
   );

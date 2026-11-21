@@ -125,6 +125,39 @@ function Replay({ r, onDone }) {
   </div>;
 }
 
+
+/** A failed (or passed) visual check: the baseline, this run's picture and what differs, with a button to accept the new look. */
+function VisualCheck({ r, step }) {
+  const { can, toast, ask } = useApp();
+  const [items, setItems] = useState(null);
+  const name = ((step.value || "").split(":")[0] || "").trim();
+  const load = () => api(`/api/runs/${encodeURIComponent(r.run_id)}/visual`).then(setItems).catch(() => setItems([]));
+  useEffect(() => { setItems(null); load(); }, [r.run_id, step.idx]);
+  const list = items || [];
+  const one = list.find((x) => x.name === name) || (list.length === 1 ? list[0] : null);
+  if (!one) return items ? <div className="callout" style={{ margin: 12 }}>No picture was kept for this visual check.</div> : null;
+  const approve = async () => {
+    if (!(await ask({ title: `Accept the new look of “${one.name}”?`, body: "This run's picture becomes the baseline. Later runs are compared with it.", ok: "Accept new look" }))) return;
+    try { await api("/api/baselines/approve", { method: "POST", body: { run_id: r.run_id, name: one.name } }); toast("Baseline updated"); load(); } catch (e) { toast(e.message, true); }
+  };
+  const pic = (title, src, extra) => <figure className="vpic"><figcaption>{title}</figcaption>{src ? <a href={src} target="_blank" rel="noreferrer"><img loading="lazy" src={src} alt={`${title} of ${one.name}`} /></a> : <div className="empty-state">{extra}</div>}</figure>;
+  return (
+    <div className="visual" role="region" aria-label="Visual check">
+      <div className="row" style={{ marginBottom: 8 }}>
+        <b>Visual check “{one.name}”</b>
+        <span className={"status " + (one.different ? "failed" : "passed")}>{one.different ? "looks different" : "matches"}</span>
+        <span className="spacer" />
+        {one.different && can.run && <button className="btn sm primary" onClick={approve}>Accept the new look</button>}
+      </div>
+      <div className="vgrid">
+        {pic("Baseline", one.baseline, "No baseline yet")}
+        {pic("This run", art(r.run_id, one.actual))}
+        {one.different && pic("Difference (red)", art(r.run_id, one.diff))}
+      </div>
+    </div>
+  );
+}
+
 /** Facts, step list and the screenshot of the selected step: the core of a run, on its page and in the Inbox. */
 export function StepsView({ r, compact }) {
   const firstBad = r.steps.find((x) => x.status === "failed");
@@ -181,6 +214,7 @@ export function StepsView({ r, compact }) {
           {step.locator && <><dt>Element</dt><dd className="mono">{step.locator}</dd></>}
           {step.dialog && <><dt>Dialog</dt><dd>{step.dialog}</dd></>}
         </dl>}
+        {step?.action === "assert_visual" && <VisualCheck r={r} step={step} />}
       </section>
     </div>
     {r.batch && r.batch.length > 1 && !compact && <section className="panel" style={{ marginTop: 16 }}>

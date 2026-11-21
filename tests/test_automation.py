@@ -203,3 +203,68 @@ def test_flaky_endpoint_reads_the_run_history(hub, shop_url):
     rows = c.get("/api/flaky").json()
     assert rows and rows[0]["name"] == "Home page" and rows[0]["runs"] == 2 and not rows[0]["flaky"]
     assert c.get("/api/flaky", params={"only": True}).json() == []
+
+
+# ------------------------------------------------------------------------------------------ time zone, history, try-before-save
+def test_schedules_say_which_clock_they_use_and_remember_their_runs(hub, shop_url):
+    import asyncio
+    c, appmod = hub
+    _save(c, shop_url)
+    s = c.put("/api/schedules", json={"library": "home-page", "cron": "30 2 * * *", "config": CFG}).json()
+    row = c.get("/api/schedules").json()[0]
+    assert row["tz"]["label"] and row["tz"]["offset"][0] in "+-" and ":" in row["tz"]["offset"]
+    assert c.get("/api/schedules/preview", params={"cron": "0 * * * *"}).json()["tz"] == row["tz"]
+    ids = []
+    for n in range(3):
+        r = c.post(f"/api/schedules/{s['id']}/run").json()
+        ids += r["run_ids"]
+        _wait_done(c, r["run_ids"])
+    hist = c.get("/api/schedules").json()[0]["history"]
+    assert [h["ids"][0] for h in hist] == ids[::-1]                                  # newest first, each with its runs
+    h = c.post("/api/hooks", json={"library": "home-page", "config": CFG}).json()
+    run = c.post(h["url"]).json()["run_ids"]
+    assert c.get("/api/hooks").json()[0]["history"][0]["ids"] == run
+
+
+def test_a_channel_can_be_tried_before_it_is_saved(hub, receiver):
+    c, _ = hub
+    r = c.post("/api/notifications/test", json={"kind": "slack", "url": receiver.url + "/try"})
+    assert r.status_code == 200 and "only a test" in receiver.got[-1][1]["text"]
+    assert c.get("/api/notifications").json() == []                                   # nothing was saved
+    assert c.post("/api/notifications/test", json={"kind": "slack", "url": ""}).status_code == 422
+    assert c.post("/api/notifications/test", json={"kind": "slack", "url": "http://127.0.0.1:9/x"}).status_code == 502
+
+
+# ------------------------------------------------------------------------------------------ baselines
+def test_baselines_are_listed_shown_approved_and_deleted(hub, tmp_path):
+    import http.server, functools
+    c, appmod = hub
+    page = tmp_path / "p.html"
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(type("Q", (http.server.SimpleHTTPRequestHandler,), {"log_message": lambda *a: None}), directory=str(tmp_path)))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/p.html"
+        script = {"name": "Look ${x}", "base_url": None, "data": {}, "sensitive": [],
+                  "steps": [{"action": "navigate", "value": url, "raw": "Open"}, {"action": "assert_visual", "value": "front", "raw": "Verify the page looks the same as front"}]}
+        c.post("/api/library", json={"name": "look", "test": script})
+
+        def go(color):
+            page.write_text(f'<html><body style="margin:0"><div style="width:300px;height:200px;background:{color}"></div></body></html>')
+            rid = c.post("/api/runs", json={"library": "look", "config": CFG}).json()["run_ids"][0]
+            return rid, _wait_done(c, [rid])[rid]["status"]
+        _, st = go("#3366cc")
+        assert st == "passed"
+        bl = c.get("/api/baselines").json()
+        assert [(b["test"], b["name"]) for b in bl] == [("look", "front")]                  # ${x} dropped from the folder name, like the runner does
+        img = c.get(bl[0]["url"])
+        assert img.status_code == 200 and img.content[:4] == b"\x89PNG"
+        rid, st = go("#cc3333")
+        assert st == "failed"
+        assert c.post("/api/baselines/approve", json={"run_id": rid, "name": "nope"}).status_code == 404
+        assert c.post("/api/baselines/approve", json={"run_id": rid, "name": "front"}).status_code == 200
+        _, st = go("#cc3333")
+        assert st == "passed"                                                               # the new look is the baseline now
+        assert c.get("/api/baselines/%2e%2e/x.png").status_code in (400, 404)
+        assert c.delete("/api/baselines/look/front").status_code == 200 and c.get("/api/baselines").json() == []
+    finally:
+        srv.shutdown()
