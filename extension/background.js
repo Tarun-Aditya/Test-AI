@@ -58,6 +58,9 @@ async function startOnServer({ text, data, sensitive, steps, tabId, config, sour
     if (parsed.unparsed && parsed.unparsed.length) throw Object.assign(new Error("Some sentences were not understood: " + parsed.unparsed.join(" · ")), { unparsed: parsed.unparsed });
     plan = parsed.test.steps; d = parsed.test.data || {}; sens = parsed.test.sensitive || []; notes = parsed.notes || []; ignored = parsed.ignored || [];
   }
+  // A script has to open the page it starts on: a run that began on a page that was already open starts with that step, so the run and the
+  // script made from it are the same sequence (and run on their own).
+  if (!sourceRun && plan[0] && plan[0].action !== "navigate") plan = [{ action: "navigate", value: tab.url, raw: "open " + tab.url, source: "rules" }, ...plan];
   const id = "r" + Date.now().toString(36) + (nextId++);
   const run = new ServerRun({ id, tabId: tab.id, onEvent: broadcast });
   const body = { name: name || undefined, start_url: tab.url, config: { use_llm: true, record_video: true, timeout_ms: (config && config.timeout) || 15000 } };

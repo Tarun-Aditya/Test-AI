@@ -422,6 +422,15 @@ class SeleniumEngine(Engine):
         self._top()
         return self.driver.execute_script(script)
 
+    def describe_loc(self, loc):
+        """Describe the element a locator points at, as the snapshot does (role, name, label, fresh locators)."""
+        import uuid
+        el = self._el(loc, 1500)
+        try:
+            return self.driver.execute_script("return (" + DESCRIBE_EL_JS + ")(arguments[0], arguments[1]);", el, f"se{uuid.uuid4().hex[:8]}:0")
+        finally:
+            self._top()
+
     def describe(self, cand):
         try:
             d = self.driver.execute_script(

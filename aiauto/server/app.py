@@ -753,6 +753,9 @@ async def ws_cdp(ws: WebSocket, token: str):
 # --------------------------------------------------------------------- API: runs reported by the Chrome extension
 # --------------------------------------------------------------------- replay payloads for the extension (past runs, saved scripts)
 def _replay_payload(test: dict, secrets: dict) -> dict:
+    steps = test.get("steps") or []
+    if test.get("base_url") and steps and steps[0].get("action") != "navigate":      # a script made on an open page: it starts by opening it
+        test["steps"] = [{"action": "navigate", "value": test["base_url"], "raw": f"open {test['base_url']}", "source": "rules"}, *steps]
     needs = []
     for k in test.get("sensitive", []):
         try:

@@ -231,6 +231,10 @@ class PlaywrightEngine(Engine):
     def eval_js(self, script):
         return self.page.evaluate("() => {" + script + "}")
 
+    def describe_loc(self, loc):
+        """Describe the element a locator points at, as the snapshot does (role, name, label, fresh locators)."""
+        return self._one(loc).evaluate(DESCRIBE_EL_JS, f"pw{uuid.uuid4().hex[:8]}:0")
+
     def describe(self, cand):
         marker = cand.get("marker") or f"pw{uuid.uuid4().hex[:8]}:{cand['uid']}"
         if cand.get("ref"):

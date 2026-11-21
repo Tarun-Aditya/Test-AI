@@ -243,8 +243,13 @@ class Runner:
                 if e.exists(loc, 1200 if idx == 0 else 300) and \
                         (e.count(loc) == 1 or loc.strategy in ("css", "xpath")) and fits(loc, idx):
                     if idx > usable0 and attr == "locator":
-                        # promote the working fallback so the regenerated script is already healed
-                        template.locator, template.fallbacks = loc, [l for l in stored if l is not loc][:3]
+                        # promote the working fallback so the regenerated script is already healed, with locators described afresh from the
+                        # element it found (the old ones no longer match the page)
+                        fresh = self._refresh(loc, target)
+                        if fresh:
+                            template.locator, template.fallbacks = fresh[0], fresh[1:4]
+                        else:
+                            template.locator, template.fallbacks = loc, [l for l in stored if l is not loc][:3]
                     if idx > usable0:
                         self._emit("healing", target=self.mask(target), how=f"fallback locator {loc.label()}")
                     self._picked = "script" if idx <= usable0 else "fallback"
@@ -502,11 +507,23 @@ class Runner:
                 out.append(l.model_copy(update={"strategy": "xpath", "value": xp, "role": None, "code": None}))
         return out
 
-    def _verify(self, cand: dict, target: str = "") -> list[Locator]:
+    def _refresh(self, loc: Locator, target: str | None) -> list[Locator] | None:
+        """The element a fallback locator found, described again: fresh verified locators for the script, whose old ones no longer match."""
+        describe = getattr(self.engine, "describe_loc", None)
+        if not describe:
+            return None
+        try:
+            d = describe(loc)
+            return self._verify({**d, "uid": 0}, target or "", described=True) if d else None
+        except Exception as ex:
+            log.debug("could not refresh locators: %s", ex)
+            return None
+
+    def _verify(self, cand: dict, target: str = "", described: bool = False) -> list[Locator]:
         """Keep only locators that the engine itself resolves to exactly this one element."""
         e = self.engine
         good: list[Locator] = []
-        desc = e.describe(cand) or {}
+        desc = {} if described else (e.describe(cand) or {})
         info = {**cand, **{k: v for k, v in desc.items() if k in ("locators", "frames", "shadow", "marker", "tag", "type")}}
         if desc.get("role") and desc.get("name") and not cand.get("name"):
             info["name"] = desc["name"]
@@ -522,7 +539,7 @@ class Runner:
         said = lambda l: l.strategy == "css" and any(w in (l.value or "").lower().replace("-", " ").replace("_", " ") for w in words)
         all_locs = [l for l in all_locs if said(l)] + [l for l in all_locs if not said(l)]
         all_locs = self._count_tolerant(all_locs, target) + all_locs
-        if hasattr(e, "verify_locators"):
+        if hasattr(e, "verify_locators") and not described:
             # one in-page check of every locator, then a native find_elements confirmation of the winners
             try:
                 flags = e.verify_locators(cand, all_locs) or []
