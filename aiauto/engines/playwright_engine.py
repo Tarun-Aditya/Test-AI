@@ -231,6 +231,14 @@ class PlaywrightEngine(Engine):
     def eval_js(self, script):
         return self.page.evaluate("() => {" + script + "}")
 
+    def add_init_script(self, js):
+        self._ctx.add_init_script(js)
+        for pg in self._ctx.pages:
+            try:
+                pg.evaluate(js)
+            except Exception:
+                pass
+
     def describe_loc(self, loc):
         """Describe the element a locator points at, as the snapshot does (role, name, label, fresh locators)."""
         return self._one(loc).evaluate(DESCRIBE_EL_JS, f"pw{uuid.uuid4().hex[:8]}:0")

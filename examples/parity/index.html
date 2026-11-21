@@ -1,0 +1,21 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Parity page</title></head>
+<body>
+<h1>Parity page</h1>
+<label for="who">Name</label><input id="who" type="text">
+<button id="load" type="button">Load items</button>
+<p id="status"></p>
+<ul id="items"></ul>
+<script>
+document.getElementById('load').onclick = async () => {
+  const st = document.getElementById('status'), ul = document.getElementById('items');
+  st.textContent = 'Loading…'; ul.innerHTML = '';
+  try {
+    const r = await fetch('/api/items');
+    if (!r.ok) { st.textContent = 'Could not load items (' + r.status + ')'; return; }
+    const j = await r.json();
+    st.textContent = 'Loaded ' + j.items.length + ' items';
+    for (const i of j.items) { const li = document.createElement('li'); li.textContent = i; ul.appendChild(li); }
+  } catch (e) { st.textContent = 'Could not load items (network error)'; }
+};
+</script>
+</body></html>

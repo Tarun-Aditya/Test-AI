@@ -19,7 +19,9 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-_VAR = re.compile(r"\$\{\s*([\w.\-\[\]]+)\s*\}|\{\{\s*([\w.\-\[\]]+)\s*\}\}")
+# ${name}, {{name}}; and two functions: ${totp:key} (the current one-time password for the secret in `key`) and
+# ${code:key} (a verification code read from the inbox URL in `key`)
+_VAR = re.compile(r"\$\{\s*((?:totp:|code:)?[\w.\-\[\]]+)\s*\}|\{\{\s*((?:totp:|code:)?[\w.\-\[\]]+)\s*\}\}")
 MASK = "••••••"
 
 
@@ -130,16 +132,24 @@ def substitute(text: str | None, data: dict[str, Any]) -> str | None:
 
     def repl(m: re.Match) -> str:
         key = m.group(1) or m.group(2)
+        fn, _, key = key.rpartition(":") if ":" in key else ("", "", key)
         try:
-            return str(_resolve(data or {}, key))
+            value = str(_resolve(data or {}, key))
         except (KeyError, IndexError, ValueError):
             return m.group(0)
+        if not fn:
+            return value
+        from .script_runtime import code_from, totp
+        try:
+            return totp(value) if fn == "totp" else code_from(value)
+        except Exception as e:           # a bad secret / an inbox that never answered: say so in the step
+            raise ValueError(f"${{{fn}:{key}}}: {e}") from e
 
     return _VAR.sub(repl, text)
 
 
 def referenced_keys(text: str | None) -> list[str]:
-    return [m.group(1) or m.group(2) for m in _VAR.finditer(text or "")]
+    return [(m.group(1) or m.group(2)).rpartition(":")[2] for m in _VAR.finditer(text or "")]
 
 
 def secret_values(data: dict[str, Any], sensitive: Iterable[str]) -> list[str]:

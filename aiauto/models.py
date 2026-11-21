@@ -35,6 +35,10 @@ class Action(str, Enum):
     REFRESH = "refresh"
     UPLOAD = "upload"
     SWITCH_TAB = "switch_tab"          # value: index (0 = first) or "last"
+    ASSERT_VISUAL = "assert_visual"    # the page looks like its baseline screenshot; value: name[:tolerance%]
+    ASSERT_ACCESSIBLE = "assert_accessible"   # no accessibility issues at or above the level in value (default serious)
+    API = "api"                        # target "GET https://..."; value: JSON {headers, body, expect_status, expect_contains, expect_json, save}
+    MOCK = "mock"                      # target: URL pattern; value: JSON {status, body, block, method, delay, clear}
 
 
 # Actions that operate on an element and therefore need a locator.
@@ -133,6 +137,8 @@ class RunConfig(BaseModel):
     # Selenium: the hub URL; Playwright: ws(s):// (browser server) or http(s):// (Chrome DevTools endpoint)
     remote_url: Optional[str] = None
     remote_caps: dict[str, Any] = Field(default_factory=dict)   # Selenium capabilities (platformName, bstack:options, ...)
+    update_baselines: bool = False        # visual checks: accept what the page looks like now as the new baseline
+    baselines_dir: Optional[str] = None   # where baseline screenshots live (default: next to the artifacts, per test)
     start_paused: bool = False            # hold before the first step: the person steps through (Next step) or resumes
     remote_attach: bool = False           # remote_url is the Chrome extension's DevTools relay: drive the person's own tab, don't open a browser
     ext_token: Optional[str] = None       # that relay's session (set by the hub, never by a client)

@@ -422,6 +422,15 @@ class SeleniumEngine(Engine):
         self._top()
         return self.driver.execute_script(script)
 
+    def add_init_script(self, js):
+        if self._chromium:                 # Chrome / Edge: every page that loads later gets it too
+            try:
+                self._cdp("Page.addScriptToEvaluateOnNewDocument", {"source": js})
+            except Exception:
+                pass
+        self._top()
+        self.driver.execute_script(js)     # Firefox / Safari: this page only (a mock must be set again after a navigation)
+
     def describe_loc(self, loc):
         """Describe the element a locator points at, as the snapshot does (role, name, label, fresh locators)."""
         import uuid

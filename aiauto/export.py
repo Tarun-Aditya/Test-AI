@@ -234,7 +234,7 @@ def build_project(artifacts: Path, run: dict, members: list[dict]) -> tuple[str,
     files.update({
         "README.md": README.format(name=base_name, secrets_section=secrets_section, iter_rows=iter_rows,
                                    config=json.dumps(config, indent=2), instructions=script.get("source_text", "").strip() or "(none)"),
-        "requirements.txt": "playwright>=1.45\nselenium>=4.20\nimageio-ffmpeg>=0.5\n",
+        "requirements.txt": "playwright>=1.45\nselenium>=4.20\nimageio-ffmpeg>=0.5\nPillow>=10\n",
         "config.json": json.dumps(config, indent=2),
         "iterations.json": json.dumps(iters, indent=2),
         ".env.example": "\n".join(env_lines) + "\n",

@@ -192,6 +192,10 @@ class Engine(ABC):
         """Run a script body (may `return`) in the top-level page."""
         raise NotImplementedError
 
+    def add_init_script(self, js: str) -> None:
+        """Run `js` now and in every page that loads after this (network mocks must survive navigations)."""
+        self.eval_js(js)
+
     # actions at a screen position (elements drawn on a canvas, found visually)
     def click_point(self, x: int, y: int, button: str = "left", double: bool = False) -> None:
         raise NotImplementedError

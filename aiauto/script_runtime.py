@@ -202,6 +202,249 @@ FRAME_TEXT_JS = """() => { const p = []; const w = (r) => { try { if (r.body) p.
   w(document); return p.join('\\n'); }"""
 
 
+# ------------------------------------------------------------------------------------------------ extras
+# Used by generated scripts and by the tool's own runner (one implementation, so a script behaves like the run it came from):
+# one-time passwords, codes read from an inbox, API calls, screenshot comparison, network mocks, accessibility scan.
+def totp(secret, digits=6, period=30, at=None):
+    """The current one-time password (RFC 6238, as Google Authenticator / Authy / Microsoft Authenticator show it)."""
+    import base64 as _b64, hashlib, hmac, struct
+    key = re.sub(r"[\s-]", "", str(secret)).upper()
+    key = _b64.b32decode(key + "=" * (-len(key) % 8))
+    counter = int((time.time() if at is None else at) // period)
+    h = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    o = h[-1] & 15
+    return str((struct.unpack(">I", h[o:o + 4])[0] & 0x7FFFFFFF) % (10 ** digits)).zfill(digits)
+
+
+def code_from(url, timeout=30):
+    """A verification code (4-8 digits) read from an HTTP inbox, waiting for it to arrive: a mail catcher (Mailpit, MailHog),
+    a webhook inbox, an SMS gateway's 'last message' URL. The newest match wins."""
+    import urllib.request
+    pats = [r"(?:code|otp|pin|passcode|verification)\D{0,40}?(\d{4,8})\b", r"\b(\d{6})\b", r"\b(\d{4,8})\b"]
+    end, last = time.time() + timeout, ""
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                last = re.sub(r"<[^>]+>", " ", r.read().decode("utf-8", "replace")).replace("\\n", " ")
+            for pat in pats:
+                m = re.search(pat, last, re.I)
+                if m:
+                    return m.group(1)
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+        if time.time() > end:
+            raise TimeoutError(f"no verification code arrived at that address within {timeout}s (last answer: {last[:120]!r})")
+        time.sleep(1.5)
+
+
+def split_api_target(target):
+    """"POST /api/orders" -> ("POST", "/api/orders"); a bare address is a GET."""
+    m = re.match(r"^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S.*)$", target or "", re.I)
+    return (m.group(1).upper(), m.group(2).strip()) if m else ("GET", (target or "").strip())
+
+
+def api_request(method, url, headers=None, body=None, timeout=30):
+    """One HTTP call with the standard library. Returns (status, headers, text); an HTTP error status is an answer, not an exception."""
+    import urllib.error, urllib.request
+    data = None
+    h = dict(headers or {})
+    if body is not None:
+        data = body if isinstance(body, (bytes, bytearray)) else (body if isinstance(body, str) else json.dumps(body)).encode("utf-8")
+        if not isinstance(body, (str, bytes, bytearray)):
+            h.setdefault("Content-Type", "application/json")
+    h.setdefault("User-Agent", "autopilot")
+    req = urllib.request.Request(url, data=data, headers=h, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read().decode("utf-8", "replace")
+
+
+def _dig(obj, path):
+    cur = obj
+    for tok in re.findall(r"[^.\[\]]+", path):
+        cur = cur[int(tok)] if isinstance(cur, list) else cur[tok]
+    return cur
+
+
+def check_api(status, text, spec):
+    """Compare an API answer with what the step expects. Returns (problem or None, values to save for later steps)."""
+    spec = spec or {}
+    want = spec.get("expect_status")
+    if want is not None and int(status) != int(want):
+        return f"expected status {want}, got {status}: {text[:160]!r}", {}
+    if want is None and status >= 400:
+        return f"the call answered {status}: {text[:160]!r}", {}
+    if spec.get("expect_contains") and spec["expect_contains"] not in text:
+        return f"expected the answer to contain {spec['expect_contains']!r}; got {text[:160]!r}", {}
+    saved = {}
+    if spec.get("expect_json") or spec.get("save"):
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            return f"the answer is not JSON: {text[:120]!r}", {}
+        for path, expected in (spec.get("expect_json") or {}).items():
+            try:
+                got = _dig(doc, path)
+            except (KeyError, IndexError, ValueError, TypeError):
+                return f"the answer has no '{path}'", {}
+            if got != expected:
+                return f"expected {path} = {expected!r}, got {got!r}", {}
+        for name, path in (spec.get("save") or {}).items():
+            try:
+                saved[name] = str(_dig(doc, path))
+            except (KeyError, IndexError, ValueError, TypeError):
+                return f"cannot save '{name}': the answer has no '{path}'", {}
+    return None, saved
+
+
+def visual_compare(actual_png, baseline, tolerance=0.001, update=False, threshold=24):
+    """Compare a screenshot with its baseline file. Returns (state, message, changed_ratio, diff_png).
+    state: created (no baseline yet, or approved now) | same | different. A pixel counts as changed when a colour channel
+    moves by more than `threshold`; `tolerance` is the share of changed pixels that is still accepted (0.001 = 0.1%)."""
+    baseline = Path(baseline)
+    if update or not baseline.exists():
+        baseline.parent.mkdir(parents=True, exist_ok=True)
+        baseline.write_bytes(actual_png)
+        return "created", ("baseline replaced" if update else "no baseline yet: this screenshot is now the baseline"), 0.0, None
+    old = baseline.read_bytes()
+    try:
+        from PIL import Image, ImageChops
+        import io
+        a, b = Image.open(io.BytesIO(old)).convert("RGB"), Image.open(io.BytesIO(actual_png)).convert("RGB")
+    except ImportError:
+        same = old == actual_png
+        return ("same", "identical", 0.0, None) if same else ("different", "the screenshots differ (install Pillow for a pixel comparison)", 1.0, None)
+    if a.size != b.size:
+        return "different", f"the page is {b.size[0]}x{b.size[1]} but the baseline is {a.size[0]}x{a.size[1]}", 1.0, None
+    d = ImageChops.difference(a, b)
+    mask = d.convert("L").point(lambda p: 255 if p > 0 else 0)
+    strong = Image.merge("L", [c.point(lambda p: 255 if p > threshold else 0) for c in d.split()][:1])
+    for c in d.split()[1:]:
+        strong = ImageChops.lighter(strong, c.point(lambda p: 255 if p > threshold else 0))
+    changed = sum(strong.histogram()[255:])
+    ratio = changed / float(a.size[0] * a.size[1])
+    if ratio <= tolerance:
+        return "same", ("identical" if not changed else f"{ratio * 100:.3f}% of pixels differ (accepted up to {tolerance * 100:.3f}%)"), ratio, None
+    red = Image.new("RGB", a.size, (230, 40, 60))
+    out = Image.composite(red, Image.blend(a, Image.new("RGB", a.size, (255, 255, 255)), 0.6), strong)
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return "different", f"{ratio * 100:.2f}% of the pixels differ (accepted up to {tolerance * 100:.3f}%)", ratio, buf.getvalue()
+
+
+A11Y_JS = r"""
+const issues = []; const seen = new Set();
+const sel = (el) => { if (el.id) return '#' + CSS.escape(el.id); let s = el.tagName.toLowerCase();
+  const c = (el.getAttribute('class') || '').trim().split(/\s+/)[0]; if (c) s += '.' + CSS.escape(c); return s; };
+const add = (rule, impact, el, help) => { const k = rule + '|' + (el ? sel(el) + (el.outerHTML || '').slice(0, 60) : ''); if (seen.has(k)) return; seen.add(k);
+  issues.push({rule, impact, target: el ? sel(el) : 'page', html: el ? el.outerHTML.slice(0, 120) : '', help}); };
+const visible = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+  return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && !el.closest('[aria-hidden="true"]'); };
+const text = (el) => (el.innerText || el.textContent || '').trim();
+const labelled = (el) => { if (el.getAttribute('aria-label') && el.getAttribute('aria-label').trim()) return true;
+  const lb = el.getAttribute('aria-labelledby'); if (lb && lb.split(/\s+/).some((i) => { const t = document.getElementById(i); return t && text(t); })) return true;
+  if (el.title && el.title.trim()) return true; return false; };
+const walk = (root, fn) => { for (const el of root.querySelectorAll('*')) { fn(el); if (el.shadowRoot) walk(el.shadowRoot, fn); } };
+if (!document.documentElement.getAttribute('lang')) add('html-lang', 'serious', document.documentElement, 'The page has no lang attribute: screen readers cannot pick a voice.');
+if (!document.title.trim()) add('document-title', 'serious', null, 'The page has no title.');
+const ids = new Map();
+walk(document, (el) => {
+  const tag = el.tagName.toLowerCase();
+  if (el.id) { ids.set(el.id, (ids.get(el.id) || 0) + 1); }
+  if (!visible(el) && tag !== 'html') return;
+  if (tag === 'img' && !el.hasAttribute('alt') && el.getAttribute('role') !== 'presentation' && !labelled(el)) add('image-alt', 'critical', el, 'An image has no alt text (use alt="" if it is decorative).');
+  if ((tag === 'button' || el.getAttribute('role') === 'button') && !text(el) && !labelled(el) && !el.querySelector('img[alt]:not([alt=""]), svg title')) add('button-name', 'critical', el, 'A button has no accessible name.');
+  if (tag === 'a' && el.hasAttribute('href') && !text(el) && !labelled(el) && !el.querySelector('img[alt]:not([alt=""]), svg title')) add('link-name', 'serious', el, 'A link has no text a screen reader can read.');
+  if ((tag === 'input' && !['hidden', 'submit', 'button', 'reset', 'image'].includes((el.type || '').toLowerCase())) || tag === 'select' || tag === 'textarea') {
+    const hasLabel = (el.labels && el.labels.length && [...el.labels].some((l) => text(l))) || labelled(el) || el.placeholder;
+    if (!hasLabel) add('label', 'critical', el, 'A form field has no label.'); }
+  if (/^h[1-6]$/.test(tag) && !text(el) && !labelled(el)) add('empty-heading', 'minor', el, 'A heading is empty.');
+  if (el.hasAttribute('tabindex') && parseInt(el.getAttribute('tabindex'), 10) > 0) add('tabindex', 'serious', el, 'A positive tabindex changes the natural tab order.');
+  if (el.getAttribute('aria-hidden') === 'true' && el.matches('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')) add('aria-hidden-focus', 'serious', el, 'A focusable element is hidden from assistive technology.');
+});
+for (const [id, n] of ids) if (n > 1) add('duplicate-id', 'minor', document.getElementById(id), 'The id "' + id + '" is used ' + n + ' times.');
+return issues;
+"""
+IMPACTS = ("minor", "moderate", "serious", "critical")
+
+
+def a11y_problems(issues, level="serious"):
+    """Issues at `level` or worse, as one readable message (None when the page is clean at that level)."""
+    level = (level or "serious").strip().lower()
+    if level not in IMPACTS:
+        level = "serious"
+    bad = [i for i in issues if IMPACTS.index(i.get("impact", "minor")) >= IMPACTS.index(level)]
+    if not bad:
+        return None
+    lines = [f"{i['impact']}: {i['help']} [{i['rule']}: {i['target']}]" for i in bad[:6]]
+    return f"{len(bad)} accessibility issue(s) at '{level}' or worse. " + " | ".join(lines) + (f" | …and {len(bad) - 6} more" if len(bad) > 6 else "")
+
+
+MOCK_JS = r"""
+(() => {
+  const rules = %RULES%;
+  window.__aiautoMocks = rules;
+  if (window.__aiautoMockInstalled) return;
+  window.__aiautoMockInstalled = true;
+  const find = (url, method) => {
+    for (const r of window.__aiautoMocks || []) {
+      const m = (r.method || '*').toUpperCase();
+      if (m !== '*' && m !== String(method || 'GET').toUpperCase()) continue;
+      let hit = false; const p = r.match;
+      if (p.startsWith('re:')) { try { hit = new RegExp(p.slice(3)).test(url); } catch (e) {} }
+      else if (p.includes('*')) hit = new RegExp('^' + p.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(url);
+      else hit = url.includes(p);
+      if (hit) return r;
+    }
+    return null;
+  };
+  const origFetch = window.fetch;
+  window.fetch = function (input, init) {
+    const url = new URL(typeof input === 'string' ? input : (input.url || String(input)), location.href).href;
+    const r = find(url, (init && init.method) || (typeof input !== 'string' && input.method) || 'GET');
+    if (!r) return origFetch.apply(this, arguments);
+    const go = () => r.block ? Promise.reject(new TypeError('Failed to fetch (blocked by the test)'))
+      : new Response(r.body == null ? '' : r.body, {status: r.status || 200, headers: {'Content-Type': r.contentType || 'application/json'}});
+    return r.delay ? new Promise((res, rej) => setTimeout(() => { try { res(go()); } catch (e) { rej(e); } }, r.delay)) : Promise.resolve(go()).then((x) => x);
+  };
+  const Open = XMLHttpRequest.prototype.open, Send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url) { this.__m = {method, url: new URL(url, location.href).href}; return Open.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function () {
+    const r = this.__m && find(this.__m.url, this.__m.method);
+    if (!r) return Send.apply(this, arguments);
+    const x = this;
+    const done = () => {
+      if (r.block) { x.dispatchEvent(new Event('error')); if (x.onerror) x.onerror(new Event('error')); return; }
+      const def = (k, v) => Object.defineProperty(x, k, {value: v, configurable: true});
+      def('readyState', 4); def('status', r.status || 200); def('statusText', 'OK'); def('responseText', r.body == null ? '' : r.body); def('response', r.body == null ? '' : r.body);
+      x.getResponseHeader = (h) => (h.toLowerCase() === 'content-type' ? (r.contentType || 'application/json') : null);
+      x.getAllResponseHeaders = () => 'content-type: ' + (r.contentType || 'application/json') + '\r\n';
+      x.dispatchEvent(new Event('readystatechange')); if (x.onreadystatechange) x.onreadystatechange();
+      x.dispatchEvent(new Event('load')); if (x.onload) x.onload(); x.dispatchEvent(new Event('loadend'));
+    };
+    setTimeout(done, r.delay || 0);
+  };
+})();
+"""
+
+
+def mock_js(rules):
+    return MOCK_JS.replace("%RULES%", json.dumps(rules))
+
+
+def parse_json_spec(text):
+    """A step's value that carries a small JSON document; anything else is treated as plain text by the caller."""
+    t = (text or "").strip()
+    if t.startswith("{"):
+        try:
+            return json.loads(t)
+        except ValueError:
+            return None
+    return None
+
+
 class StepSkipped(Exception):
     pass
 
@@ -598,6 +841,79 @@ class Run:
         """Hover now and hold it: hover again before the checks and waits that follow, until the next action."""
         _HELD[0] = do
         do()
+
+    # ------------------------------------------------------------ extras: visual, accessibility, API, network mocks
+    def _eval(self, script):
+        if self.engine == "playwright":
+            return self._page.evaluate("() => {" + script + "}")
+        self.driver.switch_to.default_content()
+        return self.driver.execute_script(script)
+
+    def visual(self, spec=""):
+        """Compare the page with its baseline screenshot (BASELINES_DIR, default ./baselines/<test>/); UPDATE_BASELINES=1 accepts the new look."""
+        name, _, tol = (spec or "").partition(":")
+        self._visuals = getattr(self, "_visuals", [])
+        name = name.strip() or f"step-{len(self._visuals) + 1}"
+        self._visuals.append(name)
+        try:
+            tolerance = float(tol) / 100 if tol.strip() else 0.001
+        except ValueError:
+            raise AssertionError(f"'{tol}' is not a tolerance (a percentage, e.g. {name}:0.5)")
+        png = self._page.screenshot() if self.engine == "playwright" else self.driver.get_screenshot_as_png()
+        safe = re.sub(r"[^\w.-]", "_", name)
+        base = Path(os.getenv("BASELINES_DIR") or "baselines") / _slug(self.name) / (safe + ".png")
+        state, msg, _ratio, diff = visual_compare(png, base, tolerance, _env_bool("UPDATE_BASELINES", False))
+        (self.dir / "shots" / f"visual_{safe}.png").write_bytes(png)
+        if diff:
+            (self.dir / "shots" / f"visual_{safe}_diff.png").write_bytes(diff)
+        if state == "different":
+            raise AssertionError(f"'{name}' does not match its baseline: {msg} (UPDATE_BASELINES=1 accepts the new look)")
+
+    def a11y(self, level=""):
+        problem = a11y_problems(self._eval(A11Y_JS), level)
+        if problem:
+            raise AssertionError(problem)
+
+    def api(self, target, spec=""):
+        """Call an API and check the answer. Returns the values the step saves for later steps."""
+        method, url = split_api_target(target)
+        doc = parse_json_spec(spec) or {}
+        if not url.startswith(("http://", "https://")):
+            from urllib.parse import urljoin
+            current = self._page.url if self.engine == "playwright" else self.driver.current_url
+            url = urljoin(current, url)
+        status, _h, text = api_request(method, url, doc.get("headers"), doc.get("body"))
+        problem, saved = check_api(status, text, doc)
+        if problem:
+            raise AssertionError(f"{method} {url.split('?')[0]}: {problem}")
+        return saved
+
+    def mock(self, pattern, spec=""):
+        """Answer or block the page's fetch / XHR calls to URLs matching `pattern` (Chrome and Edge keep it across navigations)."""
+        doc = parse_json_spec(spec) or {}
+        self._mocks = getattr(self, "_mocks", [])
+        if doc.get("clear"):
+            self._mocks.clear()
+        else:
+            body = doc.get("body")
+            rule = {"match": pattern, **{k: doc[k] for k in ("status", "method", "delay", "contentType", "block") if k in doc},
+                    "body": body if isinstance(body, str) or body is None else json.dumps(body)}
+            self._mocks[:] = [m for m in self._mocks if (m["match"], m.get("method")) != (rule["match"], rule.get("method"))] + [rule]
+        js = mock_js(self._mocks)
+        if self.engine == "playwright":
+            self.ctx.add_init_script(js)
+            for pg in self.ctx.pages:
+                try:
+                    pg.evaluate(js)
+                except Exception:
+                    pass
+        else:
+            try:
+                self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": js})
+            except Exception:
+                pass
+            self.driver.switch_to.default_content()
+            self.driver.execute_script(js)
 
     @contextmanager
     def step(self, n, title, action="", target=None, value=None, locator="", optional=False):

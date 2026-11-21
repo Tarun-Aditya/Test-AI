@@ -84,7 +84,11 @@ For each step output:
   assert_text/assert_url/assert_title, seconds for wait, "down"/"up"/"top"/"bottom" (optionally ":<pixels>") for
   scroll, file path for upload, the *destination element description* for drag, seconds for pause,
   "accept"/"dismiss" for dialog, tab index ("0", "1", ...) or "last" for switch_tab, expected text for
-  assert_dialog. Otherwise null.
+  assert_dialog. For assert_visual: a baseline name, optionally ":<tolerance percent>" ("home:0.5"). For assert_accessible:
+  the lowest impact to report (minor|moderate|serious|critical), or null. For api: target is "METHOD url"
+  ("GET /api/health"), value a JSON string such as {"expect_status": 200, "expect_contains": "ok"}. For mock: target is the
+  URL pattern to answer or block, value a JSON string such as {"status": 500, "body": "..."}, {"block": true} or {"clear": true}.
+  Otherwise null.
 - nth: 0-based position when the user picks one of several similar elements ("first result" -> 0,
   "second Add to cart button" -> 1, "last row" -> -1); then target is the text the element contains
   (e.g. "Logitech") or its kind. Otherwise null.

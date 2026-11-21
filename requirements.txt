@@ -11,3 +11,4 @@ imageio-ffmpeg>=0.5
 cryptography>=42
 PyJWT>=2.8
 # optional: any model through LiteLLM (pip install litellm); the Docker image includes it
+Pillow>=10

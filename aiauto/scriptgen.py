@@ -36,7 +36,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from autopilot_runtime import DIALOG_SHIM_JS, MASK, Run, choose_option, rehover  # noqa: E402  (standalone runtime shipped next to this script)
+from autopilot_runtime import DIALOG_SHIM_JS, MASK, Run, choose_option, code_from, rehover, totp  # noqa: E402  (standalone runtime shipped next to this script)
 
 NAME = {name_lit}
 SOURCE = {source_lit}
@@ -70,8 +70,11 @@ def v(text):
                 return os.environ[env]
             raise KeyError(f"{{path}} is sensitive: set {{env}} or pass it in the data file")
         return str(cur)
-    return re.sub(r"\\$\\{{\\s*([\\w.\\-\\[\\]]+)\\s*\\}}|\\{{\\{{\\s*([\\w.\\-\\[\\]]+)\\s*\\}}\\}}",
-                  lambda m: look(m.group(1) or m.group(2)), text)
+    def fn(key):
+        name, _, plain = key.rpartition(":")      # ${{totp:seed}} one-time password, ${{code:inbox}} code read from an inbox URL
+        return totp(look(plain)) if name == "totp" else code_from(look(plain)) if name == "code" else look(plain)
+    return re.sub(r"\\$\\{{\\s*((?:totp:|code:)?[\\w.\\-\\[\\]]+)\\s*\\}}|\\{{\\{{\\s*((?:totp:|code:)?[\\w.\\-\\[\\]]+)\\s*\\}}\\}}",
+                  lambda m: fn(m.group(1) or m.group(2)), text)
 
 
 def secret_values():
@@ -364,6 +367,10 @@ def _pw_lines(st: Step) -> list[str]:
         Action.ASSERT_NO_TEXT: [f"page.wait_for_timeout(2000)  # let late messages appear first", f"expect({one}).not_to_contain_text({val})"]
                                if st.locator else [f"r.expect_page_text({val}, present=False)"],
         Action.SCREENSHOT: [f'page.screenshot(path={_q((st.value or "screenshot") + ".png")}, full_page=True)'],
+        Action.ASSERT_VISUAL: [f"r.visual({val})"],
+        Action.ASSERT_ACCESSIBLE: [f"r.a11y({val})"],
+        Action.API: [f"DATA.update(r.api({_val(st.target)}, {val}))  # values saved from the answer are usable as ${{name}} in later steps"],
+        Action.MOCK: [f"r.mock({_val(st.target)}, {val})"],
         Action.PAUSE: [f"page.wait_for_timeout({int(_num(st.value, 30) * 1000)})  # manual step (e.g. SSO login)"],
         Action.DIALOG: [f"answer['accept'] = {not (st.value or '').startswith('dismiss')}"],
         Action.ASSERT_DIALOG: [f"assert {val}.lower() in answer.get('last', '').lower(), answer.get('last')"],
@@ -733,6 +740,10 @@ def _se_lines(st: Step) -> list[str]:
         Action.ASSERT_NO_TEXT: [f"no_text(lambda: ({F}.get_attribute('value') or {F}.text), {val})" if st.locator
                                 else f"no_text(lambda: page_text(driver), {val})"],
         Action.SCREENSHOT: [f"driver.save_screenshot({_q((st.value or 'screenshot') + '.png')})"],
+        Action.ASSERT_VISUAL: [f"r.visual({val})"],
+        Action.ASSERT_ACCESSIBLE: [f"r.a11y({val})"],
+        Action.API: [f"DATA.update(r.api({_val(st.target)}, {val}))  # values saved from the answer are usable as ${{name}} in later steps"],
+        Action.MOCK: [f"r.mock({_val(st.target)}, {val})"],
         Action.PAUSE: ["import time", f"time.sleep({_num(st.value, 30)})  # manual step (e.g. SSO login)"],
         Action.DIALOG: [f"accept = {not (st.value or '').startswith('dismiss')}"],
         Action.ASSERT_DIALOG: [f"assert {val}.lower() in (dialog or '').lower(), f'dialog was {{dialog!r}}'"],

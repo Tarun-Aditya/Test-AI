@@ -75,6 +75,14 @@ URL = r"(?P<v>(?:https?://|www\.|file://|data:|\$\{|\{\{)\S+|[\w.-]+\.(?:com|org
 _p(rf"^(?:go\s+to|goto|open|navigate\s+to|visit|launch|browse\s+to|load)\s+(?:the\s+)?(?:url\s+|page\s+|site\s+|website\s+)?{Q}?{URL}{Q}?", Action.NAVIGATE)
 _p(r"^(?:go\s+back|navigate\s+back|back)$", Action.BACK)
 _p(r"^(?:refresh|reload)(?:\s+the)?(?:\s+page)?$", Action.REFRESH)
+# --- checks and tools beyond clicking and typing: visual baseline, accessibility, API calls, network mocks
+_p(r"^(?:verify|assert|check|ensure|confirm|expect)\s+(?:that\s+)?(?:the\s+)?(?:page|screen|screenshot)\s+(?:still\s+)?(?:looks?|appears?|is|matches?)\s+(?:the\s+same|unchanged|identical|like\s+(?:the\s+)?(?:baseline|before|expected)|(?:the\s+)?(?:baseline|expected)(?:\s+screenshot)?)(?:\s+as\s+(?:before|(?:the\s+)?(?:baseline|expected)(?!\s+(?:named|called))))?(?:\s+(?:as\s+)?(?:the\s+)?(?:baseline\s+)?(?:named|called)\s+(?P<v>[\w.-]+)|\s+as\s+(?!the\b|baseline\b|before\b)(?P<v2>[\w.-]+))?(?:\s+(?:within|with)\s+(?P<n>[\d.]+)\s*%)?$", Action.ASSERT_VISUAL)
+_p(r"^compare\s+(?:the\s+)?(?:page|screen)\s+(?:with|to|against)\s+(?:the\s+)?baseline(?:\s+(?:named|called)\s+(?P<v>[\w.-]+))?(?:\s+(?:within|with)\s+(?P<n>[\d.]+)\s*%)?$", Action.ASSERT_VISUAL)
+_p(r"^(?:verify|assert|check|ensure|confirm|expect|run|scan)\s+(?:that\s+)?(?:the\s+)?(?:page\s+)?(?:has\s+no\s+|is\s+free\s+of\s+|an?\s+|there\s+(?:are|is)\s+no\s+|no\s+)?(?:(?P<v>critical|serious|moderate|minor)\s+)?(?:accessibility|a11y)(?:\s+(?:issues|problems|violations|errors|scan|check|audit))?(?:\s+(?:are\s+)?(?:found|present|exist))?$", Action.ASSERT_ACCESSIBLE)
+_p(rf"^(?:call|send|request|hit)\s+(?:an?\s+)?(?:api\s+)?(?:request\s+)?(?P<m>get|post|put|patch|delete|head)\s+(?:request\s+)?(?:to\s+)?(?P<u>\S+?)(?:\s+and\s+|\s*,\s*|\s+then\s+|\s+)?(?:(?:verify|expect(?:ing|s)?|check|assert|ensure)\s+(?:that\s+)?(?:the\s+)?(?:response\s+|status\s+|answer\s+)?(?:status(?:\s+code)?\s+(?:is\s+)?)?(?P<s>\d{{3}}))?(?:\s+(?:and\s+)?(?:the\s+)?(?:response\s+|body\s+)?(?:contain(?:s|ing)?|has|includes?)\s+{QV})?$", Action.API)
+_p(rf"^mock\s+(?:requests?\s+(?:to\s+)?|calls?\s+(?:to\s+)?)?(?P<t>\"[^\"]+\"|\S+)\s+(?:to\s+)?(?:return|respond\s+with|answer\s+with|give)\s+(?:status\s+|error\s+)?(?P<s>\d{{3}})(?:\s+(?:and\s+)?(?:with\s+)?(?:body\s+)?{QV})?$", Action.MOCK, "mock")
+_p(r"^(?:block|abort)\s+(?:all\s+)?(?:requests?\s+(?:to\s+)?|calls?\s+(?:to\s+)?)?(?P<t>\"[^\"]+\"|\S+)$", Action.MOCK, "block")
+_p(r"^(?:stop\s+mocking|clear\s+(?:all\s+)?(?:network\s+)?mocks|remove\s+(?:all\s+)?(?:network\s+)?mocks|unblock\s+(?:all\s+)?requests)$", Action.MOCK, "clear")
 _p(rf"^(?:type|enter|input|fill(?:\s+in)?|write|put|key\s+in)\s+{QV}\s+(?:in|into|on|to|for|inside|as)\s+(?P<t>.+)$", Action.TYPE)
 _p(r"^(?:type|enter|input|fill(?:\s+in)?|write|put)\s+(?P<v>\$\{[^}]+\}|\{\{[^}]+\}\}|\S+)\s+(?:in|into|on|to|for|inside|as)\s+(?P<t>.+)$", Action.TYPE)
 _p(rf"^(?:fill|set)\s+(?P<t>.+?)\s+(?:with|to|as)\s+{QV}$", Action.TYPE)
@@ -146,6 +154,27 @@ def _parse(s: str, sentence: str) -> Step | None:
                 value = "https://" + value
         elif action == Action.TYPE and kind == "clear":
             value = ""
+        elif action == Action.ASSERT_VISUAL:
+            value = (value or g.get("v2") or "") + (f":{g['n']}" if g.get("n") else "")
+        elif action == Action.ASSERT_ACCESSIBLE:
+            value = (value or "").lower() or None
+        elif action == Action.API:
+            import json as _json
+            spec = {}
+            if g.get("s"):
+                spec["expect_status"] = int(g["s"])
+            if value:
+                spec["expect_contains"] = value
+            target = f"{g['m'].upper()} {g['u'].rstrip('.,;')}"
+            value = _json.dumps(spec) if spec else None
+        elif action == Action.MOCK:
+            import json as _json
+            if kind == "clear":
+                value = _json.dumps({"clear": True})
+            elif kind == "block":
+                value = _json.dumps({"block": True})
+            else:
+                value = _json.dumps({"status": int(g["s"]), "body": value or ""})
         elif action == Action.SCROLL:
             if kind == "to":
                 value = None
@@ -225,6 +254,9 @@ def parse(text: str) -> tuple[list[Step], list[str]]:
     return d["steps"], d["unparsed"]
 
 
+_TOOLS = (Action.API, Action.MOCK, Action.ASSERT_ACCESSIBLE, Action.ASSERT_VISUAL)
+
+
 def parse_detailed(text: str) -> dict:
     """Free-form English, from a one-line step to a business paragraph -> steps and what was learned on the way.
 
@@ -241,6 +273,10 @@ def parse_detailed(text: str) -> dict:
     unparsed: list[str] = []
 
     def one(clause: str, origin: str) -> list[Step] | None:
+        direct = parse_sentence(clause)
+        if direct is not None and direct.action in _TOOLS:        # API call, mock, accessibility scan, baseline: written as is
+            direct.source = "rules"
+            return [direct]
         expanded = prose.expand(clause)
         sentences = expanded or [clause]
         parsed = [parse_sentence(x) for x in sentences]

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -22,7 +23,7 @@ log = logging.getLogger(__name__)
 
 EventCb = Callable[[dict], None]
 HOVER_PASSIVE = (Action.ASSERT_TEXT, Action.ASSERT_NO_TEXT, Action.ASSERT_VISIBLE, Action.ASSERT_URL,
-                 Action.ASSERT_TITLE, Action.WAIT, Action.SCREENSHOT)
+                 Action.ASSERT_TITLE, Action.WAIT, Action.SCREENSHOT, Action.ASSERT_VISUAL, Action.ASSERT_ACCESSIBLE)
 _UNRESOLVED = re.compile(r"\$\{[^}]+\}|\{\{[^}]+\}\}")
 
 
@@ -57,6 +58,8 @@ class Runner:
         self._picked: str | None = None
         self.timings: dict[str, list[float]] = {}
         self.cancel = threading.Event()          # set from another thread to stop after the current step
+        self._visual_seen: list[str] = []
+        self.mocks: list[dict] = []              # network mocks in force (fetch / XHR), re-sent whenever one is added
         self.hold = bool(config.start_paused)    # pause before the next step (set from another thread)
         self._go = threading.Event()             # let exactly one step through while held
 
@@ -160,8 +163,12 @@ class Runner:
         assert e
         t0 = time.time()
         data = self.test.data
-        target = substitute(step.target, data)
-        value = substitute(step.value, data)
+        sub_error = None
+        try:
+            target = substitute(step.target, data)
+            value = substitute(step.value, data)
+        except ValueError as ex:          # ${totp:...} / ${code:...} that cannot be worked out: the step fails with the reason
+            target, value, sub_error = step.target, step.value, str(ex)
         secret = self.mask.is_sensitive_template(step.value) or (value and value in self.mask.values)
         shown = MASK if secret and value else self.mask(value)
         live = step.model_copy(update={"target": target, "value": value})
@@ -174,6 +181,8 @@ class Runner:
         loc = None
         verb, done = _VERBS.get(step.action, (step.action.value.replace("_", " "), "done"))
         try:
+            if sub_error:
+                raise StepError(sub_error)
             for field, v in (("value", value), ("target", target)):
                 if v and _UNRESOLVED.search(v):
                     raise StepError(f"No test data for {', '.join(_UNRESOLVED.findall(v))} (in step {field})")
@@ -813,10 +822,69 @@ class Runner:
             what = {Action.ASSERT_URL: "URL", Action.ASSERT_TITLE: "title", Action.ASSERT_DIALOG: "dialog"}.get(
                 a, "element text" if loc else "page")
             raise StepError(f"Expected {what} to contain {expected!r}; got {_excerpt(actual, expected)!r}")
+        elif a == Action.ASSERT_VISUAL:
+            self._visual(v)
+        elif a == Action.ASSERT_ACCESSIBLE:
+            from .script_runtime import A11Y_JS, a11y_problems
+            problem = a11y_problems(e.eval_js(A11Y_JS), v)
+            if problem:
+                raise StepError(problem)
+        elif a == Action.API:
+            from .script_runtime import api_request, check_api, parse_json_spec, split_api_target
+            method, url = split_api_target(s.target)
+            spec = parse_json_spec(v) or {}
+            if not url.startswith(("http://", "https://")):
+                base = self.test.base_url or e.url()
+                from urllib.parse import urljoin
+                url = urljoin(base, url)
+            status, _h, text = api_request(method, url, spec.get("headers"), spec.get("body"), timeout=max(5, timeout))
+            problem, saved = check_api(status, text, spec)
+            if problem:
+                raise StepError(f"{method} {url.split('?')[0]}: {problem}")
+            for k, val in saved.items():          # later steps can use ${k}
+                self.test.data[k] = val
+        elif a == Action.MOCK:
+            from .script_runtime import mock_js, parse_json_spec
+            spec = parse_json_spec(v) or {}
+            if spec.get("clear"):
+                self.mocks.clear()
+            else:
+                body = spec.get("body")
+                rule = {"match": s.target or "", **{k: spec[k] for k in ("status", "method", "delay", "contentType", "block") if k in spec},
+                        "body": body if isinstance(body, str) or body is None else json.dumps(body)}
+                if not rule["match"]:
+                    raise StepError("Say which requests to mock, e.g. mock /api/cart to return 500")
+                self.mocks[:] = [m for m in self.mocks if (m["match"], m.get("method")) != (rule["match"], rule.get("method"))] + [rule]      # the newest rule for a URL replaces the older
+            e.add_init_script(mock_js(self.mocks))
         else:
             raise StepError(f"Unsupported action {a}")
         if e.last_dialog:
             self._prev_dialog = e.last_dialog
+
+    def _baseline_file(self, name: str) -> Path:
+        base = self.config.baselines_dir or os.getenv("AIAUTO_BASELINES") or str(self.run_dir.parent.parent / "baselines")
+        slug = re.sub(r"[^a-z0-9]+", "-", re.sub(r"\$\{[^}]*\}", "", self.test.name or "test").lower()).strip("-")[:50] or "test"
+        return Path(base) / slug / (re.sub(r"[^\w.-]", "_", name) + ".png")
+
+    def _visual(self, value: str | None) -> None:
+        """Compare the page with this step's baseline screenshot (made on the first run, replaced with update_baselines)."""
+        from .script_runtime import visual_compare
+        name, _, tol = (value or "").partition(":")
+        name = name.strip() or f"step-{len(self._visual_seen) + 1}"
+        self._visual_seen.append(name)
+        try:
+            tolerance = float(tol) / 100 if tol.strip() else 0.001
+        except ValueError:
+            raise StepError(f"'{tol}' is not a tolerance (a percentage, e.g. {name}:0.5)")
+        safe = re.sub(r"[^\w.-]", "_", name)
+        shot = self.run_dir / "screenshots" / f"visual_{safe}.png"
+        self.engine.screenshot(shot, full_page=self.config.full_page_screenshots)
+        state, msg, _ratio, diff = visual_compare(shot.read_bytes(), self._baseline_file(name), tolerance, self.config.update_baselines)
+        if diff:
+            shot.with_name(shot.stem + "_diff.png").write_bytes(diff)
+        if state == "different":
+            raise StepError(f"'{name}' does not match its baseline: {msg}. See screenshots/{shot.stem}_diff.png; "
+                            f"re-run with 'accept the new look' (update_baselines) if the change is intended")
 
     # ---------------------------------------------------------------- output
     def _write_artifacts(self, summary: RunSummary, resolved_steps: list[Step]) -> None:
@@ -856,6 +924,8 @@ _VERBS = {
     Action.UPLOAD: ("upload", "uploaded"), Action.SCROLL: ("scroll to", "scrolled to"), Action.WAIT: ("wait for", "appeared"),
     Action.ASSERT_VISIBLE: ("check visible", "visible"), Action.ASSERT_TEXT: ("check text", "text matches"),
     Action.ASSERT_NO_TEXT: ("check text absent", "text absent"),
+    Action.ASSERT_VISUAL: ("compare with baseline", "matches the baseline"), Action.ASSERT_ACCESSIBLE: ("scan accessibility", "no issues"),
+    Action.API: ("call API", "API answered as expected"), Action.MOCK: ("mock network", "network rule set"),
 }
 
 

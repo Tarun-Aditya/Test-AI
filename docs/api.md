@@ -76,6 +76,17 @@ Or skip the hub in CI: export the project once (run details → Export project),
 | `GET /api/runs/{id}/export` | Runnable project zip (the run, or every iteration of its batch) |
 | `GET /api/runs/{id}/download` | The raw run folder as a zip |
 
+### Schedules, CI hooks, notifications, flaky tests
+
+| | |
+|---|---|
+| `GET/PUT /api/schedules`, `DELETE /api/schedules/{id}` | Run a library script on a cron schedule. Body: `{library, cron, name, enabled, data, config, agent, engines}`. `cron` is five fields (`30 2 * * *`, `*/15 9-17 * * mon-fri`) or `@daily`/`@hourly`/`@weekly`; the hub's clock decides |
+| `POST /api/schedules/{id}/run` | Run a schedule now |
+| `GET /api/schedules/preview?cron=...&count=5` | The next times a cron expression fires |
+| `GET/POST /api/hooks`, `DELETE /api/hooks/{id}` | CI hooks. `POST /api/hooks` `{library, data, config}` returns a `url` once; **`POST /api/hooks/run/{token}`** (no sign-in, the token is the credential) starts that script. A JSON body `{"data": {...}}` overrides data for that run |
+| `GET/PUT /api/notifications`, `DELETE /api/notifications/{id}`, `POST /api/notifications/{id}/test` | Channels told when a run finishes (admin). `{kind: slack\|teams\|webhook\|email, url\|to, on: failed\|always\|recovered, project}`. Email uses `AIAUTO_SMTP_HOST/PORT/USER/PASSWORD/FROM`; `AIAUTO_PUBLIC_URL` puts a link to the run in the message |
+| `GET /api/flaky?window=20&only=true` | Tests ranked by how unstable their recent results are (`flaky`, `pass_rate`, `flips`, `history`) |
+
 ### Library and saved logins
 
 | Method & path | What it does |
