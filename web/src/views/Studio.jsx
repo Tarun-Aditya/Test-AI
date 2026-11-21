@@ -17,7 +17,7 @@ function Field({ label, hint, children }) {
 
 const ACTIONS = ["navigate", "click", "double_click", "right_click", "type", "append", "press", "hover", "select", "check", "uncheck",
   "drag", "scroll", "wait", "pause", "upload", "assert_text", "assert_visible", "assert_url", "assert_title", "assert_dialog", "dialog",
-  "switch_tab", "back", "refresh", "screenshot"];
+  "switch_tab", "back", "refresh", "screenshot", "api", "mock", "assert_accessible", "assert_visual"];
 
 /** The AI (or rule) breakdown of the English, editable before running. */
 function Breakdown() {
@@ -164,6 +164,7 @@ function Options() {
         <Toggle k="fullpage" label="Full-page screenshots" />
         <Toggle k="heal" label="Self-heal locators" /><Toggle k="useLlm" label="Use AI (Claude)" />
         <Toggle k="headless" label="Headless" />
+        <Toggle k="updateBaselines" label="Accept the new look in visual checks" />
       </div>
     </>
   );

@@ -23,6 +23,7 @@ export default function Library() {
             <div className="row" style={{ marginTop: "auto" }}>
               <button className="btn sm primary" onClick={() => startRun({ library: l.name })}><Icon name="play" size={12} />Run</button>
               <button className="btn sm" onClick={() => { setForm({ srcMode: "lib", libName: l.name }); nav("studio"); }}>Open in Studio</button>
+              <button className="btn sm" onClick={() => nav("automation", "schedules", l.name)} title="Run this script on a schedule"><Icon name="clock" size={12} />Schedule</button>
               <a className="btn sm" href={`/api/library/${encodeURIComponent(l.name)}`} target="_blank" rel="noreferrer">JSON</a>
               <span className="spacer" /><button className="btn sm ghost danger" onClick={() => del(l.name)}>Delete</button>
             </div>

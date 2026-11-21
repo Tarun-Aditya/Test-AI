@@ -507,3 +507,9 @@ th,td{position:relative}
 .srow{min-width:0}.runsplit>*{min-width:0}
 .tabs{overflow-x:auto;scrollbar-width:none}.tabs button{white-space:nowrap}
 .slots{font:600 12px/1.5 Inter,system-ui,sans-serif;border-radius:4px}
+
+/* automation */
+.dots{display:inline-flex;gap:3px;align-items:center;vertical-align:middle}
+.dots i{width:9px;height:14px;border-radius:3px;background:var(--ok)}.dots i.f{background:var(--bad)}
+.card.off{opacity:.6}
+.mono{font-family:var(--mono)}

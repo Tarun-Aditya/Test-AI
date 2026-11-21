@@ -1,7 +1,9 @@
 # Automation: schedules, CI hooks, alerts, flaky tests, and more kinds of steps
 
-Everything here works on the hub, on the same saved scripts and runs you already have. Nothing needs the web page: each piece has an API
-([endpoints](api.md#schedules-ci-hooks-notifications-flaky-tests)).
+Everything here works on the hub, on the same saved scripts and runs you already have. In the web app it is the **Automation** page in the sidebar,
+with four tabs (Schedules, CI hooks, Alerts, Flaky tests); a library script's card has a **Schedule** button, and Overview shows a **Flaky tests** panel when there are any.
+Each piece also has an API ([endpoints](api.md#schedules-ci-hooks-notifications-flaky-tests)). In Studio, the step editor offers the new step kinds, and
+**Settings → Accept the new look in visual checks** accepts a changed baseline for that run.
 
 ## Run on a schedule
 

@@ -11,7 +11,7 @@ export const DEFAULT_FORM = {
   engine: "playwright", agent: "local", agents: ["local"], spread: "each", headless: true,
   browser: "chromium", timeout: 10000, dialogs: "accept", slowmo: 0,
   video: true, shots: true, live: true, highlight: true, fullpage: false, heal: true, useLlm: true,
-  session: "", saveSession: "", profileDir: "", profileName: "",
+  session: "", saveSession: "", profileDir: "", profileName: "", updateBaselines: false,
 };
 
 /** Persist everything except sensitive values (those never touch browser storage). */
@@ -94,7 +94,7 @@ export function runConfig(f) {
     full_page_screenshots: f.fullpage, live_view: f.live, highlight: f.highlight !== false, self_heal: f.heal, use_llm: f.useLlm,
     timeout_ms: +f.timeout || 10000, dialogs: f.dialogs, slow_mo_ms: +f.slowmo || 0,
     profile_dir: f.profileDir.trim() || null, profile_name: f.profileName.trim() || null,
-    session: f.session || null, save_session: f.saveSession.trim() || null,
+    session: f.session || null, save_session: f.saveSession.trim() || null, update_baselines: !!f.updateBaselines,
   };
 }
 

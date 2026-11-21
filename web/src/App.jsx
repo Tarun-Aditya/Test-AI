@@ -11,6 +11,7 @@ import Sessions from "./views/Sessions.jsx";
 import Settings from "./views/Settings.jsx";
 import MyAI from "./views/MyAI.jsx";
 import Requirements from "./views/Requirements.jsx";
+import Automation from "./views/Automation.jsx";
 import MachinePicker, { agentsOf } from "./components/MachinePicker.jsx";
 import RunPage from "./components/RunDrawer.jsx";
 
@@ -25,12 +26,13 @@ const VIEWS = {
   runs: ["Runs", "Every run, grouped by launch, with its report, video and scripts", "runs"],
   library: ["Library", "Reusable scripts with native locators. Run them on any engine or machine", "lib"],
   sessions: ["Saved logins", "Cookies and local storage a run can start with", "key"],
+  automation: ["Automation", "Schedules, CI hooks, alerts and flaky tests", "clock"],
   machines: ["Machines", "Computers and browser grids that run tests", "pc"],
   settings: ["Admin", "AI, integrations, sign-in, users and projects", "gear"],
   myai: ["My AI", "Your own AI subscription or key, used for your runs", "spark"],
 };
 // the sidebar, in workflow order: design → write → run → review, then things set up once (My AI lives in the user menu)
-const NAV_GROUPS = [[null, ["dashboard", "requirements", "studio", "runs"]], ["Assets", ["library", "sessions"]], ["Setup", ["machines", "settings"]]];
+const NAV_GROUPS = [[null, ["dashboard", "requirements", "studio", "runs"]], ["Assets", ["library", "sessions"]], ["Automate", ["automation"]], ["Setup", ["machines", "settings"]]];
 const PHONE_TABS = ["dashboard", "requirements", "studio", "runs"];
 // which pages a role sees (no accounts = single user, sees everything except My AI)
 const visibleViews = (me) => Object.keys(VIEWS).filter((k) => (k === "myai" ? !!me : k === "settings" ? !me || me.role === "admin" : true));
@@ -232,6 +234,7 @@ export default function App({ me = null, reloadMe = () => {} }) {
           {route.view === "library" && <Library />}
           {route.view === "machines" && <Machines />}
           {route.view === "sessions" && <Sessions />}
+          {route.view === "automation" && <Automation />}
           {route.view === "settings" && (can.admin ? <Settings /> : <div className="view on"><div className="empty-state">Only admins can open this page.</div></div>)}
           {route.view === "myai" && me && <MyAI />}
         </div>
@@ -240,7 +243,7 @@ export default function App({ me = null, reloadMe = () => {} }) {
           {PHONE_TABS.filter((k) => views.includes(k)).map((k) => navItem(k, true))}
           <button className={more ? "on" : ""} aria-expanded={more} onClick={() => setMore(!more)}><Icon name="more" /><span className="lbl">More</span></button>
           {more && <div className="phonemore">
-            {["library", "sessions", "machines", "settings", "myai"].filter((k) => views.includes(k)).map((k) => navItem(k, true))}
+            {["library", "sessions", "automation", "machines", "settings", "myai"].filter((k) => views.includes(k)).map((k) => navItem(k, true))}
             <button onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % 3])}><Icon name="moon" /><span className="lbl">Theme: {theme}</span></button>
             {me && <button onClick={signOut}><Icon name="x" /><span className="lbl">Sign out</span></button>}
           </div>}

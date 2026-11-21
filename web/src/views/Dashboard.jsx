@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ago, api, art, isLive, secs } from "../api.js";
 import { useApp } from "../App.jsx";
 import Icon from "../icons.jsx";
+import { Dots } from "./Automation.jsx";
 
 export function StepBar({ r }) {
   const t = r.total || 1;
@@ -100,6 +101,8 @@ export default function Dashboard() {
     }).catch(() => !off && setStories([]));
     return () => { off = true; };
   }, [project, runs.length]);
+  const [flaky, setFlaky] = useState([]);
+  useEffect(() => { api("/api/flaky?only=true").then(setFlaky).catch(() => setFlaky([])); }, [project, runs.length]);
   const live = runs.filter(isLive);
   const bad = needsAttention(runs).slice(0, 6);
   const finished = (stats?.passed || 0) + (stats?.failed || 0);
@@ -133,6 +136,18 @@ export default function Dashboard() {
                   {can.run && mine(r) && <button className="btn sm" onClick={() => openRun(r.run_id, "replay")}>Replay</button>}</div>
               </div>)) : <div className="empty-state">Nothing failing. The newest run of every test passed.</div>}
           </section>
+          {flaky.length > 0 && <section className="panel">
+            <div className="panel-h"><h3>Flaky tests</h3><span className="status failed">{flaky.length}</span><span className="spacer" />
+              <button className="btn ghost sm" onClick={() => nav("automation", "flaky")}>See all</button></div>
+            {flaky.slice(0, 4).map((f) => (
+              <div className="att" key={f.name}>
+                <span style={{ color: "var(--warn)", paddingTop: 2 }}><Icon name="refresh" size={18} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <a href={`#/runs/${encodeURIComponent(f.last_run)}`} className="att-t">{f.name}</a>
+                  <div className="mut"><Dots history={f.history} /> passes {Math.round(100 * f.pass_rate)}% · result changed {f.flips} times in {f.runs} runs</div>
+                </div>
+              </div>))}
+          </section>}
 
           <section className="panel">
             <div className="panel-h"><h3>Recent runs</h3><span className="spacer" /><button className="btn ghost sm" onClick={() => nav("runs")}>All runs</button></div>
