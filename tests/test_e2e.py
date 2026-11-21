@@ -54,11 +54,9 @@ def test_run_and_replay(engine, demo_page, tmp_path):
     demo_page.write_text(html)
     s3 = run_test(script, cfg, tmp_path / "art", mode="replay")
     assert s3.status.value == "passed", [r.error for r in s3.results if r.error]
-    # ids / names / placeholders changed: Playwright's role-based locators don't depend on them (no healing
-    # needed); Selenium's stored id locators break and self-heal
-    if engine == "selenium":
-        assert any(r.healed for r in s3.results)
-    else:
+    # ids / names / placeholders changed: the stored locators lead with meaning (role, label), not generated names, so neither engine
+    # needs healing here (healing from a description is covered in tests/test_replay_strategy.py)
+    if engine != "selenium":
         assert script.steps[1].locator.strategy == "playwright"
 
 

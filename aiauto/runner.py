@@ -536,8 +536,17 @@ class Runner:
         # a class or attribute carrying the step's own words ("the primary button" -> button.btn-primary) is the
         # stable one; other unique classes may be shuffled by the page (class1 / class2 / class3)
         words = [w for w in L._content_tokens(target or "") if len(w) > 3]
-        said = lambda l: l.strategy == "css" and any(w in (l.value or "").lower().replace("-", " ").replace("_", " ") for w in words)
+        said = lambda l: l.strategy == "css" and not (l.value or "").startswith("#") and any(w in (l.value or "").lower().replace("-", " ").replace("_", " ") for w in words)   # a class / attribute with the step's words; an id that happens to contain one is no evidence of stability
         all_locs = [l for l in all_locs if said(l)] + [l for l in all_locs if not said(l)]
+        # meaning before generated names: an id goes behind the semantic locators (test id, role + name, label, placeholder) when there are any,
+        # because apps generate ids per page load that no heuristic recognises every time; everything else keeps its order
+        semantic = {"playwright", "testid", "role", "label", "placeholder"}
+        head = [l for l in all_locs if said(l)]
+        rest = [l for l in all_locs if not said(l)]
+        ids = [l for l in rest if l.strategy == "id"]
+        others = [l for l in rest if l.strategy != "id"]
+        cut = max((i + 1 for i, l in enumerate(others) if l.strategy in semantic and not positional(l)), default=0)
+        all_locs = head + others[:cut] + ids + others[cut:]
         all_locs = self._count_tolerant(all_locs, target) + all_locs
         if hasattr(e, "verify_locators") and not described:
             # one in-page check of every locator, then a native find_elements confirmation of the winners

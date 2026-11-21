@@ -27,8 +27,9 @@ def test_playground(engine, tmp_path):
     assert s.status.value == "passed", [(r.index + 1, r.error) for r in s.results if r.error]
     run_dir = tmp_path / "art" / s.run_id
     labels = [r.step.locator.label() for r in s.results if r.step.locator]
+    frame_depths = [len(r.step.locator.frames) for r in s.results if r.step.locator]
     assert any("shadow[user-card] » shadow[address-form]" in l for l in labels)         # nested shadow roots
-    assert any(l.count("iframe[") == 2 for l in labels)                                   # nested iframes
+    assert 2 in frame_depths                                                              # nested iframes
     assert any("role=" in l for l in labels)                                              # semantic native locators
     # secrets never land in artifacts
     for f in run_dir.rglob("*"):
