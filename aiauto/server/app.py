@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse as _JSON
 from pydantic import BaseModel, Field
 
+from .. import automation
 from ..data import MASK, iterations, load_data, lookup, masked_data, normalize, setpath
 from ..db import now_iso, open_db
 from ..models import RunConfig, Step, TestCase
@@ -196,6 +197,9 @@ class Hub:
             try:
                 await asyncio.get_running_loop().run_in_executor(db_writer, db.finalize_from_summary, ARTIFACTS / rid)
                 integrations_api.on_run_finished(db, rid, ARTIFACTS)      # tracker / test-tool write-back
+                run = db.get_run(rid)
+                if run:
+                    asyncio.get_running_loop().run_in_executor(None, NOTIFIER.run_finished, run)      # Slack / Teams / webhook / email
             except Exception as e:
                 log.warning("finalize failed for %s: %s", rid, e)
             event = {"type": "runs_changed"}
@@ -252,6 +256,7 @@ async def _startup():
     db.backfill_parser(ARTIFACTS)
     imported = db.import_artifacts(ARTIFACTS)
     _import_legacy_files()
+    asyncio.create_task(_scheduler_loop())
     log.info("db=%s artifacts=%s | recovered %d interrupted, imported %d runs | LLM: %s",
              db.path, ARTIFACTS, interrupted, imported, llm.status())
 
@@ -1376,6 +1381,235 @@ app.include_router(integrations_api.make_router(_sys.modules[__name__]))
 
 
 # --------------------------------------------------------------------- SPA fallback
+# --------------------------------------------------------------------- schedules, CI hooks, notifications, flaky tests
+SCHEDULES = automation.Schedules(db)
+HOOKS = automation.Hooks(db)
+NOTIFIER = automation.Notifier(
+    db,
+    smtp=lambda: {"host": os.getenv("AIAUTO_SMTP_HOST"), "port": os.getenv("AIAUTO_SMTP_PORT"), "user": os.getenv("AIAUTO_SMTP_USER"),
+                  "password": os.getenv("AIAUTO_SMTP_PASSWORD"), "from": os.getenv("AIAUTO_SMTP_FROM"), "tls": os.getenv("AIAUTO_SMTP_TLS", "1") != "0"},
+    base_url=lambda: os.getenv("AIAUTO_PUBLIC_URL", ""))
+
+
+class _Internal:
+    """A request made by the hub itself (a schedule or a CI hook) on behalf of the person who created it."""
+
+    def __init__(self, owner: str | None, project: str):
+        user = (db.user_get(username=owner) if owner else None) or authmod.LOCAL_USER
+        self.state = type("S", (), {"user": user})()
+        self.headers, self.query_params = {"x-project": project}, {}
+        self.url = type("U", (), {"port": None})()
+
+
+async def _launch_saved(item: dict) -> list[str]:
+    body = RunRequest(library=item["library"], data=item.get("data"), sensitive=item.get("sensitive") or [],
+                      config=RunConfig(**(item.get("config") or {})), agent=item.get("agent") or "local",
+                      engines=item.get("engines"), name=None)
+    r = await api_run(body, _Internal(item.get("owner"), item.get("project") or "default"))
+    return r["run_ids"]
+
+
+async def run_due_schedules(now=None) -> list[str]:
+    """Start every schedule whose minute it is. Called every 20 seconds by the loop below (and by the tests)."""
+    from datetime import datetime
+    now = now or datetime.now().astimezone()
+    started = []
+    for s in SCHEDULES.due(now):
+        SCHEDULES.mark(s["id"], last_fired=now.strftime("%Y-%m-%d %H:%M"))       # first: a slow start never fires twice
+        try:
+            ids = await _launch_saved(s)
+            SCHEDULES.mark(s["id"], last_run_ids=ids, last_error=None, last_run=now.isoformat(timespec="minutes"))
+            started += ids
+        except HTTPException as e:
+            SCHEDULES.mark(s["id"], last_error=str(e.detail)[:300], last_run=now.isoformat(timespec="minutes"))
+        except Exception as e:
+            log.warning("schedule %s failed to start: %s", s["id"], e)
+            SCHEDULES.mark(s["id"], last_error=str(e)[:300], last_run=now.isoformat(timespec="minutes"))
+    return started
+
+
+async def _scheduler_loop():
+    while True:
+        await asyncio.sleep(20)
+        try:
+            await run_due_schedules()
+        except Exception as e:
+            log.warning("scheduler: %s", e)
+
+
+class ScheduleReq(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    library: str
+    cron: str
+    enabled: bool = True
+    data: Optional[Any] = None
+    sensitive: list[str] = Field(default_factory=list)
+    config: dict = Field(default_factory=dict)
+    agent: str = "local"
+    engines: Optional[list[str]] = None
+
+
+def _check_saved(request: Request, library: str) -> None:
+    meta = db.lib_meta(library)
+    if not meta or meta.get("project", "default") not in _projects_for(_user(request)):
+        raise HTTPException(404, f"No saved script named '{library}'")
+
+
+@app.get("/api/schedules")
+async def api_schedules(request: Request):
+    return SCHEDULES.list(_projects_for(_user(request)))
+
+
+@app.put("/api/schedules")
+async def api_schedule_put(req: ScheduleReq, request: Request):
+    _check_saved(request, req.library)
+    old = SCHEDULES.get(req.id) if req.id else None
+    if old and not authmod.can_manage(_user(request), old.get("owner")):
+        raise HTTPException(403, "That schedule belongs to someone else")
+    RunConfig(**req.config)                                  # reject unknown / wrong config early
+    item = req.model_dump()
+    item.update(owner=(old or {}).get("owner") or _owner_of(request), project=_project(request))
+    try:
+        return SCHEDULES.put({**(old or {}), **item})
+    except automation.CronError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/api/schedules/{sid}")
+async def api_schedule_delete(sid: str, request: Request):
+    s = SCHEDULES.get(sid)
+    if s and not authmod.can_manage(_user(request), s.get("owner")):
+        raise HTTPException(403, "That schedule belongs to someone else")
+    if not SCHEDULES.delete(sid):
+        raise HTTPException(404, "No such schedule")
+    return {"ok": True}
+
+
+@app.post("/api/schedules/{sid}/run")
+async def api_schedule_run_now(sid: str, request: Request):
+    s = SCHEDULES.get(sid)
+    if not s or s.get("project", "default") not in _projects_for(_user(request)):
+        raise HTTPException(404, "No such schedule")
+    ids = await _launch_saved(s)
+    SCHEDULES.mark(sid, last_run_ids=ids, last_error=None)
+    return {"run_ids": ids}
+
+
+@app.get("/api/schedules/preview")
+async def api_cron_preview(cron: str, count: int = 5):
+    try:
+        c, t, out = automation.Cron(cron), __import__("datetime").datetime.now().astimezone(), []
+        for _ in range(max(1, min(count, 20))):
+            t = c.next_after(t)
+            out.append(t.isoformat(timespec="minutes"))
+        return {"cron": c.expr, "next": out}
+    except automation.CronError as e:
+        raise HTTPException(422, str(e))
+
+
+class HookReq(BaseModel):
+    name: Optional[str] = None
+    library: str
+    data: Optional[Any] = None
+    sensitive: list[str] = Field(default_factory=list)
+    config: dict = Field(default_factory=dict)
+    agent: str = "local"
+    engines: Optional[list[str]] = None
+
+
+@app.get("/api/hooks")
+async def api_hooks(request: Request):
+    return HOOKS.list(_projects_for(_user(request)))
+
+
+@app.post("/api/hooks")
+async def api_hook_create(req: HookReq, request: Request):
+    """A URL for CI: POST it to run the saved script. The secret is shown once, here."""
+    _check_saved(request, req.library)
+    RunConfig(**req.config)
+    item, token = HOOKS.create({**req.model_dump(), "owner": _owner_of(request), "project": _project(request)})
+    return {**item, "token": token, "url": f"/api/hooks/run/{token}"}
+
+
+@app.delete("/api/hooks/{hid}")
+async def api_hook_delete(hid: str, request: Request):
+    h = next((x for x in HOOKS.list(_projects_for(_user(request))) if x["id"] == hid), None)
+    if not h or not authmod.can_manage(_user(request), h.get("owner")):
+        raise HTTPException(404, "No such hook")
+    HOOKS.delete(hid)
+    return {"ok": True}
+
+
+@app.post("/api/hooks/run/{token}")
+async def api_hook_run(token: str, request: Request):
+    """Called by CI (no sign-in: the token is the credential). Optional JSON body {data: {...}} overrides data for this run."""
+    h = HOOKS.find(token)
+    if not h:
+        raise HTTPException(404, "No such hook")
+    try:
+        extra = await request.json()
+    except Exception:
+        extra = {}
+    item = dict(h)
+    if isinstance(extra, dict) and isinstance(extra.get("data"), dict):
+        item["data"] = {**(load_data(h.get("data")) or {}), **extra["data"]}
+    ids = await _launch_saved(item)
+    HOOKS.mark(h["id"], last_run=now_iso(), last_run_ids=ids)
+    return {"run_ids": ids}
+
+
+class NotifyReq(BaseModel):
+    id: Optional[str] = None
+    kind: str
+    url: Optional[str] = None
+    to: Optional[str] = None
+    on: str = "failed"
+    project: Optional[str] = None
+
+
+@app.get("/api/notifications")
+async def api_notifications():
+    return NOTIFIER.list()
+
+
+@app.put("/api/notifications")
+async def api_notification_put(req: NotifyReq):
+    try:
+        return NOTIFIER.put({k: v for k, v in req.model_dump().items() if v is not None})
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/api/notifications/{nid}")
+async def api_notification_delete(nid: str):
+    if not NOTIFIER.delete(nid):
+        raise HTTPException(404, "No such channel")
+    return {"ok": True}
+
+
+@app.post("/api/notifications/{nid}/test")
+async def api_notification_test(nid: str):
+    rule = next((r for r in NOTIFIER.list() if r["id"] == nid), None)
+    if not rule:
+        raise HTTPException(404, "No such channel")
+    msg = automation.message({"run_id": "test", "test_name": "Autopilot test message", "status": "failed", "passed": 3, "total": 4,
+                              "error": "This is only a test of the channel."}, os.getenv("AIAUTO_PUBLIC_URL", ""))
+    try:
+        await asyncio.to_thread(automation.deliver, rule, msg, NOTIFIER._smtp())
+    except Exception as e:
+        raise HTTPException(502, f"The channel did not accept it: {e}")
+    return {"ok": True}
+
+
+@app.get("/api/flaky")
+async def api_flaky(request: Request, window: int = 20, only: bool = False):
+    """Tests ranked by how unstable their recent results are."""
+    rows = db.list_runs(limit=2000, project=_project(request))
+    rep = automation.flaky_report(rows, window=max(4, min(window, 100)))
+    return [r for r in rep if r["flaky"]] if only else rep
+
+
 @app.get("/{path:path}", response_class=HTMLResponse, include_in_schema=False)
 def spa(path: str):
     if path.startswith(("api/", "artifacts/", "ws/")):
