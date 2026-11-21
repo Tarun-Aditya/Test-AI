@@ -231,6 +231,8 @@ def exported(c, art, out, first, rows, headed=False):
                 "tail": (p.stdout + p.stderr)[-600:] if p.returncode else "",
             }
             print(f"exported {key}: exit {p.returncode} in {took:.0f}s")
+            if p.returncode:
+                print((p.stdout + p.stderr)[-1500:])
     return res
 
 

@@ -45,7 +45,7 @@ jobs:
       - name: Chrome extension (generated files up to date, real Chromium with the extension loaded)
         run: |
           python tools/build_extension.py --check
-          python -m pytest -q tests/test_extension.py tests/test_recorder.py tests/test_extension_server.py tests/test_extension_recorder_scripts.py tests/test_extension_complex.py tests/test_extension_check_replay.py tests/test_replay_strategy.py -rs
+          python -m pytest -q tests/test_extension.py tests/test_recorder.py tests/test_extension_server.py tests/test_extension_recorder_scripts.py tests/test_extension_complex.py tests/test_extension_check_replay.py tests/test_replay_strategy.py tests/test_extension_ux.py tests/test_run_controls.py -rs
 
   # The one-step setup a new user runs (setup.sh / setup.bat), the demo data and the hub starting with it
   setup-scripts:

@@ -36,6 +36,18 @@ Chrome 126 or newer (Edge and other Chromium browsers work too). Tested in real 
 * **Stop** cancels the run. Closing the panel does not stop it; reopening shows where it is.
 * Every run links to its page on the hub: live view, steps with screenshots, video, report, replay, export.
 
+## The panel, from a person's side
+
+* **First run.** If no hub is reachable, a **Connect to your hub** card asks for the address (with how to start one) and, for a hub with accounts, signs you in right there. A short **Before you start** card explains why the access is needed, what Chrome's "debugging this browser" bar is (don't press Cancel on it) and that Autopilot asks before touching a site. If you do press Cancel, the run stops and says why.
+* **Safe by default.** Autopilot asks once per site before it runs (this computer's own pages are always allowed; **Always allow this site** remembers it), and before a scenario that does things that are hard to undo (delete, pay, place an order, send). Settings → Sites switches this off or removes allowed sites.
+* **Data.** A table of names and values with a **Secret** toggle (secrets are hidden and kept in the hub's vault); **Edit as text** is still there.
+* **Running.** Name the run before it starts; untick steps to run only some; **Run step by step** pauses before every step (**Next step**); **Pause / Resume** any time; **Stop** works while paused. Results appear in the panel: a **Watch the video** player, the report link, **Save as a script**.
+* **When a step fails**, its screenshot opens right there with the reason. **Pick the right element** lets you click the correct element on the page; the step is rewritten with that element's locators and **Run again from here** continues from it. Show only failed steps and Show all screenshots keep long lists readable.
+* **Your wording.** A note such as "Check the wording: “Thanks, Asha”" is a link to that wording in your text; edit it and the steps are shown again a moment later.
+* **History.** From the hub lists saved scripts and past runs, with search and **Show more**.
+* **Editing a recording** (after you stop): edit a step's value or description, move steps up and down (buttons, so it works from the keyboard), turn a typed value into a **data variable**, add a **check** after any step, remove steps. While recording: **Pause / Resume** and **Undo last**.
+* **Accessibility.** Landmarks and headings, every control named, a live region announces progress and results, dialogs trap and restore focus (Esc closes), visible focus rings, no information by colour alone, dark theme and reduced motion follow your system, **Ctrl/Cmd + Enter** runs. Tested in `tests/test_extension_ux.py`.
+
 ## Record a flow, get a script
 
 The point of recording (and of running in the extension) is the **script** you get out: Playwright and Selenium scripts that run on their own, in CI, without this tool. Switch the panel to **Record a flow**, press **Record on this tab** and use the site like a person.
@@ -102,4 +114,4 @@ A replay opens the page the run started on, then uses the stored locators. A rep
 
 ## Tests
 
-`tests/test_extension.py` (panel, recorder, sign-in, errors), `tests/test_extension_recorder_scripts.py` (a whole session recorded, run by the app, and its Playwright and Selenium scripts run standalone), `tests/test_extension_server.py` (the server's own playground scenario run from the panel, virtualised lists, live events, screenshots, a video whose last frame shows the page, report, stats, replays by the app and the extension, recordings, secrets absent from the hub's files, failures) and `tests/test_recorder.py`.
+`tests/test_extension.py` (panel, recorder, sign-in, errors), `tests/test_extension_ux.py` (setup, safety prompts, fixing a failed step, editing a recording, run controls, results, history, accessibility), `tests/test_run_controls.py` (pause and step-through in the runner), `tests/test_extension_recorder_scripts.py` (a whole session recorded, run by the app, and its Playwright and Selenium scripts run standalone), `tests/test_extension_server.py` (the server's own playground scenario run from the panel, virtualised lists, live events, screenshots, a video whose last frame shows the page, report, stats, replays by the app and the extension, recordings, secrets absent from the hub's files, failures) and `tests/test_recorder.py`.
