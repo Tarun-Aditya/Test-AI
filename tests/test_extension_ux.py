@@ -331,7 +331,7 @@ def test_the_panel_is_usable_with_a_keyboard_and_a_screen_reader(browser, sites)
     panel.locator("#text").press("Control+Enter")
     assert banner(panel) == "passed"
     # announced: the result reaches the live region
-    assert "passed" in panel.locator("#live").inner_text().lower()
+    panel.wait_for_function("() => /passed/i.test(document.getElementById('live').textContent)", timeout=5000)
 
 
 def test_dark_theme_and_reduced_motion_are_respected(browser):

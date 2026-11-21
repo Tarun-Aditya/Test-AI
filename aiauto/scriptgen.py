@@ -261,12 +261,28 @@ def _data_nth(st: Step) -> bool:
     return bool(re.search(r"\$\{|\{\{", st.target)) or _unstable(st.locator)
 
 
+def _random_token(t: str) -> bool:
+    """A piece of an id that looks generated: long, letters mixed with digits (two or more, or one inside the word)."""
+    letters, digits = len(re.findall(r"[A-Za-z]", t)), len(re.findall(r"\d", t))
+    return len(t) >= 7 and letters >= 3 and (digits >= 2 or bool(re.search(r"[A-Za-z]\d[A-Za-z]", t)))
+
+
 def _unstable(loc: Locator | None) -> bool:
     """The recorded element is named by an id / class that was generated for this page load (long digit runs): it will not exist next time."""
     if not loc:
         return False
     text = (loc.code or loc.value) if loc.strategy == "playwright" else loc.value if loc.strategy in ("css", "id") else ""
-    return bool(text) and bool(re.search(r"[#.][\w-]*\d{4,}|^\w*-?\w*\d{6,}", text))
+    if not text:
+        return False
+    if re.search(r"[#.][\w-]*\d{4,}|^\w*-?\w*\d{6,}", text):
+        return True
+    # a random token inside an id (btn-k3x9qz2a): long, letters mixed with digits
+    for m in re.finditer(r"""(?:#|\bid\s*=\s*["']?)([\w-]+)""", text):
+        if any(_random_token(t) for t in re.split(r"[-_]", m.group(1))):
+            return True
+    if loc.strategy == "id" and any(_random_token(t) for t in re.split(r"[-_]", text)):
+        return True
+    return False
 
 
 def _nth_text(st: Step) -> str:

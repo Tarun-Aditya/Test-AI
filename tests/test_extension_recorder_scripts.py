@@ -121,6 +121,12 @@ def test_a_whole_session_is_recorded_and_the_scripts_made_from_it_run_on_their_o
     run_dir = arts / row["run_id"]
     for script in ("test_playwright.py", "test_selenium.py"):
         res, out = standalone(tmp_path, run_dir, script, {"AIAUTO_SECRET_PASSWORD": "S3cret!!"})
-        assert res.returncode == 0 and "PASSED" in res.stdout, (script, (res.stdout + res.stderr)[-2500:])
+        if not (res.returncode == 0 and "PASSED" in res.stdout):
+            bad = []
+            try:
+                bad = [x for x in json.loads((out / "summary.json").read_text(encoding="utf-8"))["steps"] if x.get("status") != "passed"][:3]
+            except Exception:
+                pass
+            raise AssertionError((script, (res.stdout + res.stderr)[-1500:], json.dumps(bad, indent=1)[:3000]))
         summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
         assert summary["status"] == "passed" and all(st["status"] == "passed" for st in summary["steps"])

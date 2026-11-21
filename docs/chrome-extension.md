@@ -26,7 +26,7 @@ The extension is **another way to run the server**. Open the website, paste a sc
 
 ![Settings](media/extension-options.png)
 
-Chrome 126 or newer (Edge and other Chromium browsers work too). Tested in real Chromium in CI on Windows, macOS and Linux.
+Chrome 126 or newer (Edge and other Chromium browsers work too). Tested in real Chromium in CI on Windows, macOS and Linux. Platform notes: on macOS, Chrome driven by automation can't open a native `<select>` popup from the keyboard, so a recording made that way may not contain the `select` step (the recorder tests allow for it); everything else is identical on all three systems. Generated scripts are written as UTF-8 so they run on Windows consoles.
 
 ## Use
 
